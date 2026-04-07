@@ -10,7 +10,8 @@
     "build:web": "vite build --outDir dist",
     "preview": "vite preview --outDir dist",
     "electron:preview": "vite build && node electron/launcher.cjs",
-    "electron:build": "vite build && electron-builder --win"
+    "electron:build": "vite build && electron-builder --win",
+    "electron:publish": "vite build && electron-builder --win --publish always"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",
@@ -39,8 +40,9 @@
     ],
     "publish": [
       {
-        "provider": "generic",
-        "url": "https://your-update-server.com/releases"
+        "provider": "github",
+        "owner": "burtjames18-create",
+        "repo": "garage-designer"
       }
     ],
     "win": {

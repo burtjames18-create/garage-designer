@@ -94,6 +94,20 @@ function checkForUpdates() {
   autoUpdater.autoInstallOnAppQuit = true
   autoUpdater.logger = null // silence default logging
 
+  // GitHub private repo — needs a token for release access.
+  // Set GH_TOKEN env var or place a github-token.txt next to the exe.
+  const tokenPath = path.join(app.isPackaged ? path.dirname(process.execPath) : __dirname, 'github-token.txt')
+  let ghToken = process.env.GH_TOKEN || ''
+  try { ghToken = ghToken || require('fs').readFileSync(tokenPath, 'utf8').trim() } catch {}
+
+  autoUpdater.setFeedURL({
+    provider: 'github',
+    owner: 'burtjames18-create',
+    repo: 'garage-designer',
+    private: true,
+    token: ghToken || undefined,
+  })
+
   sendToLauncher('update-status', {
     status: 'checking',
     message: 'Checking for updates\u2026',
