@@ -1,0 +1,171 @@
+.lighting-panel { display: flex; flex-direction: column; gap: 14px; }
+
+.light-add-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.light-add-btns { display: flex; gap: 6px; }
+.light-add-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--accent);
+  font-size: 10px;
+  padding: 3px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.light-add-btn:hover { border-color: var(--accent); background: var(--accent-dim); }
+
+.light-empty {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.light-list { display: flex; flex-direction: column; gap: 6px; }
+
+.light-item {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+.light-item.disabled { opacity: 0.45; }
+
+.light-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+}
+.light-toggle {
+  background: none;
+  border: none;
+  font-size: 16px;
+  cursor: pointer;
+  color: #555;
+  padding: 0;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+.light-toggle.on { color: #fbbf24; }
+
+.light-name {
+  flex: 1;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  min-width: 0;
+  outline: none;
+}
+.light-name:focus { border-bottom: 1px solid var(--accent); }
+
+.light-del {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  font-size: 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.light-del:hover { border-color: var(--danger); color: #f87171; }
+
+.light-body {
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  background: rgba(0,0,0,0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.light-type-row { display: flex; gap: 4px; }
+.light-type-btn {
+  flex: 1;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 10px;
+  padding: 4px 0;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.light-type-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.light-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.light-row label {
+  font-size: 10px;
+  color: var(--text-muted);
+  width: 62px;
+  flex-shrink: 0;
+}
+.light-row input[type="range"] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+.light-row input[type="color"] {
+  width: 36px;
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px;
+  background: none;
+  cursor: pointer;
+}
+.light-val {
+  font-size: 10px;
+  color: var(--text-muted);
+  width: 32px;
+  text-align: right;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.light-coords {
+  display: flex;
+  gap: 6px;
+}
+.light-coord {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.light-coord label {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 9px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.light-coord input[type="number"] {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 11px;
+  padding: 3px 5px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.light-coord input[type="number"]:focus { border-color: var(--accent); outline: none; }

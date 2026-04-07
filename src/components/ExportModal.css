@@ -1,0 +1,263 @@
+/* ── Overlay ───────────────────────────────────────────────────────────────── */
+.export-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.85);
+  backdrop-filter: blur(4px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.export-modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  width: 900px;
+  max-width: 100%;
+  max-height: calc(100vh - 40px);
+  box-shadow: var(--shadow-lg);
+  animation: scaleIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Modal header ──────────────────────────────────────────────────────────── */
+.export-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  flex-shrink: 0;
+}
+.export-modal-header h2 {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.3px;
+}
+.export-header-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.export-print-btn {
+  background: linear-gradient(135deg, #1a4a78, #1e5a94);
+  color: #c0d8f0;
+  border: 1px solid rgba(42, 130, 245, 0.3);
+  border-radius: 8px;
+  padding: 7px 16px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.export-print-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #1e5a94, #2568aa);
+  color: #fff;
+  box-shadow: 0 0 16px rgba(30, 111, 220, 0.2);
+}
+.export-print-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.export-close-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  width: 30px;
+  height: 30px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.export-close-btn:hover { border-color: var(--danger); color: #f87171; }
+
+/* ── Capturing state ───────────────────────────────────────────────────────── */
+.export-capturing {
+  padding: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  color: var(--text-sub);
+  font-size: 14px;
+}
+.export-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Pages ─────────────────────────────────────────────────────────────────── */
+.export-pages {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.export-page {
+  background: #fff;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  aspect-ratio: 11 / 8.5;
+  flex-shrink: 0;
+}
+
+.export-page-image-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  overflow: hidden;
+  padding: 8px;
+}
+.export-page-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+/* ── Footer (matches reference PDF — 2×2 grid with logo) ────────────────── */
+.export-footer {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid #333;
+  background: #fff;
+  margin: 16px 24px 20px;
+}
+.export-footer-logo {
+  width: 160px;
+  flex-shrink: 0;
+  border-right: 1px solid #333;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 14px;
+}
+.export-footer-logo img {
+  max-width: 100%;
+  max-height: 56px;
+  object-fit: contain;
+}
+.export-footer-fields {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  min-height: 0;
+}
+.export-footer-field {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 6px 16px;
+  gap: 2px;
+}
+/* Top-left field: right border + bottom border */
+.export-footer-field:nth-child(1) {
+  border-right: 1px solid #333;
+  border-bottom: 1px solid #333;
+}
+/* Top-right field: bottom border */
+.export-footer-field:nth-child(2) {
+  border-bottom: 1px solid #333;
+}
+/* Bottom-left field: right border */
+.export-footer-field:nth-child(3) {
+  border-right: 1px solid #333;
+}
+.export-footer-label {
+  font-size: 10px;
+  color: #444;
+  font-weight: 400;
+  font-family: 'DM Sans', sans-serif;
+  line-height: 1;
+}
+.export-footer-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: #111;
+  font-family: 'DM Sans', sans-serif;
+  line-height: 1.3;
+}
+
+/* ── Download button ───────────────────────────────────────────────────────── */
+.export-dl-btn {
+  background: #f5f8ff;
+  border: none;
+  border-top: 1px solid #ddd;
+  color: #1a4470;
+  padding: 10px 0;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: center;
+  letter-spacing: 0.3px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+}
+.export-dl-btn:hover { background: #e8f0ff; }
+
+/* ── Blueprint SVG pages ───────────────────────────────────────────────────── */
+.export-page-blueprint {
+  background: #fff;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  aspect-ratio: 11 / 8.5;
+  flex-shrink: 0;
+}
+.export-page-bp-header {
+  padding: 8px 14px;
+  background: #f4f4f2;
+  border-bottom: 1px solid #ddd;
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  color: #333;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+.export-page-svg-wrap {
+  flex: 1;
+  min-height: 0;
+  background: #fff;
+  width: 100%;
+  padding: 8px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.export-page-svg-wrap svg {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+/* ── Print — hide app when printing from main window ──────────────────────── */
+@media print {
+  .no-print { display: none !important; }
+}

@@ -1,0 +1,238 @@
+.import-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.import-modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  width: 480px;
+  max-width: 95vw;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+  padding: 24px;
+  user-select: none;
+}
+
+.import-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.import-header h2 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+  letter-spacing: 0.3px;
+}
+
+.import-close {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-muted);
+  padding: 0;
+}
+.import-close:hover {
+  background: var(--surface3);
+  color: var(--text);
+}
+
+.import-section {
+  margin-bottom: 16px;
+}
+
+.import-label {
+  display: block;
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--text-muted);
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.import-type-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.import-type-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  text-align: left;
+  transition: all 0.15s;
+}
+.import-type-btn:hover {
+  background: var(--surface3);
+  border-color: var(--text-muted);
+}
+.import-type-btn.active {
+  background: rgba(42, 130, 245, 0.1);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+.import-type-name {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+.import-type-btn.active .import-type-name {
+  color: var(--accent-hover);
+}
+
+.import-type-desc {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  line-height: 1.3;
+}
+
+.import-cat-row {
+  display: flex;
+  gap: 4px;
+}
+
+.import-cat-btn {
+  flex: 1;
+  padding: 7px 4px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+.import-cat-btn:hover {
+  background: var(--surface3);
+  color: var(--text-sub);
+}
+.import-cat-btn.active {
+  background: rgba(42, 130, 245, 0.1);
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+
+.import-name-input {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  outline: none;
+  box-sizing: border-box;
+}
+.import-name-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+.import-name-input::placeholder {
+  color: var(--text-muted);
+}
+
+.import-formats {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.import-format-tag {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-sub);
+  letter-spacing: 0.5px;
+}
+
+.import-dropzone {
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  padding: 36px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+  color: var(--text-muted);
+  min-height: 120px;
+}
+.import-dropzone:hover {
+  border-color: var(--accent);
+  background: rgba(42, 130, 245, 0.04);
+}
+.import-dropzone.drag-over {
+  border-color: var(--accent);
+  background: rgba(42, 130, 245, 0.08);
+  box-shadow: 0 0 0 4px var(--accent-dim);
+}
+.import-dropzone.loading {
+  cursor: default;
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+.import-drop-text {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+.import-drop-text strong {
+  color: var(--accent-hover);
+}
+
+.import-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-sub);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.import-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: import-spin 0.7s linear infinite;
+}
+
+@keyframes import-spin {
+  to { transform: rotate(360deg); }
+}

@@ -1,0 +1,288 @@
+.topbar {
+  height: var(--topbar-height);
+  background: rgba(26, 29, 34, 0.85);
+  backdrop-filter: blur(16px) saturate(1.4);
+  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 0 16px;
+  flex-shrink: 0;
+  box-shadow: 0 1px 0 rgba(0,0,0,0.3), 0 4px 24px rgba(0,0,0,0.15);
+  z-index: 10;
+}
+
+/* ── Logo ─────────────────────────────────────────────────────────────── */
+.topbar-logo {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-right: 20px;
+  padding-right: 20px;
+  border-right: 1px solid var(--border);
+  height: 34px;
+}
+.topbar-logo-img {
+  height: 28px;
+  width: auto;
+  display: block;
+  opacity: 0.92;
+  transition: opacity 0.2s;
+}
+.topbar-logo-img:hover { opacity: 1; }
+.topbar-logo-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}
+.logo-box-sm {
+  background: linear-gradient(135deg, #1e5a94, #1a4470);
+  color: #c0d8f0;
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-weight: 800;
+  font-size: 8.5px;
+  letter-spacing: 2.5px;
+  padding: 2.5px 7px;
+  border-radius: 3px;
+  line-height: 1.4;
+}
+.logo-living-sm {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 7px;
+  letter-spacing: 3.5px;
+  color: var(--text-muted);
+  font-weight: 700;
+  text-transform: uppercase;
+  padding-left: 1px;
+}
+
+/* ── Project info ─────────────────────────────────────────────────────── */
+.topbar-info {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.topbar-field {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 14px;
+}
+.topbar-field:first-child { padding-left: 0; }
+
+.topbar-label {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+.topbar-value {
+  font-size: 12.5px;
+  color: var(--text);
+  font-weight: 600;
+  max-width: 160px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.topbar-sep {
+  width: 1px;
+  height: 26px;
+  background: var(--border);
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+/* ── View mode switcher — centred ─────────────────────────────────────── */
+.view-modes {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 3px;
+  padding: 0 12px;
+}
+
+.view-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--text-muted);
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  flex-shrink: 1;
+  min-width: 0;
+}
+.view-btn:hover {
+  border-color: var(--border);
+  color: var(--text-sub);
+  background: var(--surface2);
+}
+.view-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: 0 0 0 3px var(--accent-dim), var(--shadow-sm);
+}
+
+.view-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+/* ── Responsive: hide text labels on narrow windows ──────────────────── */
+@media (max-width: 1100px) {
+  .view-btn span:last-child { display: none; }
+  .view-btn { padding: 6px 9px; }
+  .topbar-field:nth-child(3) { display: none; }
+}
+@media (max-width: 900px) {
+  .topbar-info { display: none; }
+}
+
+/* ── Import button ───────────────────────────────────────────────────── */
+.import-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--surface2);
+  color: var(--text-sub);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+  margin-right: 8px;
+}
+.import-btn:hover {
+  background: var(--surface3);
+  border-color: var(--accent);
+  color: var(--accent-hover);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+@media (max-width: 1100px) {
+  .import-btn span { display: none; }
+  .import-btn { padding: 6px 9px; }
+}
+
+/* ── Quality toggle ──────────────────────────────────────────────────── */
+.quality-toggle {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-right: 10px;
+  padding: 2px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.quality-label {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+  font-weight: 700;
+  padding: 0 6px 0 5px;
+}
+
+.quality-btn {
+  width: 26px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  padding: 0;
+}
+
+.quality-btn:hover {
+  color: var(--text-sub);
+  background: var(--surface3);
+}
+
+.quality-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+@media (max-width: 1100px) {
+  .quality-label { display: none; }
+}
+
+/* ── Actions ──────────────────────────────────────────────────────────── */
+.topbar-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.save-btn,
+.load-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--surface2);
+  color: var(--text-sub);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 13px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+.save-btn:hover,
+.load-btn:hover {
+  background: var(--surface3);
+  border-color: var(--accent);
+  color: var(--accent-hover);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.export-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: linear-gradient(135deg, #1a4a78, #1e5a94);
+  color: #c0d8f0;
+  border: 1px solid rgba(42, 130, 245, 0.3);
+  border-radius: 8px;
+  padding: 7px 18px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+.export-btn:hover {
+  background: linear-gradient(135deg, #1e5a94, #2568aa);
+  color: #fff;
+  border-color: rgba(42, 130, 245, 0.5);
+  box-shadow: 0 0 16px rgba(30, 111, 220, 0.25);
+}

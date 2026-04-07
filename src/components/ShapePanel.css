@@ -1,0 +1,95 @@
+.shape-panel {}
+
+.shape-type-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.shape-type-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  color: var(--text);
+  text-align: left;
+  font-size: 12px;
+  transition: all 0.18s;
+}
+.shape-type-btn:hover {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  transform: translateX(2px);
+}
+
+.shape-type-icon { font-size: 14px; }
+
+.shape-list { display: flex; flex-direction: column; gap: 6px; }
+
+.shape-item {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.18s;
+}
+.shape-item:hover { border-color: var(--border2); }
+.shape-item.selected { border-color: var(--warning); box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.15); }
+
+.shape-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.shape-name-input {
+  flex: 1;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  outline: none;
+}
+
+.shape-detail {
+  padding: 10px;
+  border-top: 1px solid var(--border);
+  background: rgba(0,0,0,0.12);
+  animation: fadeIn 0.2s ease-out;
+}
+
+.material-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.chip {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: 5px;
+  padding: 3px 10px;
+  font-size: 11px;
+  text-transform: capitalize;
+  transition: all 0.15s;
+}
+.chip:hover { border-color: var(--border2); color: var(--text); }
+.chip.active { background: var(--warning); border-color: var(--warning); color: #000; font-weight: 600; }
+
+.delete-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.delete-btn:hover { border-color: var(--danger); color: #f87171; }
+
+.empty-msg { color: var(--text-muted); font-size: 12px; line-height: 1.5; margin-top: 12px; }
