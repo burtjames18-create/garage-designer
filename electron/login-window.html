@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Garage Living Designer - Login</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: #111;
+      color: #e0e0e0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+    }
+
+    .container {
+      width: 380px;
+    }
+
+    .logo-area {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+
+    .logo-area img {
+      width: 160px;
+      filter: brightness(1.1);
+      margin-bottom: 6px;
+    }
+
+    .logo-area .subtitle {
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: #777;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #777;
+      margin-bottom: 5px;
+    }
+
+    .form-group input {
+      width: 100%;
+      padding: 11px 13px;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .form-group input:focus {
+      border-color: #c8102e;
+    }
+
+    .btn {
+      width: 100%;
+      padding: 12px;
+      background: #c8102e;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+      margin-top: 4px;
+    }
+
+    .btn:hover { background: #a00d24; }
+    .btn:disabled { background: #444; cursor: not-allowed; }
+
+    .message {
+      padding: 10px 14px;
+      border-radius: 6px;
+      font-size: 12px;
+      margin-bottom: 14px;
+      display: none;
+    }
+
+    .message.show { display: block; }
+    .message.error { background: #2e0a0a; border: 1px solid #8b2020; color: #f87171; }
+    .message.success { background: #0a2e14; border: 1px solid #1a7a3a; color: #4ade80; }
+
+    .footer {
+      text-align: center;
+      margin-top: 16px;
+      font-size: 11px;
+      color: #555;
+    }
+
+    .footer a {
+      color: #c8102e;
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    .footer a:hover { text-decoration: underline; }
+
+    /* Title bar drag area */
+    .drag-bar {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      height: 32px;
+      -webkit-app-region: drag;
+    }
+
+    .close-btn {
+      position: fixed;
+      top: 6px; right: 10px;
+      width: 20px; height: 20px;
+      background: none;
+      border: none;
+      color: #555;
+      font-size: 16px;
+      cursor: pointer;
+      -webkit-app-region: no-drag;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+    }
+
+    .close-btn:hover { color: #fff; background: #c8102e; }
+
+    body { animation: fadeIn 0.3s ease; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  </style>
+</head>
+<body>
+  <div class="drag-bar"></div>
+  <button class="close-btn" onclick="window.launcher.quit()" title="Close">&times;</button>
+
+  <div class="container">
+    <div class="logo-area">
+      <img src="../public/assets/gl-logo.png.webp" alt="Garage Living" draggable="false" />
+      <div class="subtitle">3D Designer</div>
+    </div>
+
+    <div class="message" id="msg"></div>
+
+    <form id="loginForm">
+      <div class="form-group">
+        <label>Email</label>
+        <input type="email" id="email" required placeholder="your@email.com" />
+      </div>
+      <div class="form-group">
+        <label>Access Token</label>
+        <input type="text" id="token" required placeholder="Paste your access token" />
+      </div>
+      <button type="submit" class="btn" id="submitBtn">Sign In</button>
+    </form>
+
+    <div class="footer">
+      Don't have access? <a onclick="window.launcher.openSignup()">Request an account</a>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('loginForm')
+    const msg = document.getElementById('msg')
+    const submitBtn = document.getElementById('submitBtn')
+    const emailInput = document.getElementById('email')
+    const tokenInput = document.getElementById('token')
+
+    // Auto-fill saved credentials if available
+    if (window.launcher && window.launcher.getSavedCredentials) {
+      window.launcher.getSavedCredentials().then(creds => {
+        if (creds) {
+          emailInput.value = creds.email || ''
+          tokenInput.value = creds.token || ''
+        }
+      })
+    }
+
+    function showMsg(text, type) {
+      msg.textContent = text
+      msg.className = 'message show ' + type
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault()
+      submitBtn.disabled = true
+      submitBtn.textContent = 'Validating...'
+      msg.className = 'message'
+
+      const email = emailInput.value.trim()
+      const token = tokenInput.value.trim()
+
+      try {
+        const result = await window.launcher.validate(email, token)
+
+        if (result.valid) {
+          showMsg(`Welcome, ${result.name}!`, 'success')
+          submitBtn.textContent = 'Launching...'
+          // main process will handle the transition
+        } else {
+          showMsg(result.error || 'Invalid credentials', 'error')
+          submitBtn.disabled = false
+          submitBtn.textContent = 'Sign In'
+        }
+      } catch {
+        showMsg('Could not connect to license server', 'error')
+        submitBtn.disabled = false
+        submitBtn.textContent = 'Sign In'
+      }
+    })
+  </script>
+</body>
+</html>

@@ -1,8 +1,56 @@
-const { app, BrowserWindow, ipcMain } = require('electron')
+const { app, BrowserWindow, ipcMain, shell } = require('electron')
 const path = require('path')
+const fs = require('fs')
 
+// License server URL — update this after deploying to Railway
+const LICENSE_SERVER = process.env.LICENSE_SERVER || 'https://gl-license-server-production.up.railway.app'
+const SIGNUP_URL = LICENSE_SERVER
+
+// Credentials file path (stored in user's appData)
+const credentialsPath = path.join(app.getPath('userData'), 'credentials.json')
+
+let loginWindow = null
 let launcherWindow = null
 let mainWindow = null
+
+// ---------------------------------------------------------------------------
+// Credentials persistence
+// ---------------------------------------------------------------------------
+function saveCredentials(email, token) {
+  fs.writeFileSync(credentialsPath, JSON.stringify({ email, token }), 'utf8')
+}
+
+function loadCredentials() {
+  try {
+    return JSON.parse(fs.readFileSync(credentialsPath, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Login window
+// ---------------------------------------------------------------------------
+function createLoginWindow() {
+  loginWindow = new BrowserWindow({
+    width: 420,
+    height: 480,
+    frame: false,
+    resizable: false,
+    center: true,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload-launcher.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+    icon: path.join(__dirname, '../build/icon.ico'),
+    backgroundColor: '#111111',
+  })
+
+  loginWindow.loadFile(path.join(__dirname, 'login-window.html'))
+  loginWindow.once('ready-to-show', () => loginWindow.show())
+}
 
 // ---------------------------------------------------------------------------
 // Launcher window (splash / updater)
@@ -28,6 +76,11 @@ function createLauncherWindow() {
 
   launcherWindow.once('ready-to-show', () => {
     launcherWindow.show()
+    // Close login window if still open
+    if (loginWindow && !loginWindow.isDestroyed()) {
+      loginWindow.close()
+      loginWindow = null
+    }
   })
 }
 
@@ -72,6 +125,50 @@ function sendToLauncher(channel, data) {
 
 ipcMain.handle('get-app-version', () => app.getVersion())
 
+ipcMain.handle('app-quit', () => app.quit())
+
+ipcMain.handle('open-signup', () => {
+  shell.openExternal(SIGNUP_URL)
+})
+
+ipcMain.handle('get-saved-credentials', () => loadCredentials())
+
+// Validate license against the server
+ipcMain.handle('validate-license', async (_event, email, token) => {
+  try {
+    const res = await fetch(`${LICENSE_SERVER}/api/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, access_token: token }),
+    })
+
+    const data = await res.json()
+
+    if (data.valid) {
+      // Save credentials for next launch
+      saveCredentials(email, token)
+      // Proceed to launcher/updater
+      setTimeout(() => {
+        createLauncherWindow()
+        launcherWindow.webContents.once('did-finish-load', () => checkForUpdates())
+      }, 800)
+    }
+
+    return data
+  } catch (err) {
+    // If server is unreachable, check for saved credentials as fallback
+    const saved = loadCredentials()
+    if (saved && saved.email === email && saved.token === token) {
+      setTimeout(() => {
+        createLauncherWindow()
+        launcherWindow.webContents.once('did-finish-load', () => checkForUpdates())
+      }, 800)
+      return { valid: true, name: 'User', offline: true }
+    }
+    return { valid: false, error: 'Could not connect to license server' }
+  }
+})
+
 // ---------------------------------------------------------------------------
 // Auto-updater
 // ---------------------------------------------------------------------------
@@ -81,10 +178,9 @@ function checkForUpdates() {
   try {
     autoUpdater = require('electron-updater').autoUpdater
   } catch {
-    // electron-updater not available (dev mode) — skip straight to launch
     sendToLauncher('update-status', {
       status: 'up-to-date',
-      message: 'Development mode — skipping update check',
+      message: 'Development mode \u2014 skipping update check',
     })
     setTimeout(launchApp, 1500)
     return
@@ -92,20 +188,12 @@ function checkForUpdates() {
 
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = true
-  autoUpdater.logger = null // silence default logging
-
-  // GitHub private repo — needs a token for release access.
-  // Set GH_TOKEN env var or place a github-token.txt next to the exe.
-  const tokenPath = path.join(app.isPackaged ? path.dirname(process.execPath) : __dirname, 'github-token.txt')
-  let ghToken = process.env.GH_TOKEN || ''
-  try { ghToken = ghToken || require('fs').readFileSync(tokenPath, 'utf8').trim() } catch {}
+  autoUpdater.logger = null
 
   autoUpdater.setFeedURL({
     provider: 'github',
     owner: 'burtjames18-create',
     repo: 'garage-designer',
-    private: true,
-    token: ghToken || undefined,
   })
 
   sendToLauncher('update-status', {
@@ -113,7 +201,6 @@ function checkForUpdates() {
     message: 'Checking for updates\u2026',
   })
 
-  // --- Update available ---------------------------------------------------
   autoUpdater.on('update-available', (info) => {
     sendToLauncher('update-status', {
       status: 'available',
@@ -122,7 +209,6 @@ function checkForUpdates() {
     autoUpdater.downloadUpdate()
   })
 
-  // --- Already up to date -------------------------------------------------
   autoUpdater.on('update-not-available', () => {
     sendToLauncher('update-status', {
       status: 'up-to-date',
@@ -131,7 +217,6 @@ function checkForUpdates() {
     setTimeout(launchApp, 1500)
   })
 
-  // --- Download progress --------------------------------------------------
   autoUpdater.on('download-progress', (progress) => {
     sendToLauncher('update-status', {
       status: 'downloading',
@@ -140,7 +225,6 @@ function checkForUpdates() {
     })
   })
 
-  // --- Download complete --------------------------------------------------
   autoUpdater.on('update-downloaded', () => {
     sendToLauncher('update-status', {
       status: 'downloaded',
@@ -149,7 +233,6 @@ function checkForUpdates() {
     setTimeout(() => autoUpdater.quitAndInstall(false, true), 2000)
   })
 
-  // --- Error --------------------------------------------------------------
   autoUpdater.on('error', () => {
     sendToLauncher('update-status', {
       status: 'error',
@@ -158,7 +241,6 @@ function checkForUpdates() {
     setTimeout(launchApp, 2000)
   })
 
-  // Kick off the check
   autoUpdater.checkForUpdates().catch(() => {
     sendToLauncher('update-status', {
       status: 'error',
@@ -169,7 +251,7 @@ function checkForUpdates() {
 }
 
 // ---------------------------------------------------------------------------
-// Transition from launcher → main app
+// Transition from launcher -> main app
 // ---------------------------------------------------------------------------
 function launchApp() {
   sendToLauncher('update-status', {
@@ -183,15 +265,48 @@ function launchApp() {
 // App lifecycle
 // ---------------------------------------------------------------------------
 app.whenReady().then(() => {
-  createLauncherWindow()
+  // Try auto-login with saved credentials
+  const saved = loadCredentials()
+  if (saved && saved.email && saved.token) {
+    // Validate silently in the background
+    createLauncherWindow()
+    launcherWindow.webContents.once('did-finish-load', async () => {
+      sendToLauncher('update-status', {
+        status: 'checking',
+        message: 'Verifying license\u2026',
+      })
 
-  launcherWindow.webContents.once('did-finish-load', () => {
-    checkForUpdates()
-  })
+      try {
+        const res = await fetch(`${LICENSE_SERVER}/api/validate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: saved.email, access_token: saved.token }),
+        })
+        const data = await res.json()
+
+        if (data.valid) {
+          checkForUpdates()
+        } else {
+          // Credentials revoked or invalid — show login
+          if (launcherWindow && !launcherWindow.isDestroyed()) {
+            launcherWindow.close()
+            launcherWindow = null
+          }
+          createLoginWindow()
+        }
+      } catch {
+        // Server unreachable — allow offline launch with saved credentials
+        checkForUpdates()
+      }
+    })
+  } else {
+    // No saved credentials — show login
+    createLoginWindow()
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createLauncherWindow()
+      createLoginWindow()
     }
   })
 })
