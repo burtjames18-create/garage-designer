@@ -1,7 +1,7 @@
 {
   "name": "garage-designer",
   "private": true,
-  "version": "1.0.13",
+  "version": "1.0.14",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -36,6 +36,7 @@
     "files": [
       "electron/**/*",
       "renderer/**/*",
+      "build/icon.ico",
       "package.json"
     ],
     "publish": [
