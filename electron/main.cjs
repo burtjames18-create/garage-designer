@@ -91,8 +91,8 @@ function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
-    minWidth: 1100,
-    minHeight: 700,
+    minWidth: 900,
+    minHeight: 500,
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload-launcher.cjs'),
