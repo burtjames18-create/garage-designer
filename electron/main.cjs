@@ -95,6 +95,7 @@ function createMainWindow() {
     minHeight: 700,
     show: false,
     webPreferences: {
+      preload: path.join(__dirname, 'preload-launcher.cjs'),
       nodeIntegration: false,
       contextIsolation: true,
     },

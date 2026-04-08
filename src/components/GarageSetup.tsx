@@ -140,6 +140,16 @@ export default function GarageSetup() {
         <p className="setup-hint">All walls and dimensions are fully editable after setup.</p>
 
         <button className="setup-btn" onClick={handleStart}>Start Design →</button>
+
+        {/* Show uninstall link only in Electron */}
+        {(window as any).launcher && (
+          <div style={{ marginTop: 16, textAlign: 'center' }}>
+            <a
+              onClick={() => (window as any).launcher.uninstall()}
+              style={{ color: '#555', fontSize: 11, cursor: 'pointer', textDecoration: 'none' }}
+            >Uninstall</a>
+          </div>
+        )}
       </div>
     </div>
   )

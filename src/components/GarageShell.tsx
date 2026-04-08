@@ -1288,20 +1288,40 @@ function OverheadRackMesh({ rack, chFt, selected, wireframe, onClick, onPointerD
         )
       })()}
 
-      {/* 4 legs */}
-      {legPositions.map((pos, i) => (
-        <mesh key={i} position={pos} castShadow>
-          <boxGeometry args={[legSz, legLen, legSz]} />
-          <meshPhysicalMaterial
-            wireframe={wireframe}
-            color={frameColor}
-            metalness={0.5}
-            roughness={0.35}
-            emissive={selected ? '#ffcc00' : '#000000'}
-            emissiveIntensity={highlight}
-          />
-        </mesh>
-      ))}
+      {/* 4 legs + ceiling brackets */}
+      {legPositions.map((pos, i) => {
+        const bTh = 0.008          // plate thickness ~1/8"
+        const bFlange = 2           // 2 feet bracket bar on ceiling
+        const bMat = {
+          color: frameColor, metalness: 0.6 as number, roughness: 0.3 as number,
+          emissive: selected ? '#ffcc00' : '#000000', emissiveIntensity: highlight,
+        }
+
+        return (
+          <group key={i}>
+            {/* Leg tube */}
+            <mesh position={pos} castShadow>
+              <boxGeometry args={[legSz, legLen, legSz]} />
+              <meshPhysicalMaterial
+                wireframe={wireframe}
+                color={frameColor}
+                metalness={0.5}
+                roughness={0.35}
+                emissive={selected ? '#ffcc00' : '#000000'}
+                emissiveIntensity={highlight}
+              />
+            </mesh>
+
+            {/* Single straight bar bracket per leg — runs along the rack's length direction, flush to ceiling */}
+            {!wireframe && (
+              <mesh position={[pos[0], chFt - bTh/2, pos[2]]}>
+                <boxGeometry args={[legSz, bTh, bFlange]} />
+                <meshPhysicalMaterial {...bMat} />
+              </mesh>
+            )}
+          </group>
+        )
+      })}
     </group>
   )
 }

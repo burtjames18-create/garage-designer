@@ -99,7 +99,6 @@ const TAB_ICONS: Record<SidebarTab, ReactNode> = {
   shapes:   <IconShapes />,
   cabinets: <IconCabinets />,
   overhead: <IconOverhead />,
-  ceiling:  <IconCeiling />,
   lighting: <IconLighting />,
   vehicles: <IconVehicles />,
   info:     <IconProject />,
@@ -111,7 +110,6 @@ const TABS: { id: SidebarTab; label: string }[] = [
   { id: 'shapes',   label: 'Shapes'   },
   { id: 'cabinets', label: 'Cabinets' },
   { id: 'overhead', label: 'Overhead'  },
-  { id: 'ceiling',  label: 'Ceiling'  },
   { id: 'lighting', label: 'Lighting' },
   { id: 'vehicles', label: 'Vehicles' },
   { id: 'info',     label: 'Project'  },
@@ -121,7 +119,6 @@ export default function Sidebar() {
   const {
     activeTab: tab, setActiveTab: setTab,
     flooringColor, setFlooringColor, floorTextureScale, setFloorTextureScale,
-    ceilingHeight, setCeilingHeight,
     customerName, siteAddress, consultantName, setCustomerInfo,
     floorSteps, selectedFloorStepId, addFloorStep, updateFloorStep, deleteFloorStep, selectFloorStep,
     importedAssets,
@@ -324,22 +321,6 @@ export default function Sidebar() {
 
           {tab === 'vehicles' && <ItemsPanel />}
 
-          {tab === 'ceiling' && (
-            <div>
-              <div className="field-group">
-                <MeasureInput
-                  label="Height from floor"
-                  inches={ceilingHeight}
-                  onChange={setCeilingHeight}
-                  min={84}
-                  max={360}
-                />
-                <p className="field-hint" style={{ marginTop: 6 }}>
-                  Sets the ceiling plane height. Individual walls can have independent heights in the Walls tab.
-                </p>
-              </div>
-            </div>
-          )}
 
           {tab === 'info' && (
             <div>
