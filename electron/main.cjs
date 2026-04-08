@@ -129,17 +129,17 @@ ipcMain.handle('get-app-version', () => app.getVersion())
 ipcMain.handle('app-quit', () => app.quit())
 
 ipcMain.handle('app-uninstall', async () => {
-  const { exec } = require('child_process')
+  const { spawn } = require('child_process')
   // Clear saved credentials
   try { fs.unlinkSync(credentialsPath) } catch {}
-  // Clear app data
-  const appData = app.getPath('userData')
-  // Run the NSIS uninstaller
+  // Clear app data folder
+  try { fs.rmSync(app.getPath('userData'), { recursive: true, force: true }) } catch {}
+  // Find and run the NSIS uninstaller
   const uninstaller = path.join(path.dirname(process.execPath), 'Uninstall Garage Living Designer.exe')
   try {
-    exec(`"${uninstaller}"`, { detached: true })
+    spawn(uninstaller, ['--force-run'], { detached: true, stdio: 'ignore' }).unref()
   } catch {}
-  app.quit()
+  setTimeout(() => app.quit(), 500)
 })
 
 ipcMain.handle('open-signup', () => {
