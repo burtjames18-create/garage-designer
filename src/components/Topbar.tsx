@@ -158,6 +158,8 @@ export default function Topbar() {
         <button className="export-btn" onClick={() => setShowExport(true)} aria-label="Export as PDF">Export PDF</button>
       </div>
 
+      <span className="topbar-version">v{__APP_VERSION__}</span>
+
       {showExport && <ExportModal onClose={() => setShowExport(false)} />}
       {showImport && <ImportModelModal onClose={() => setShowImport(false)} />}
     </div>

@@ -151,6 +151,9 @@ export default function GarageSetup() {
           </div>
         )}
       </div>
+      <div style={{ position: 'fixed', bottom: 14, right: 18, fontSize: 10, color: '#444' }}>
+        v{__APP_VERSION__}
+      </div>
     </div>
   )
 }

@@ -142,6 +142,14 @@
 
     .close-btn:hover { color: #fff; background: #2563eb; }
 
+    .version {
+      position: absolute;
+      bottom: 14px;
+      right: 18px;
+      font-size: 10px;
+      color: #444;
+    }
+
     body { animation: fadeIn 0.3s ease; }
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
   </style>
@@ -149,6 +157,7 @@
 <body>
   <div class="drag-bar"></div>
   <button class="close-btn" onclick="window.launcher.quit()" title="Close">&times;</button>
+  <div class="version" id="versionLabel">v—</div>
 
   <div class="container">
     <div class="logo-area">
@@ -184,6 +193,13 @@
     const submitBtn = document.getElementById('submitBtn')
     const emailInput = document.getElementById('email')
     const tokenInput = document.getElementById('token')
+
+    // Show version
+    if (window.launcher && window.launcher.getVersion) {
+      window.launcher.getVersion().then(v => {
+        document.getElementById('versionLabel').textContent = 'v' + v;
+      });
+    }
 
     // Auto-fill saved credentials if available
     if (window.launcher && window.launcher.getSavedCredentials) {

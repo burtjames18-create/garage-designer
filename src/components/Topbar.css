@@ -273,6 +273,16 @@
   box-shadow: 0 0 16px rgba(30, 111, 220, 0.25);
 }
 
+/* ── Version label ───────────────────────────────────────────────────── */
+.topbar-version {
+  font-size: 9px;
+  color: var(--text-muted);
+  opacity: 0.5;
+  margin-left: 8px;
+  flex-shrink: 0;
+  letter-spacing: 0.3px;
+}
+
 /* ── Responsive: progressive collapse ────────────────────────────────── */
 
 /* 1400px: shrink project info values */
