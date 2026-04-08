@@ -73,11 +73,18 @@ npm run electron:build   # Build + create installer → release/ folder
    ```
 4. **Build and publish** the release:
    ```bash
-   npm run electron:publish
+   # Retrieve the GitHub token from Windows Credential Manager and publish:
+   GH_TOKEN=$(printf "protocol=https\nhost=github.com\n" | git credential fill | grep password | cut -d= -f2) npm run electron:publish
    ```
-   This does two things:
+   This does three things:
+   - Extracts the GitHub credential from Git's Windows Credential Manager (used by electron-builder to upload)
    - Runs `vite build` (React app → `renderer/`)
    - Runs `electron-builder --win --publish always` (creates NSIS installer, uploads to GitHub Releases)
+   
+   > **Note for Claude Code sessions**: The `GH_TOKEN` env var is NOT persisted between sessions.
+   > You must extract it from Git's credential manager every time using the command above.
+   > Git push works without this because Git uses its own credential helper, but electron-builder
+   > requires the token as an environment variable.
 
 5. **Users auto-update**: When users open the app, `electron-updater` checks GitHub Releases, downloads the new version, and installs it on quit.
 
