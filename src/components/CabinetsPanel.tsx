@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useGarageStore } from '../store/garageStore'
 import { CABINET_PRESETS } from '../store/garageStore'
-import type { PlacedCabinet, Countertop, CabinetPreset } from '../store/garageStore'
+import type { PlacedCabinet, Countertop, CabinetPreset, CabinetLine } from '../store/garageStore'
 import { inchesToDisplay, cameraFloorPos } from '../utils/measurements'
 import MeasureInput from './MeasureInput'
 import { IconDelete, IconRotate, IconLocked, IconUnlocked } from './Icons'
@@ -11,12 +11,14 @@ import './CabinetsPanel.css'
 
 /** SVG front-elevation thumbnail for a cabinet preset */
 function CabinetSVG({ preset }: { preset: CabinetPreset }) {
-  const { style, doors, w, h } = preset
+  const { style, doors, w, h, line } = preset
   const drawers = preset.drawers ?? 0
+  const isSig = line === 'signature'
   const SVG_W = 56
   const SVG_H = Math.round(SVG_W * h / 36)
 
-  const hasToeKick = style === 'lower' || style === 'locker'
+  // Technica: recessed toe-kick; Signature: flat square base
+  const hasToeKick = (style === 'lower' || style === 'locker') && !isSig
   const toeKickH   = hasToeKick ? Math.max(6, Math.round(SVG_H * 0.10)) : 0
   const bodyH      = SVG_H - toeKickH
 
@@ -39,14 +41,30 @@ function CabinetSVG({ preset }: { preset: CabinetPreset }) {
         <rect x={5} y={bodyH} width={SVG_W - 10} height={toeKickH}
               fill="#252525" rx={1} />
       )}
+      {!hasToeKick && (style === 'lower' || style === 'locker') && (
+        /* Signature: flat base extending full width */
+        <rect x={1} y={bodyH} width={SVG_W - 2} height={Math.max(4, Math.round(SVG_H * 0.06))}
+              fill="#333" rx={1} />
+      )}
       {doors > 0 && doorAreaH2 > 0 && Array.from({ length: doors }).map((_, i) => (
         <rect key={`d${i}`}
               x={2 + i * doorW + 1} y={doorAreaY}
               width={doorW - 2} height={doorAreaH2}
               rx={1} fill="#464646" stroke="#5c5c5c" strokeWidth={0.75} />
       ))}
+      {/* Handles: Signature = full-length channel; Technica = short bar */}
       {doors > 0 && Array.from({ length: doors }).map((_, i) => {
         const cx = 2 + i * doorW + doorW / 2
+        if (isSig) {
+          // Full-length integrated channel on inner edge of each door
+          const chX = doors === 1 ? (2 + doorW - 4) : (i === 0 ? (2 + doorW - 4) : (2 + i * doorW + 3))
+          return (
+            <rect key={`dh${i}`}
+                  x={chX} y={doorAreaY + 2}
+                  width={2} height={doorAreaH2 - 4}
+                  rx={0.5} fill="#999" />
+          )
+        }
         return (
           <rect key={`dh${i}`}
                 x={cx - 1} y={doorHandleY}
@@ -58,12 +76,13 @@ function CabinetSVG({ preset }: { preset: CabinetPreset }) {
         const drawerY = drawerAreaY + i * drawerRowH
         const dH = drawerRowH - 1
         const cx = SVG_W / 2
+        const pullW = isSig ? 16 : 12
         return (
           <g key={`dr${i}`}>
             <rect x={3} y={drawerY} width={SVG_W - 6} height={dH}
                   rx={1} fill="#464646" stroke="#5c5c5c" strokeWidth={0.75} />
-            <rect x={cx - 6} y={drawerY + dH / 2 - 1} width={12} height={2}
-                  rx={1} fill="#888" />
+            <rect x={cx - pullW / 2} y={drawerY + dH / 2 - 1} width={pullW} height={2}
+                  rx={1} fill={isSig ? '#999' : '#888'} />
           </g>
         )
       })}
@@ -244,6 +263,7 @@ function CountertopEditor({ ct }: { ct: Countertop }) {
 
 export default function CabinetsPanel() {
   const { cabinets, addCabinet, updateCabinet, countertops, addCountertop, getQuote, viewMode, walls, elevationWallIndex } = useGarageStore()
+  const [activeLine, setActiveLine] = useState<CabinetLine>('technica')
   const quote = cabinets.length > 0 ? getQuote() : null
 
   const isWallEdit = viewMode === 'elevation'
@@ -251,13 +271,11 @@ export default function CabinetsPanel() {
 
   const handleAddCabinet = (preset: CabinetPreset) => {
     if (wall) {
-      // Wall edit mode: place cabinet centered on the current wall, facing interior
       const wLen = Math.hypot(wall.x2 - wall.x1, wall.z2 - wall.z1)
       const dx = wLen > 0.01 ? (wall.x2 - wall.x1) / wLen : 1
       const dz = wLen > 0.01 ? (wall.z2 - wall.z1) / wLen : 0
       const along = wLen / 2
       const offset = wall.thickness / 2 + preset.d / 2
-      // Interior normal
       const faceNx = -dz, faceNz = dx
       const spawnX = wall.x1 + dx * along + faceNx * offset
       const spawnZ = wall.z1 + dz * along + faceNz * offset
@@ -270,8 +288,24 @@ export default function CabinetsPanel() {
 
   return (
     <div className="cabinets-panel">
+      {/* Cabinet line tabs */}
+      <div className="cab-line-tabs" role="tablist" aria-label="Cabinet line">
+        <button
+          role="tab"
+          aria-selected={activeLine === 'technica'}
+          className={`cab-line-tab${activeLine === 'technica' ? ' active' : ''}`}
+          onClick={() => setActiveLine('technica')}
+        >Technica</button>
+        <button
+          role="tab"
+          aria-selected={activeLine === 'signature'}
+          className={`cab-line-tab${activeLine === 'signature' ? ' active' : ''}`}
+          onClick={() => setActiveLine('signature')}
+        >Signature</button>
+      </div>
+
       {STYLE_GROUPS.map(group => {
-        const presets = CABINET_PRESETS.filter(p => p.style === group.style)
+        const presets = CABINET_PRESETS.filter(p => p.style === group.style && p.line === activeLine)
         return (
           <div key={group.style} className="cab-group">
             <span className="cab-group-label">{group.label}</span>

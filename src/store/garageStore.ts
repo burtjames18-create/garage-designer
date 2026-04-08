@@ -54,10 +54,12 @@ export interface ExportShot {
 }
 
 export type CabinetStyle = 'lower' | 'upper' | 'locker'
+export type CabinetLine = 'technica' | 'signature'
 
 export interface CabinetPreset {
   key: string
   label: string
+  line: CabinetLine
   style: CabinetStyle
   doors: 0 | 1 | 2
   drawers?: number
@@ -69,28 +71,47 @@ export interface CabinetPreset {
 }
 
 export const CABINET_PRESETS: CabinetPreset[] = [
-  { key: 'lower-20-1',    label: '20" 1-Door Lower',          style: 'lower',  doors: 1, w: 20, d: 24, h: 31.25, sku: 'GL-CAB-BASE-20',  price: 249 },
-  { key: 'lower-28-2',    label: '28" 2-Door Lower',          style: 'lower',  doors: 2, w: 28, d: 24, h: 31.25, sku: 'GL-CAB-BASE-28',  price: 319 },
-  { key: 'lower-36-2',    label: '36" 2-Door Lower',          style: 'lower',  doors: 2, w: 36, d: 24, h: 31.25, sku: 'GL-CAB-BASE-36',  price: 429 },
-  { key: 'lower-36-1d2d', label: '36" 1-Drawer 2-Door Lower', style: 'lower',  doors: 2, drawers: 1, w: 36, d: 24, h: 31.25, sku: 'GL-CAB-BASE-36-1D', price: 469 },
-  { key: 'lower-36-3dr',  label: '36" 3-Drawer Lower',        style: 'lower',  doors: 0, drawers: 3, w: 36, d: 24, h: 31.25, sku: 'GL-CAB-BASE-36-3DR', price: 489 },
-  { key: 'lower-28-3dr',  label: '28" 3-Drawer Lower',        style: 'lower',  doors: 0, drawers: 3, w: 28, d: 24, h: 31.25, sku: 'GL-CAB-BASE-28-3DR', price: 439 },
-  { key: 'lower-20-3dr',  label: '20" 3-Drawer Lower',        style: 'lower',  doors: 0, drawers: 3, w: 20, d: 24, h: 31.25, sku: 'GL-CAB-BASE-20-3DR', price: 379 },
-  { key: 'lower-36-4dr',  label: '36" 4-Drawer Lower',        style: 'lower',  doors: 0, drawers: 4, w: 36, d: 24, h: 31.25, sku: 'GL-CAB-BASE-36-4DR', price: 519 },
-  { key: 'lower-28-4dr',  label: '28" 4-Drawer Lower',        style: 'lower',  doors: 0, drawers: 4, w: 28, d: 24, h: 31.25, sku: 'GL-CAB-BASE-28-4DR', price: 469 },
-  { key: 'lower-20-4dr',  label: '20" 4-Drawer Lower',        style: 'lower',  doors: 0, drawers: 4, w: 20, d: 24, h: 31.25, sku: 'GL-CAB-BASE-20-4DR', price: 409 },
-  { key: 'locker-36-2',   label: '36" 2-Door Locker',         style: 'locker', doors: 2, w: 36, d: 24, h: 80, sku: 'GL-CAB-TALL-36', price: 699 },
-  { key: 'locker-28-2',   label: '28" 2-Door Locker',         style: 'locker', doors: 2, w: 28, d: 24, h: 80, sku: 'GL-CAB-TALL-28', price: 649 },
-  { key: 'locker-20-1',   label: '20" 1-Door Locker',         style: 'locker', doors: 1, w: 20, d: 24, h: 80, sku: 'GL-CAB-TALL-20', price: 599 },
-  { key: 'upper-36-2',    label: '36" 2-Door Upper',          style: 'upper',  doors: 2, w: 36, d: 18, h: 28, sku: 'GL-CAB-WALL-36', price: 299 },
-  { key: 'upper-28-2',    label: '28" 2-Door Upper',          style: 'upper',  doors: 2, w: 28, d: 18, h: 28, sku: 'GL-CAB-WALL-28', price: 259 },
-  { key: 'upper-20-1',    label: '20" 1-Door Upper',          style: 'upper',  doors: 1, w: 20, d: 18, h: 28, sku: 'GL-CAB-WALL-20', price: 229 },
+  // ── Technica ──────────────────────────────────────────────────────────
+  { key: 't-lower-20-1',    label: '20" 1-Door Lower',          line: 'technica', style: 'lower',  doors: 1, w: 20, d: 24, h: 31.25, sku: 'GL-TEC-BASE-20',      price: 249 },
+  { key: 't-lower-28-2',    label: '28" 2-Door Lower',          line: 'technica', style: 'lower',  doors: 2, w: 28, d: 24, h: 31.25, sku: 'GL-TEC-BASE-28',      price: 319 },
+  { key: 't-lower-36-2',    label: '36" 2-Door Lower',          line: 'technica', style: 'lower',  doors: 2, w: 36, d: 24, h: 31.25, sku: 'GL-TEC-BASE-36',      price: 429 },
+  { key: 't-lower-36-1d2d', label: '36" 1-Drawer 2-Door Lower', line: 'technica', style: 'lower',  doors: 2, drawers: 1, w: 36, d: 24, h: 31.25, sku: 'GL-TEC-BASE-36-1D',  price: 469 },
+  { key: 't-lower-36-3dr',  label: '36" 3-Drawer Lower',        line: 'technica', style: 'lower',  doors: 0, drawers: 3, w: 36, d: 24, h: 31.25, sku: 'GL-TEC-BASE-36-3DR', price: 489 },
+  { key: 't-lower-28-3dr',  label: '28" 3-Drawer Lower',        line: 'technica', style: 'lower',  doors: 0, drawers: 3, w: 28, d: 24, h: 31.25, sku: 'GL-TEC-BASE-28-3DR', price: 439 },
+  { key: 't-lower-20-3dr',  label: '20" 3-Drawer Lower',        line: 'technica', style: 'lower',  doors: 0, drawers: 3, w: 20, d: 24, h: 31.25, sku: 'GL-TEC-BASE-20-3DR', price: 379 },
+  { key: 't-lower-36-4dr',  label: '36" 4-Drawer Lower',        line: 'technica', style: 'lower',  doors: 0, drawers: 4, w: 36, d: 24, h: 31.25, sku: 'GL-TEC-BASE-36-4DR', price: 519 },
+  { key: 't-lower-28-4dr',  label: '28" 4-Drawer Lower',        line: 'technica', style: 'lower',  doors: 0, drawers: 4, w: 28, d: 24, h: 31.25, sku: 'GL-TEC-BASE-28-4DR', price: 469 },
+  { key: 't-lower-20-4dr',  label: '20" 4-Drawer Lower',        line: 'technica', style: 'lower',  doors: 0, drawers: 4, w: 20, d: 24, h: 31.25, sku: 'GL-TEC-BASE-20-4DR', price: 409 },
+  { key: 't-locker-36-2',   label: '36" 2-Door Locker',         line: 'technica', style: 'locker', doors: 2, w: 36, d: 24, h: 80, sku: 'GL-TEC-TALL-36', price: 699 },
+  { key: 't-locker-28-2',   label: '28" 2-Door Locker',         line: 'technica', style: 'locker', doors: 2, w: 28, d: 24, h: 80, sku: 'GL-TEC-TALL-28', price: 649 },
+  { key: 't-locker-20-1',   label: '20" 1-Door Locker',         line: 'technica', style: 'locker', doors: 1, w: 20, d: 24, h: 80, sku: 'GL-TEC-TALL-20', price: 599 },
+  { key: 't-upper-36-2',    label: '36" 2-Door Upper',          line: 'technica', style: 'upper',  doors: 2, w: 36, d: 18, h: 28, sku: 'GL-TEC-WALL-36', price: 299 },
+  { key: 't-upper-28-2',    label: '28" 2-Door Upper',          line: 'technica', style: 'upper',  doors: 2, w: 28, d: 18, h: 28, sku: 'GL-TEC-WALL-28', price: 259 },
+  { key: 't-upper-20-1',    label: '20" 1-Door Upper',          line: 'technica', style: 'upper',  doors: 1, w: 20, d: 18, h: 28, sku: 'GL-TEC-WALL-20', price: 229 },
+  // ── Signature ─────────────────────────────────────────────────────────
+  { key: 's-lower-20-1',    label: '20" 1-Door Lower',          line: 'signature', style: 'lower',  doors: 1, w: 20, d: 24, h: 31.25, sku: 'GL-SIG-BASE-20',      price: 299 },
+  { key: 's-lower-28-2',    label: '28" 2-Door Lower',          line: 'signature', style: 'lower',  doors: 2, w: 28, d: 24, h: 31.25, sku: 'GL-SIG-BASE-28',      price: 379 },
+  { key: 's-lower-36-2',    label: '36" 2-Door Lower',          line: 'signature', style: 'lower',  doors: 2, w: 36, d: 24, h: 31.25, sku: 'GL-SIG-BASE-36',      price: 499 },
+  { key: 's-lower-36-1d2d', label: '36" 1-Drawer 2-Door Lower', line: 'signature', style: 'lower',  doors: 2, drawers: 1, w: 36, d: 24, h: 31.25, sku: 'GL-SIG-BASE-36-1D',  price: 539 },
+  { key: 's-lower-36-3dr',  label: '36" 3-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 3, w: 36, d: 24, h: 31.25, sku: 'GL-SIG-BASE-36-3DR', price: 559 },
+  { key: 's-lower-28-3dr',  label: '28" 3-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 3, w: 28, d: 24, h: 31.25, sku: 'GL-SIG-BASE-28-3DR', price: 509 },
+  { key: 's-lower-20-3dr',  label: '20" 3-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 3, w: 20, d: 24, h: 31.25, sku: 'GL-SIG-BASE-20-3DR', price: 449 },
+  { key: 's-lower-36-4dr',  label: '36" 4-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 4, w: 36, d: 24, h: 31.25, sku: 'GL-SIG-BASE-36-4DR', price: 589 },
+  { key: 's-lower-28-4dr',  label: '28" 4-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 4, w: 28, d: 24, h: 31.25, sku: 'GL-SIG-BASE-28-4DR', price: 539 },
+  { key: 's-lower-20-4dr',  label: '20" 4-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 4, w: 20, d: 24, h: 31.25, sku: 'GL-SIG-BASE-20-4DR', price: 479 },
+  { key: 's-locker-36-2',   label: '36" 2-Door Locker',         line: 'signature', style: 'locker', doors: 2, w: 36, d: 24, h: 80, sku: 'GL-SIG-TALL-36', price: 799 },
+  { key: 's-locker-28-2',   label: '28" 2-Door Locker',         line: 'signature', style: 'locker', doors: 2, w: 28, d: 24, h: 80, sku: 'GL-SIG-TALL-28', price: 749 },
+  { key: 's-locker-20-1',   label: '20" 1-Door Locker',         line: 'signature', style: 'locker', doors: 1, w: 20, d: 24, h: 80, sku: 'GL-SIG-TALL-20', price: 699 },
+  { key: 's-upper-36-2',    label: '36" 2-Door Upper',          line: 'signature', style: 'upper',  doors: 2, w: 36, d: 18, h: 28, sku: 'GL-SIG-WALL-36', price: 359 },
+  { key: 's-upper-28-2',    label: '28" 2-Door Upper',          line: 'signature', style: 'upper',  doors: 2, w: 28, d: 18, h: 28, sku: 'GL-SIG-WALL-28', price: 319 },
+  { key: 's-upper-20-1',    label: '20" 1-Door Upper',          line: 'signature', style: 'upper',  doors: 1, w: 20, d: 18, h: 28, sku: 'GL-SIG-WALL-20', price: 279 },
 ]
 
 export interface PlacedCabinet {
   id: string
   presetKey: string
   label: string
+  line: CabinetLine
   style: CabinetStyle
   doors: 0 | 1 | 2
   drawers?: number
@@ -816,6 +837,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       id: uid(),
       presetKey: preset.key,
       label: preset.label,
+      line: preset.line,
       style: preset.style,
       doors: preset.doors,
       drawers: preset.drawers,
@@ -1075,7 +1097,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       slatwallPanels:   (d.slatwallPanels as SlatwallPanel[]) ?? [],
       floorSteps:       (d.floorSteps as FloorStep[])   ?? [],
       shapes:           (d.shapes as GarageShape[])     ?? [],
-      cabinets:         (d.cabinets as PlacedCabinet[]) ?? [],
+      cabinets:         ((d.cabinets as PlacedCabinet[]) ?? []).map(c => ({ ...c, line: c.line ?? 'technica' as const })),
       countertops:      (d.countertops as Countertop[]) ?? [],
       items:            (d.items as PlacedItem[])       ?? [],
       overheadRacks:    (d.overheadRacks as OverheadRack[]) ?? [],

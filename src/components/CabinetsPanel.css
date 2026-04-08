@@ -1,5 +1,40 @@
 .cabinets-panel { display: flex; flex-direction: column; gap: 14px; }
 
+/* ── Cabinet line tabs (Technica / Signature) ────────────────────────── */
+.cab-line-tabs {
+  display: flex;
+  gap: 2px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+}
+.cab-line-tab {
+  flex: 1;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  padding: 7px 0;
+  cursor: pointer;
+  transition: all 0.18s;
+}
+.cab-line-tab:hover {
+  color: var(--text-sub);
+  background: var(--surface3);
+}
+.cab-line-tab.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
 .cab-group-label {
   font-family: 'Plus Jakarta Sans', sans-serif;
   font-size: 9px;

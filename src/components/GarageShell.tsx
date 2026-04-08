@@ -907,9 +907,11 @@ const CabinetMesh = memo(function CabinetMesh({ cabinet, selected, wireframe, bl
 
   // 3/4" frame rail/stile
   const fr  = FT(0.75)
-  // Toe kick (lower and locker): 3.5" tall, 2" deep recess
+  const isSignature = cabinet.line === 'signature'
+  // Toe kick (lower and locker): 3.5" tall, 2" deep recess — Signature has flat/square base (no recess)
   const isLocker = cabinet.style === 'locker'
-  const tkH = (cabinet.style === 'lower' || isLocker) ? FT(3.5) : 0
+  const hasToeKick = (cabinet.style === 'lower' || isLocker) && !isSignature
+  const tkH = hasToeKick ? FT(3.5) : 0
   const tkD = FT(2)
 
   const drawerCount = cabinet.drawers ?? 0
@@ -918,7 +920,7 @@ const CabinetMesh = memo(function CabinetMesh({ cabinet, selected, wireframe, bl
   // Door vertical extents
   // For 1-drawer + 2-door: doors occupy area below the drawer
   // For drawer-only: no door area
-  const baseY0  = (cabinet.style === 'lower' || isLocker) ? tkH : fr
+  const baseY0  = hasToeKick ? tkH : fr
   const fullY1  = hFt - fr
   // If there's a top drawer row, shrink door area down
   const doorY0  = baseY0
@@ -952,20 +954,44 @@ const CabinetMesh = memo(function CabinetMesh({ cabinet, selected, wireframe, bl
   // Vertical bar handle dimensions (used for all doors)
   const vW = FT(0.45)   // bar width
   const vD = FT(1.1)    // bar depth (protrusion from door face)
-  // Horizontal bar handle dimensions (used for drawers only)
-  const hBarH = FT(0.45)
-  const hBarW = FT(5)
-  const hBarD = FT(1.1)
 
   let handleMeshes: JSX.Element[] = []
 
-  if (cabinet.style === 'locker') {
-    // Locker: vertical bar, inner edge of each door, centered vertically
+  if (isSignature && cabinet.doors > 0) {
+    // ── Signature: full-length integrated aluminum channel on each door ──
+    const sigW  = FT(0.6)    // channel width
+    const sigD  = FT(0.5)    // shallow integrated depth
+    const sigH  = doorH - FT(1)   // full door height minus small top/bottom margin
+    const sigY  = doorMY
+    const sigZ  = doorZ + sigD / 2
+    if (cabinet.doors === 1) {
+      // Channel on the right edge of single door
+      const chX = door1W / 2 - FT(1.2)
+      handleMeshes.push(
+        <mesh key="sig1" position={[chX, sigY, sigZ]}>{handleMat}
+          <boxGeometry args={[sigW, sigH, sigD]} />
+        </mesh>
+      )
+    } else {
+      // Channel on inner edge of each door
+      const chL = lDX + door2W / 2 - FT(1.2)
+      const chR = rDX - door2W / 2 + FT(1.2)
+      handleMeshes.push(
+        <mesh key="sigL" position={[chL, sigY, sigZ]}>{handleMat}
+          <boxGeometry args={[sigW, sigH, sigD]} />
+        </mesh>,
+        <mesh key="sigR" position={[chR, sigY, sigZ]}>{handleMat}
+          <boxGeometry args={[sigW, sigH, sigD]} />
+        </mesh>
+      )
+    }
+  } else if (cabinet.style === 'locker') {
+    // Technica Locker: vertical bar, inner edge of each door, centered vertically
     const vH   = doorH * 0.22           // ~22% of door height
     const vY   = (doorY0 + doorY1) / 2  // centered on door
-    const iEdgeL =  lDX + door2W / 2 - FT(1.5)   // 1.5" from inner edge of left door
-    const iEdgeR =  rDX - door2W / 2 + FT(1.5)   // 1.5" from inner edge of right door
-    const iEdge1 = -door1W / 2 + FT(1.5)          // left edge for single door
+    const iEdgeL =  lDX + door2W / 2 - FT(1.5)
+    const iEdgeR =  rDX - door2W / 2 + FT(1.5)
+    const iEdge1 = -door1W / 2 + FT(1.5)
     if (cabinet.doors === 1) {
       handleMeshes.push(
         <mesh key="locker1" position={[iEdge1, vY, doorZ + vD / 2]}>{handleMat}
@@ -983,12 +1009,12 @@ const CabinetMesh = memo(function CabinetMesh({ cabinet, selected, wireframe, bl
       )
     }
   } else if (cabinet.style === 'lower' && cabinet.doors > 0) {
-    // Lower doors: vertical bar, inner edge, upper portion of door
-    const vH    = Math.min(doorH * 0.28, FT(6))    // up to 6" tall
-    const vY    = doorY1 - vH / 2 - FT(1.5)        // 1.5" from top of door
+    // Technica Lower: vertical bar, inner edge, upper portion of door
+    const vH    = Math.min(doorH * 0.28, FT(6))
+    const vY    = doorY1 - vH / 2 - FT(1.5)
     const iEdgeL =  lDX + door2W / 2 - FT(1.5)
     const iEdgeR =  rDX - door2W / 2 + FT(1.5)
-    const iEdge1 =  door1W / 2 - FT(1.5)           // right side for single door
+    const iEdge1 =  door1W / 2 - FT(1.5)
     if (cabinet.doors === 1) {
       handleMeshes.push(
         <mesh key="lower1" position={[iEdge1, vY, doorZ + vD / 2]}>{handleMat}
@@ -1006,9 +1032,9 @@ const CabinetMesh = memo(function CabinetMesh({ cabinet, selected, wireframe, bl
       )
     }
   } else if (cabinet.style === 'upper') {
-    // Upper doors: vertical bar, inner edge, lower portion of door (pull downward)
+    // Technica Upper: vertical bar, inner edge, lower portion of door
     const vH    = Math.min(doorH * 0.28, FT(5))
-    const vY    = doorY0 + vH / 2 + FT(1.5)        // 1.5" from bottom of door
+    const vY    = doorY0 + vH / 2 + FT(1.5)
     const iEdgeL =  lDX + door2W / 2 - FT(1.5)
     const iEdgeR =  rDX - door2W / 2 + FT(1.5)
     const iEdge1 =  door1W / 2 - FT(1.5)
@@ -1043,8 +1069,8 @@ const CabinetMesh = memo(function CabinetMesh({ cabinet, selected, wireframe, bl
       onPointerDown={onPointerDown}
     >
       <>
-        {/* Body — lower and locker: split into top section + toe-kick back (proper recess, no z-fighting) */}
-        {(cabinet.style === 'lower' || isLocker) ? (<>
+        {/* Body — Technica lower/locker: split into top section + toe-kick recess; Signature: full flat box */}
+        {hasToeKick ? (<>
           <mesh position={[0, (tkH + hFt) / 2, 0]} castShadow receiveShadow>{bodyMat}
             <boxGeometry args={[wFt, hFt - tkH, dFt]} />
           </mesh>
@@ -1085,9 +1111,10 @@ const CabinetMesh = memo(function CabinetMesh({ cabinet, selected, wireframe, bl
             // Drawer-only: single centered pull on each drawer (slim finger pull)
             // Combo (1 drawer + doors): wider bar pull on the drawer
             const isDrawerOnly = cabinet.doors === 0
-            const pullW = isDrawerOnly ? FT(3.5) : FT(5)    // slim 3.5" vs full 5" bar
-            const pullH = FT(0.35)
-            const pullD = isDrawerOnly ? FT(0.6) : FT(1.1)  // shallower finger pull
+            // Signature: wider integrated channel pull; Technica: bar pull
+            const pullW = isSignature ? drawerFW * 0.55 : (isDrawerOnly ? FT(3.5) : FT(5))
+            const pullH = isSignature ? FT(0.5) : FT(0.35)
+            const pullD = isSignature ? FT(0.5) : (isDrawerOnly ? FT(0.6) : FT(1.1))
             for (let i = 0; i < drawerCount; i++) {
               const y0  = drawerAreaY0 + i * singleH
               const fH  = singleH - gap
