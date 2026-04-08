@@ -59,12 +59,16 @@ npm run electron:build   # Build + create installer → release/ folder
 
 ### Step-by-step to push a new version to users:
 
+> **IMPORTANT**: You MUST bump the version number in `package.json` before every publish.
+> The auto-updater only triggers when the GitHub Release version is higher than what the
+> user has installed. If you forget to bump, the update will not be detected.
+
 1. **Make changes** and test locally
-2. **Bump version** in `package.json` (e.g. `"version": "1.0.10"`)
+2. **Bump version** in `package.json` — increment the patch number (e.g. `1.0.10` → `1.0.11`)
 3. **Commit and push** to GitHub:
    ```bash
    git add .
-   git commit -m "v1.0.10: Description of changes"
+   git commit -m "v1.0.11: Description of changes"
    git push origin master
    ```
 4. **Build and publish** the release:
@@ -76,6 +80,9 @@ npm run electron:build   # Build + create installer → release/ folder
    - Runs `electron-builder --win --publish always` (creates NSIS installer, uploads to GitHub Releases)
 
 5. **Users auto-update**: When users open the app, `electron-updater` checks GitHub Releases, downloads the new version, and installs it on quit.
+
+### Common mistake: forgetting to bump the version
+If you push code and run `electron:publish` without bumping the version, it will overwrite the existing release with the same version number. Users who already have that version installed will **not** receive the update because electron-updater sees the same version and skips it.
 
 ### What gets uploaded to GitHub Releases:
 - `Garage Living Designer Setup {version}.exe` — the installer
