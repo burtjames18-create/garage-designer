@@ -1,7 +1,7 @@
-import { useRef, useCallback } from 'react'
+import { useRef, useCallback, useState } from 'react'
 import type { GarageWall, PlacedCabinet, Countertop, FloorPoint, FloorStep, SlatwallPanel, OverheadRack } from '../store/garageStore'
 import { COUNTERTOP_DEPTH, useGarageStore } from '../store/garageStore'
-import { inchesToDisplay, snapToGrid } from '../utils/measurements'
+import { inchesToDisplay, snapToGrid, snapRackToWalls, type RackSnapResult } from '../utils/measurements'
 
 function wallLen(w: GarageWall) { return Math.hypot(w.x2 - w.x1, w.z2 - w.z1) }
 function wallDir(w: GarageWall): [number, number] {
@@ -33,6 +33,7 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
   const { selectRack, updateRack, selectedRackId } = useGarageStore()
   const svgRef = useRef<SVGSVGElement>(null)
   const rackDragRef = useRef<{ rackId: string; startX: number; startZ: number; startMouseX: number; startMouseZ: number } | null>(null)
+  const [rackSnap, setRackSnap] = useState<RackSnapResult | null>(null)
 
   if (walls.length === 0) return null
 
@@ -93,14 +94,22 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
     if (!pos) return
     const dx = pos.x - rd.startMouseX
     const dz = pos.z - rd.startMouseZ
-    updateRack(rd.rackId, {
-      x: snapToGrid(rd.startX + dx),
-      z: snapToGrid(rd.startZ + dz),
-    })
-  }, [updateRack, mouseToSvg])
+    const gridX = snapToGrid(rd.startX + dx)
+    const gridZ = snapToGrid(rd.startZ + dz)
+
+    // Find the rack to get its dimensions and rotation
+    const rack = overheadRacks.find(r => r.id === rd.rackId)
+    if (!rack) return
+
+    // Snap to walls
+    const snap = snapRackToWalls(gridX, gridZ, rack.rackWidth, rack.rackLength, rack.rotY, walls)
+    setRackSnap(snap)
+    updateRack(rd.rackId, { x: snap.x, z: snap.z })
+  }, [updateRack, mouseToSvg, overheadRacks, walls])
 
   const onRackPointerUp = useCallback(() => {
     rackDragRef.current = null
+    setRackSnap(null)
   }, [])
 
   const dimColor = '#555'
@@ -505,6 +514,26 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
 
         return dims
       })()}
+
+      {/* ── Rack snap indicator lines ── */}
+      {rackSnap && rackDragRef.current && (
+        <g pointerEvents="none">
+          {rackSnap.snapAxis === 'x' && rackSnap.snapEdge != null && (
+            <line x1={sx(rackSnap.snapEdge)} y1={sz(minZ)} x2={sx(rackSnap.snapEdge)} y2={sz(maxZ)}
+              stroke="#4488ff" strokeWidth={0.8} strokeDasharray="4 3" opacity={0.7} />
+          )}
+          {rackSnap.snapAxis === 'z' && rackSnap.snapEdge != null && (
+            <line x1={sx(minX)} y1={sz(rackSnap.snapEdge)} x2={sx(maxX)} y2={sz(rackSnap.snapEdge)}
+              stroke="#4488ff" strokeWidth={0.8} strokeDasharray="4 3" opacity={0.7} />
+          )}
+          {rackSnap.snapAxis === undefined && rackSnap.snappedWallId && (
+            <>
+              <circle cx={sx(rackSnap.x)} cy={sz(rackSnap.z)} r={3}
+                fill="none" stroke="#4488ff" strokeWidth={1} opacity={0.8} />
+            </>
+          )}
+        </g>
+      )}
 
       {/* ── Overhead racks (interactive: drag + rotate) ── */}
       {overheadRacks.map(rack => {

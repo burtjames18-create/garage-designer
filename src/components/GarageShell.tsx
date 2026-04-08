@@ -15,7 +15,7 @@ import { getCachedModelUrl, restoreModelFromDB } from '../utils/importedModelCac
 import { getLibraryModels } from '../utils/modelLibrary'
 import {
   wallLengthIn, inchesToDisplay, snapToGrid,
-  snapToFloorEdge, snapAngle,
+  snapToFloorEdge, snapAngle, snapRackToWalls,
   cameraFloorPos,
 } from '../utils/measurements'
 import { createButcherBlockTexture } from '../utils/butcherBlockTexture'
@@ -1224,18 +1224,69 @@ function OverheadRackMesh({ rack, chFt, selected, wireframe, onClick, onPointerD
       onClick={(e) => { e.stopPropagation(); onClick() }}
       onPointerDown={onPointerDown}
     >
-      {/* Wire deck platform */}
-      <mesh position={[0, deckCenterY, 0]} castShadow receiveShadow>
-        <boxGeometry args={[wFt, deckTh, lFt]} />
-        <meshPhysicalMaterial
-          wireframe={wireframe}
-          color={deckColor}
-          metalness={0.6}
-          roughness={0.4}
-          emissive={selected ? '#ffcc00' : '#000000'}
-          emissiveIntensity={highlight}
-        />
-      </mesh>
+      {/* Wire mesh deck — outer frame + cross wire grid (see-through like real racks) */}
+      {(() => {
+        const barTh = 0.02  // wire bar thickness in feet (~1/4")
+        const frameBarW = 0.04 // frame rail width (~1/2")
+        const matProps = {
+          color: frameColor,
+          metalness: 0.6 as number,
+          roughness: 0.35 as number,
+          emissive: selected ? '#ffcc00' : '#000000',
+          emissiveIntensity: highlight,
+        }
+        const wireMat = {
+          color: wireframe ? frameColor : '#888888',
+          metalness: 0.7 as number,
+          roughness: 0.3 as number,
+          emissive: selected ? '#ffcc00' : '#000000',
+          emissiveIntensity: highlight,
+        }
+        return (
+          <group position={[0, deckCenterY, 0]}>
+            {/* Outer frame — 4 rails */}
+            <mesh position={[0, 0, -lFt/2 + frameBarW/2]} castShadow>
+              <boxGeometry args={[wFt, deckTh, frameBarW]} />
+              <meshPhysicalMaterial wireframe={wireframe} {...matProps} />
+            </mesh>
+            <mesh position={[0, 0, lFt/2 - frameBarW/2]} castShadow>
+              <boxGeometry args={[wFt, deckTh, frameBarW]} />
+              <meshPhysicalMaterial wireframe={wireframe} {...matProps} />
+            </mesh>
+            <mesh position={[-wFt/2 + frameBarW/2, 0, 0]} castShadow>
+              <boxGeometry args={[frameBarW, deckTh, lFt - frameBarW*2]} />
+              <meshPhysicalMaterial wireframe={wireframe} {...matProps} />
+            </mesh>
+            <mesh position={[wFt/2 - frameBarW/2, 0, 0]} castShadow>
+              <boxGeometry args={[frameBarW, deckTh, lFt - frameBarW*2]} />
+              <meshPhysicalMaterial wireframe={wireframe} {...matProps} />
+            </mesh>
+
+            {/* Cross wires — along width (every ~3") */}
+            {!wireframe && Array.from({ length: Math.max(0, Math.floor(lFt / 0.25) - 1) }, (_, i) => {
+              const z = -lFt / 2 + frameBarW + (i + 1) * ((lFt - frameBarW*2) / (Math.floor(lFt / 0.25)))
+              if (z > lFt / 2 - frameBarW) return null
+              return (
+                <mesh key={`w${i}`} position={[0, 0, z]}>
+                  <boxGeometry args={[wFt - frameBarW*2, barTh, barTh]} />
+                  <meshStandardMaterial {...wireMat} />
+                </mesh>
+              )
+            })}
+            {/* Cross wires — along length (every ~6") */}
+            {!wireframe && Array.from({ length: Math.max(0, Math.floor(wFt / 0.5) - 1) }, (_, i) => {
+              const x = -wFt / 2 + frameBarW + (i + 1) * ((wFt - frameBarW*2) / (Math.floor(wFt / 0.5)))
+              if (x > wFt / 2 - frameBarW) return null
+              return (
+                <mesh key={`l${i}`} position={[x, 0, 0]}>
+                  <boxGeometry args={[barTh, barTh, lFt - frameBarW*2]} />
+                  <meshStandardMaterial {...wireMat} />
+                </mesh>
+              )
+            })}
+          </group>
+        )
+      })()}
 
       {/* 4 legs */}
       {legPositions.map((pos, i) => (
@@ -1251,34 +1302,6 @@ function OverheadRackMesh({ rack, chFt, selected, wireframe, onClick, onPointerD
           />
         </mesh>
       ))}
-
-      {/* Wire grid lines on the deck (visual detail, non-wireframe only) */}
-      {!wireframe && (
-        <group position={[0, deckTopY + 0.003, 0]}>
-          {/* Cross wires along width */}
-          {Array.from({ length: Math.floor(lFt / 0.25) }, (_, i) => {
-            const z = -lFt / 2 + (i + 1) * 0.25
-            if (Math.abs(z) > lFt / 2 - 0.02) return null
-            return (
-              <mesh key={`w${i}`} position={[0, 0, z]}>
-                <boxGeometry args={[wFt - 0.02, 0.005, 0.008]} />
-                <meshStandardMaterial color="#777" metalness={0.7} roughness={0.3} />
-              </mesh>
-            )
-          })}
-          {/* Cross wires along length */}
-          {Array.from({ length: Math.floor(wFt / 0.5) }, (_, i) => {
-            const x = -wFt / 2 + (i + 1) * 0.5
-            if (Math.abs(x) > wFt / 2 - 0.02) return null
-            return (
-              <mesh key={`l${i}`} position={[x, 0, 0]}>
-                <boxGeometry args={[0.008, 0.005, lFt - 0.02]} />
-                <meshStandardMaterial color="#777" metalness={0.7} roughness={0.3} />
-              </mesh>
-            )
-          })}
-        </group>
-      )}
     </group>
   )
 }
@@ -2845,6 +2868,7 @@ export default function GarageShell() {
 
   // Always-fresh refs
   const wallsRef        = useRef(walls);                    useEffect(() => { wallsRef.current = walls }, [walls])
+  const racksRef        = useRef(overheadRacks);              useEffect(() => { racksRef.current = overheadRacks }, [overheadRacks])
   const shapesRef       = useRef(shapes);                   useEffect(() => { shapesRef.current = shapes }, [shapes])
   const floorPtsRef     = useRef(effectiveFloorPts);        useEffect(() => { floorPtsRef.current = effectiveFloorPts }, [effectiveFloorPts])
   const slatsRef        = useRef(slatwallPanels);  useEffect(() => { slatsRef.current = slatwallPanels }, [slatwallPanels])
@@ -3276,10 +3300,15 @@ export default function GarageShell() {
         if (hitR) {
           const dxIn = (hitR.x - rd.startHitX) * 12
           const dzIn = (hitR.z - rd.startHitZ) * 12
-          updateRack(rd.rackId, {
-            x: snapToGrid(rd.startXIn + dxIn),
-            z: snapToGrid(rd.startZIn + dzIn),
-          })
+          const gridX = snapToGrid(rd.startXIn + dxIn)
+          const gridZ = snapToGrid(rd.startZIn + dzIn)
+          const rack = racksRef.current.find(r => r.id === rd.rackId)
+          if (rack) {
+            const snap = snapRackToWalls(gridX, gridZ, rack.rackWidth, rack.rackLength, rack.rotY, wallsRef.current)
+            updateRack(rd.rackId, { x: snap.x, z: snap.z })
+          } else {
+            updateRack(rd.rackId, { x: gridX, z: gridZ })
+          }
         }
         return
       }

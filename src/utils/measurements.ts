@@ -97,6 +97,132 @@ export function snapToFloorEdge(
   return [sx, sz]
 }
 
+// ---------------------------------------------------------------------------
+// Snap overhead rack edge to nearest wall inner face or corner
+// Returns snapped { x, z } and optional snap info for visual indicators
+// ---------------------------------------------------------------------------
+export interface RackSnapResult {
+  x: number
+  z: number
+  snappedWallId?: string
+  snapAxis?: 'x' | 'z'  // which axis was snapped
+  snapEdge?: number      // the wall edge coordinate that was snapped to
+}
+
+export function snapRackToWalls(
+  rackX: number,
+  rackZ: number,
+  rackWidth: number,
+  rackLength: number,
+  rotY: number,
+  walls: { id: string; x1: number; z1: number; x2: number; z2: number; thickness: number }[],
+  threshold = 12,
+): RackSnapResult {
+  // Compute rack's 4 corner positions
+  const hw = rackWidth / 2
+  const hl = rackLength / 2
+  const cos = Math.cos(rotY), sin = Math.sin(rotY)
+  const localCorners = [[-hw, -hl], [hw, -hl], [hw, hl], [-hw, hl]]
+  const corners = localCorners.map(([lx, lz]) => ({
+    x: rackX + lx * cos - lz * sin,
+    z: rackZ + lx * sin + lz * cos,
+  }))
+
+  // Rack bounding edges (min/max of corners)
+  const rMinX = Math.min(...corners.map(c => c.x))
+  const rMaxX = Math.max(...corners.map(c => c.x))
+  const rMinZ = Math.min(...corners.map(c => c.z))
+  const rMaxZ = Math.max(...corners.map(c => c.z))
+
+  let bestDx = threshold + 1
+  let bestDz = threshold + 1
+  let snapX = rackX
+  let snapZ = rackZ
+  let snappedWallId: string | undefined
+  let snapAxis: 'x' | 'z' | undefined
+  let snapEdge: number | undefined
+
+  for (const w of walls) {
+    const ht = w.thickness / 2
+
+    // Determine if this wall is primarily horizontal (along X) or vertical (along Z)
+    const dx = Math.abs(w.x2 - w.x1)
+    const dz = Math.abs(w.z2 - w.z1)
+
+    if (dz > dx) {
+      // Vertical wall (runs along Z axis) — snaps on X
+      const wallCenterX = (w.x1 + w.x2) / 2
+      const innerLeft = wallCenterX + ht   // inner face (right side)
+      const innerRight = wallCenterX - ht  // inner face (left side)
+
+      // Check rack's left edge against wall's right inner face
+      const dLeft = Math.abs(rMinX - innerLeft)
+      if (dLeft < bestDx) {
+        bestDx = dLeft
+        snapX = rackX + (innerLeft - rMinX)
+        snappedWallId = w.id
+        snapAxis = 'x'
+        snapEdge = innerLeft
+      }
+      // Check rack's right edge against wall's left inner face
+      const dRight = Math.abs(rMaxX - innerRight)
+      if (dRight < bestDx) {
+        bestDx = dRight
+        snapX = rackX + (innerRight - rMaxX)
+        snappedWallId = w.id
+        snapAxis = 'x'
+        snapEdge = innerRight
+      }
+    } else {
+      // Horizontal wall (runs along X axis) — snaps on Z
+      const wallCenterZ = (w.z1 + w.z2) / 2
+      const innerTop = wallCenterZ + ht    // inner face (bottom side)
+      const innerBottom = wallCenterZ - ht  // inner face (top side)
+
+      // Check rack's top edge against wall's bottom inner face
+      const dTop = Math.abs(rMinZ - innerTop)
+      if (dTop < bestDz) {
+        bestDz = dTop
+        snapZ = rackZ + (innerTop - rMinZ)
+        snappedWallId = w.id
+        snapAxis = 'z'
+        snapEdge = innerTop
+      }
+      // Check rack's bottom edge against wall's top inner face
+      const dBottom = Math.abs(rMaxZ - innerBottom)
+      if (dBottom < bestDz) {
+        bestDz = dBottom
+        snapZ = rackZ + (innerBottom - rMaxZ)
+        snappedWallId = w.id
+        snapAxis = 'z'
+        snapEdge = innerBottom
+      }
+    }
+  }
+
+  // Apply snapping — allow both axes to snap independently (for corner snapping)
+  const result: RackSnapResult = { x: rackX, z: rackZ }
+  if (bestDx <= threshold) {
+    result.x = snapX
+    result.snappedWallId = snappedWallId
+    result.snapAxis = 'x'
+    result.snapEdge = snapEdge
+  }
+  if (bestDz <= threshold) {
+    result.z = snapZ
+    if (!result.snappedWallId) result.snappedWallId = snappedWallId
+    result.snapAxis = bestDz < bestDx ? 'z' : result.snapAxis
+    if (bestDz < bestDx) result.snapEdge = snapEdge
+  }
+  // If both snapped, it's a corner snap
+  if (bestDx <= threshold && bestDz <= threshold) {
+    result.x = snapX
+    result.z = snapZ
+    result.snapAxis = undefined // both axes = corner
+  }
+  return result
+}
+
 // Snap wall endpoint to nearest 45° angle while keeping wall length the same
 export function snapAngle(
   x1: number, z1: number,
