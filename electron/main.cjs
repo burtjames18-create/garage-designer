@@ -245,7 +245,7 @@ function checkForUpdates() {
       status: 'downloaded',
       message: 'Update downloaded. Restarting\u2026',
     })
-    setTimeout(() => autoUpdater.quitAndInstall(false, true), 2000)
+    setTimeout(() => autoUpdater.quitAndInstall(true, true), 2000)
   })
 
   autoUpdater.on('error', () => {
