@@ -193,3 +193,27 @@ The project source code lives on Google Drive and syncs across machines automati
 Node.js must be installed on any machine used for building:
 - **Path on work machine**: `/c/Program Files/nodejs`
 - Run `npm install` after cloning or syncing to a new machine
+
+---
+
+## Windows Developer Mode Requirement
+
+**Windows Developer Mode must be enabled** for `electron-builder` to work with `signAndEditExecutable: true` (which embeds the app icon into the exe).
+
+The winCodeSign tool archive contains macOS symlinks. Without Developer Mode, Windows blocks symlink creation and 7-Zip fails with:
+```
+ERROR: Cannot create symbolic link : A required privilege is not held by the client.
+```
+
+To enable Developer Mode:
+```powershell
+# Run as admin:
+Set-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock -Name AllowDevelopmentWithoutDevLicense -Value 1 -Type DWord
+```
+
+Or: **Settings > System > For developers > Developer Mode → On**
+
+If the winCodeSign cache is corrupted from a failed attempt, clear it:
+```bash
+rm -rf "$LOCALAPPDATA/electron-builder/Cache/winCodeSign/"*/
+```
