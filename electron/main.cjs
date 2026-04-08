@@ -177,12 +177,13 @@ function checkForUpdates() {
 
   try {
     autoUpdater = require('electron-updater').autoUpdater
-  } catch {
+  } catch (err) {
+    console.error('electron-updater load error:', err)
     sendToLauncher('update-status', {
-      status: 'up-to-date',
-      message: 'Development mode \u2014 skipping update check',
+      status: 'error',
+      message: `Update module error: ${err.message}`,
     })
-    setTimeout(launchApp, 1500)
+    setTimeout(launchApp, 3000)
     return
   }
 
