@@ -12,4 +12,5 @@ contextBridge.exposeInMainWorld('launcher', {
   getSavedCredentials: () => ipcRenderer.invoke('get-saved-credentials'),
   openSignup: () => ipcRenderer.invoke('open-signup'),
   quit: () => ipcRenderer.invoke('app-quit'),
+  uninstall: () => ipcRenderer.invoke('app-uninstall'),
 })
