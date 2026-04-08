@@ -42,7 +42,8 @@
       {
         "provider": "github",
         "owner": "burtjames18-create",
-        "repo": "garage-designer"
+        "repo": "garage-designer",
+        "releaseType": "release"
       }
     ],
     "win": {
