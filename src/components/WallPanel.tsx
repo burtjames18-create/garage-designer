@@ -15,6 +15,19 @@ import { showToast } from './Toast'
 import './WallPanel.css'
 
 
+/** Collapsible section with a clickable header */
+function Section({ title, defaultOpen = false, children }: { title: string; defaultOpen?: boolean; children: React.ReactNode }) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div className="wall-section">
+      <button className="wall-section-header" onClick={() => setOpen(o => !o)}>
+        <span className="wall-section-chevron" data-open={open}>&#9656;</span>
+        <span>{title}</span>
+      </button>
+      {open && <div className="wall-section-body">{children}</div>}
+    </div>
+  )
+}
 
 const WALL_COLORS = [
   { name: 'Default White',  hex: '#e0dedd' },
@@ -105,88 +118,101 @@ function WallEditor({ wall }: { wall: GarageWall }) {
       {selected && (
         <div className="wall-detail" onClick={e => e.stopPropagation()}>
 
-          {/* Core dimensions */}
-          <div className="dim-grid">
-            <MeasureInput label="Length" inches={len} onChange={handleLengthChange} min={1} max={9999} />
-            <MeasureInput label="Height" inches={wall.height} onChange={v => updateWall(wall.id, { height: v })} min={12} max={360} />
-            <MeasureInput label="Thickness" inches={wall.thickness} onChange={v => updateWall(wall.id, { thickness: v })} min={1} max={24} />
-          </div>
-
-          {/* Wall color */}
-          <div style={{ marginBottom: 8 }}>
-            <span className="coord-label">Wall Color</span>
-            <div className="slat-color-row" role="radiogroup" aria-label="Wall color">
-              {WALL_COLORS.map(c => (
-                <button
-                  key={c.hex}
-                  role="radio"
-                  aria-checked={!wall.wallTextureId && (wall.wallColor ?? '#e0dedd') === c.hex}
-                  className={`slat-color-swatch${!wall.wallTextureId && (wall.wallColor ?? '#e0dedd') === c.hex ? ' active' : ''}`}
-                  style={{ background: c.hex }}
-                  aria-label={c.name}
-                  onClick={() => updateWall(wall.id, { wallColor: c.hex, wallTextureId: undefined })}
-                />
-              ))}
+          {/* Dimensions */}
+          <Section title="Dimensions" defaultOpen>
+            <div className="dim-grid">
+              <MeasureInput label="Length" inches={len} onChange={handleLengthChange} min={1} max={9999} />
+              <MeasureInput label="Height" inches={wall.height} onChange={v => updateWall(wall.id, { height: v })} min={12} max={360} />
+              <MeasureInput label="Thickness" inches={wall.thickness} onChange={v => updateWall(wall.id, { thickness: v })} min={1} max={24} />
             </div>
-          </div>
+          </Section>
 
-          {/* Wall texture */}
-          <div style={{ marginBottom: 8 }}>
-            <span className="coord-label">Wall Texture</span>
-            <div className="slat-color-row" role="radiogroup" aria-label="Wall texture" style={{ flexWrap: 'wrap', gap: 4 }}>
+          {/* Appearance */}
+          <Section title="Color / Texture">
+            <div style={{ marginBottom: 8 }}>
+              <span className="coord-label">Wall Color</span>
+              <div className="slat-color-row" role="radiogroup" aria-label="Wall color">
+                {WALL_COLORS.map(c => (
+                  <button
+                    key={c.hex}
+                    role="radio"
+                    aria-checked={!wall.wallTextureId && (wall.wallColor ?? '#e0dedd') === c.hex}
+                    className={`slat-color-swatch${!wall.wallTextureId && (wall.wallColor ?? '#e0dedd') === c.hex ? ' active' : ''}`}
+                    style={{ background: c.hex }}
+                    aria-label={c.name}
+                    onClick={() => updateWall(wall.id, { wallColor: c.hex, wallTextureId: undefined })}
+                  />
+                ))}
+              </div>
+            </div>
+            <div>
+              <span className="coord-label">Wall Texture</span>
+              <div className="slat-color-row" role="radiogroup" aria-label="Wall texture" style={{ flexWrap: 'wrap', gap: 4 }}>
+                <button
+                  role="radio"
+                  aria-checked={!wall.wallTextureId}
+                  className={`slat-color-swatch${!wall.wallTextureId ? ' active' : ''}`}
+                  style={{ background: wall.wallColor ?? '#e0dedd', fontSize: 8, color: '#666', lineHeight: 1 }}
+                  aria-label="No texture (solid color)"
+                  title="Solid Color"
+                  onClick={() => updateWall(wall.id, { wallTextureId: undefined })}
+                >
+                  —
+                </button>
+                {wallTextures.map(t => (
+                  <button
+                    key={t.id}
+                    role="radio"
+                    aria-checked={wall.wallTextureId === t.id}
+                    className={`slat-color-swatch${wall.wallTextureId === t.id ? ' active' : ''}`}
+                    style={{
+                      backgroundImage: `url(${import.meta.env.BASE_URL}${texturePath(t.category, t.file)})`,
+                      backgroundSize: 'cover',
+                      backgroundPosition: 'center',
+                    }}
+                    aria-label={t.name}
+                    title={t.name}
+                    onClick={() => updateWall(wall.id, { wallTextureId: t.id })}
+                  />
+                ))}
+                {importedWallTextures.map(t => (
+                  <button
+                    key={t.id}
+                    role="radio"
+                    aria-checked={wall.wallTextureId === `imported:${t.id}`}
+                    className={`slat-color-swatch${wall.wallTextureId === `imported:${t.id}` ? ' active' : ''}`}
+                    style={{
+                      backgroundImage: `url(${t.data})`,
+                      backgroundSize: 'cover',
+                      backgroundPosition: 'center',
+                    }}
+                    aria-label={t.name}
+                    title={`Imported: ${t.name}`}
+                    onClick={() => updateWall(wall.id, { wallTextureId: `imported:${t.id}` })}
+                  />
+                ))}
+              </div>
+            </div>
+          </Section>
+
+          {/* Baseboard / Stem Wall */}
+          <Section title="Baseboard / Stem Wall">
+            <div className="stem-wall-texture-row" style={{ marginBottom: 8 }}>
               <button
-                role="radio"
-                aria-checked={!wall.wallTextureId}
-                className={`slat-color-swatch${!wall.wallTextureId ? ' active' : ''}`}
-                style={{ background: wall.wallColor ?? '#e0dedd', fontSize: 8, color: '#666', lineHeight: 1 }}
-                aria-label="No texture (solid color)"
-                title="Solid Color"
-                onClick={() => updateWall(wall.id, { wallTextureId: undefined })}
-              >
-                —
-              </button>
-              {wallTextures.map(t => (
-                <button
-                  key={t.id}
-                  role="radio"
-                  aria-checked={wall.wallTextureId === t.id}
-                  className={`slat-color-swatch${wall.wallTextureId === t.id ? ' active' : ''}`}
-                  style={{
-                    backgroundImage: `url(${import.meta.env.BASE_URL}${texturePath(t.category, t.file)})`,
-                    backgroundSize: 'cover',
-                    backgroundPosition: 'center',
-                  }}
-                  aria-label={t.name}
-                  title={t.name}
-                  onClick={() => updateWall(wall.id, { wallTextureId: t.id })}
-                />
-              ))}
-              {importedWallTextures.map(t => (
-                <button
-                  key={t.id}
-                  role="radio"
-                  aria-checked={wall.wallTextureId === `imported:${t.id}`}
-                  className={`slat-color-swatch${wall.wallTextureId === `imported:${t.id}` ? ' active' : ''}`}
-                  style={{
-                    backgroundImage: `url(${t.data})`,
-                    backgroundSize: 'cover',
-                    backgroundPosition: 'center',
-                  }}
-                  aria-label={t.name}
-                  title={`Imported: ${t.name}`}
-                  onClick={() => updateWall(wall.id, { wallTextureId: `imported:${t.id}` })}
-                />
-              ))}
+                className={`stem-wall-tex-btn${!wall.baseboard && !wall.stemWall ? ' active' : ''}`}
+                onClick={() => updateWall(wall.id, { baseboard: false, stemWall: false })}
+              >None</button>
+              <button
+                className={`stem-wall-tex-btn${wall.baseboard ? ' active' : ''}`}
+                onClick={() => updateWall(wall.id, { baseboard: true, stemWall: false })}
+              >Baseboard</button>
+              <button
+                className={`stem-wall-tex-btn${wall.stemWall ? ' active' : ''}`}
+                onClick={() => updateWall(wall.id, { stemWall: true, baseboard: false })}
+              >Stem Wall</button>
             </div>
-          </div>
 
-          {/* Toggles */}
-          <div className="wall-toggles">
-            <label className="toggle-row">
-              <span>Baseboard / Stem Wall</span>
-              <input type="checkbox" checked={wall.baseboard} onChange={e => updateWall(wall.id, { baseboard: e.target.checked })} />
-            </label>
-            {wall.baseboard && (<>
+            {wall.baseboard && (<div className="wall-toggles">
               <MeasureInput label="Baseboard Height" inches={wall.baseboardHeight}
                 onChange={v => updateWall(wall.id, { baseboardHeight: v })} min={1} max={48} />
               <div style={{ marginTop: 6 }}>
@@ -210,17 +236,45 @@ function WallEditor({ wall }: { wall: GarageWall }) {
                 <input type="checkbox" checked={wall.baseboardTexture ?? false}
                   onChange={e => updateWall(wall.id, { baseboardTexture: e.target.checked })} />
               </label>
-            </>)}
-            <label className="toggle-row">
-              <span>Lock position</span>
-              <input type="checkbox" checked={wall.locked} onChange={e => updateWall(wall.id, { locked: e.target.checked })} />
-            </label>
-          </div>
+            </div>)}
+
+            {wall.stemWall && (<div className="wall-toggles">
+              <MeasureInput label="Stem Wall Height" inches={wall.stemWallHeight ?? 6}
+                onChange={v => updateWall(wall.id, { stemWallHeight: v })} min={1} max={48} />
+              <div style={{ marginTop: 6 }}>
+                <span className="coord-label">Stem Wall Texture</span>
+                <div className="stem-wall-texture-row">
+                  {(['none', 'concrete', 'flake'] as const).map(t => (
+                    <button
+                      key={t}
+                      className={`stem-wall-tex-btn${(wall.stemWallTexture ?? 'concrete') === t ? ' active' : ''}`}
+                      onClick={() => updateWall(wall.id, { stemWallTexture: t })}
+                    >
+                      {t === 'none' ? 'Solid Color' : t === 'concrete' ? 'Concrete' : 'Floor Flake'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>)}
+          </Section>
+
+          {/* Options */}
+          <Section title="Options">
+            <div className="wall-toggles">
+              <label className="toggle-row">
+                <span>Visible</span>
+                <input type="checkbox" checked={wall.visible ?? true} onChange={e => updateWall(wall.id, { visible: e.target.checked })} />
+              </label>
+              <label className="toggle-row">
+                <span>Lock position</span>
+                <input type="checkbox" checked={wall.locked} onChange={e => updateWall(wall.id, { locked: e.target.checked })} />
+              </label>
+            </div>
+          </Section>
 
           {/* Openings */}
-          <div className="openings-section">
+          <Section title={`Openings (${wall.openings.length})`}>
             <div className="openings-header">
-              <span className="opening-section-label">Openings</span>
               <div className="opening-add-row">
                 <button className="opening-add-btn" onClick={() => addOpening(wall.id, 'garage-door')}>+ Garage Door</button>
                 <button className="opening-add-btn" onClick={() => addOpening(wall.id, 'door')}>+ Door</button>
@@ -322,12 +376,11 @@ function WallEditor({ wall }: { wall: GarageWall }) {
                 </div>
               )
             })}
-          </div>
+          </Section>
 
-          {/* Slatwall panels */}
-          <div className="openings-section">
+          {/* Slatwall */}
+          <Section title={`Slatwall (${wallPanels.length})`}>
             <div className="openings-header">
-              <span className="opening-section-label">Slatwall Panels</span>
               <button className="opening-add-btn" onClick={() => addSlatwallPanel(wall.id)}>+ Add Panel</button>
             </div>
             {wallPanels.map(panel => {
@@ -411,7 +464,7 @@ function WallEditor({ wall }: { wall: GarageWall }) {
                 </div>
               )
             })}
-          </div>
+          </Section>
 
         </div>
       )}

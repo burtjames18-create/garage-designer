@@ -3,6 +3,7 @@ import { useGarageStore, CABINET_PRESETS, COUNTERTOP_THICKNESS, COUNTERTOP_DEPTH
 import type { GarageWall, PlacedCabinet, SlatwallPanel, Countertop, FloorStep } from '../store/garageStore'
 import { slatwallColors } from '../data/slatwallColors'
 import { snapToGrid, inchesToDisplay } from '../utils/measurements'
+import { cabinetFrontPaths } from './CabinetFrontSVG'
 import './WallElevationView.css'
 
 const PAD = 48  // SVG padding in wall-space inches
@@ -143,7 +144,7 @@ const CABINET_HEX: Record<string, string> = {
   slate: '#5a6872', stone: '#7a7972',
 }
 const COUNTERTOP_HEX: Record<string, string> = {
-  'butcher-block': '#b5813a', white: '#e8e8e4', black: '#2a2a2a', concrete: '#8a8a80',
+  'butcher-block': '#b5813a', 'stainless-steel': '#b0b4b8', white: '#e8e8e4', black: '#2a2a2a', concrete: '#8a8a80',
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
@@ -161,8 +162,20 @@ export default function WallElevationView() {
   const dragRef = useRef<SvgDrag | null>(null)
   const [wallSide, setWallSide] = useState<'interior' | 'exterior'>('interior')
 
+  // ── Pan/zoom state (refs for atomic updates) ──
+  const weZoomRef = useRef(1)
+  const wePanRef = useRef<[number, number]>([0, 0])
+  const [, weForce] = useState(0)
+  const wePanning = useRef(false)
+  const weLastMouse = useRef<[number, number]>([0, 0])
+
   const wallIdx = Math.max(0, Math.min(elevationWallIndex, walls.length - 1))
   const wall = walls[wallIdx]
+
+  // Reset zoom/pan when switching walls
+  useEffect(() => {
+    weZoomRef.current = 1; wePanRef.current = [0, 0]; weForce(n => n + 1)
+  }, [wallIdx])
 
   if (!wall) return <div className="wall-elev-empty">No walls defined yet.</div>
 
@@ -702,8 +715,49 @@ export default function WallElevationView() {
         </div>
       </div>
 
-      {/* SVG elevation */}
-      <div className="wall-elev-svg-wrap">
+      {/* SVG elevation with pan/zoom */}
+      <div
+        className="wall-elev-svg-wrap"
+        onWheel={e => {
+          e.preventDefault()
+          const factor = e.deltaY > 0 ? 0.9 : 1.1
+          const oldZ = weZoomRef.current
+          const newZ = Math.min(Math.max(oldZ * factor, 0.5), 10)
+          const r = newZ / oldZ
+          const rect = e.currentTarget.getBoundingClientRect()
+          const mx = e.clientX - rect.left - rect.width / 2
+          const my = e.clientY - rect.top - rect.height / 2
+          const [px, py] = wePanRef.current
+          weZoomRef.current = newZ
+          wePanRef.current = [mx * (1 - r) + px * r, my * (1 - r) + py * r]
+          weForce(n => n + 1)
+        }}
+        onPointerDown={e => {
+          // Only start viewport pan on middle-click or right-click, left-click is for element drag
+          if (e.button === 1 || e.button === 2) {
+            e.preventDefault()
+            wePanning.current = true
+            weLastMouse.current = [e.clientX, e.clientY]
+            ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+          }
+        }}
+        onPointerMove={e => {
+          if (!wePanning.current) return
+          const dx = e.clientX - weLastMouse.current[0]
+          const dy = e.clientY - weLastMouse.current[1]
+          weLastMouse.current = [e.clientX, e.clientY]
+          wePanRef.current = [wePanRef.current[0] + dx, wePanRef.current[1] + dy]
+          weForce(n => n + 1)
+        }}
+        onPointerUp={() => { wePanning.current = false }}
+        onContextMenu={e => e.preventDefault()}
+      >
+        <div style={{
+          transform: `translate(${wePanRef.current[0]}px, ${wePanRef.current[1]}px) scale(${weZoomRef.current})`,
+          transformOrigin: 'center center',
+          width: '100%',
+          height: '100%',
+        }}>
         <svg
           ref={svgRef}
           viewBox={`0 0 ${svgW} ${svgH}`}
@@ -901,75 +955,21 @@ export default function WallElevationView() {
             {/* Cabinets */}
             {wallCabinets.map(cab => {
               const { along } = projectCabinet(cab, wall)
-              const isSel = cab.id === selectedCabinetId
               const cx = toX(along - cab.w / 2)
-              const bodyHex = CABINET_HEX[cab.color] ?? '#3d3d3d'
-              const hasToeKick = cab.style === 'lower' || cab.style === 'locker'
-
-              // Match the 3D mesh geometry constants (inches)
-              const fr_in   = 0.75
-              const tkH_in  = hasToeKick ? 3.5 : 0
-              const fullY1  = cab.h - fr_in
-              const baseY0  = hasToeKick ? tkH_in : fr_in
-              const drawerCount = cab.drawers ?? 0
-              // Drawer area: same logic as 3D mesh
-              const drawerAreaY0 = cab.doors === 0 ? baseY0 : fullY1 - drawerCount * 6
-              const drawerAreaH  = cab.doors === 0 ? fullY1 - baseY0 : drawerCount * 6
-              const singleDrawH  = drawerCount > 0 ? drawerAreaH / drawerCount : 0
-              // Door area top (below drawer row if any)
-              const doorY1 = drawerCount > 0 && cab.doors > 0
-                ? drawerAreaY0 - fr_in
-                : fullY1
+              const cy = toY(cab.y + cab.h)
 
               return (
                 <g key={cab.id} style={{ cursor: 'move' }}
                   onMouseDown={e => onCabDown(e, cab)}
                   onClick={e => e.stopPropagation()}>
-
-                  {/* Body */}
-                  <rect x={cx} y={toY(cab.y + cab.h)} width={cab.w} height={cab.h}
-                    fill={bodyHex} stroke="#333" strokeWidth={0.4} />
-
-                  {/* Toe-kick recess */}
-                  {hasToeKick && (
-                    <rect x={cx + 2} y={toY(cab.y + tkH_in)} width={cab.w - 4} height={tkH_in}
-                      fill="rgba(0,0,0,0.3)" pointerEvents="none" />
-                  )}
-
-                  {/* Door vertical dividers */}
-                  {cab.doors > 1 && Array.from({ length: cab.doors - 1 }, (_, i) => {
-                    const lx = cx + (i + 1) * (cab.w / cab.doors)
-                    return <line key={`dv${i}`}
-                      x1={lx} y1={toY(cab.y + doorY1)}
-                      x2={lx} y2={toY(cab.y + baseY0)}
-                      stroke="rgba(255,255,255,0.35)" strokeWidth={0.6} pointerEvents="none" />
-                  })}
-
-                  {/* Drawer front separators (horizontal) */}
-                  {drawerCount > 1 && Array.from({ length: drawerCount - 1 }, (_, i) => {
-                    const sepY = toY(cab.y + drawerAreaY0 + (i + 1) * singleDrawH)
-                    return <line key={`ds${i}`}
-                      x1={cx + 2} y1={sepY} x2={cx + cab.w - 2} y2={sepY}
-                      stroke="rgba(255,255,255,0.35)" strokeWidth={0.6} pointerEvents="none" />
-                  })}
-
-                  {/* Drawer pull handles */}
-                  {drawerCount > 0 && Array.from({ length: drawerCount }, (_, i) => {
-                    const midY = toY(cab.y + drawerAreaY0 + (i + 0.5) * singleDrawH)
-                    const pullW = Math.min(28, cab.w * 0.38)
-                    return <rect key={`dp${i}`}
-                      x={cx + cab.w / 2 - pullW / 2} y={midY - 1.5} width={pullW} height={3}
-                      fill="rgba(176,180,184,0.55)" rx={1} pointerEvents="none" />
-                  })}
-
-                  {/* Separator between drawer row and door area */}
-                  {drawerCount > 0 && cab.doors > 0 && (
-                    <line
-                      x1={cx} y1={toY(cab.y + drawerAreaY0)}
-                      x2={cx + cab.w} y2={toY(cab.y + drawerAreaY0)}
-                      stroke="rgba(255,255,255,0.25)" strokeWidth={0.6} pointerEvents="none" />
-                  )}
-
+                  <g transform={`translate(${cx}, ${cy})`}>
+                    {cabinetFrontPaths({
+                      w: cab.w, h: cab.h,
+                      doors: cab.doors, drawers: cab.drawers,
+                      style: cab.style, line: cab.line ?? 'technica',
+                      color: cab.color, handleSide: cab.handleSide,
+                    })}
+                  </g>
                 </g>
               )
             })}
@@ -1266,6 +1266,7 @@ export default function WallElevationView() {
             </>
           })()}
         </svg>
+        </div>
       </div>
 
       <div className="wall-elev-hint">

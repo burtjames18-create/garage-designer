@@ -7,88 +7,8 @@ import MeasureInput from './MeasureInput'
 import { IconDelete, IconRotate, IconLocked, IconUnlocked } from './Icons'
 import ConfirmDialog from './ConfirmDialog'
 import { showToast } from './Toast'
+import CabinetFrontSVG from './CabinetFrontSVG'
 import './CabinetsPanel.css'
-
-/** SVG front-elevation thumbnail for a cabinet preset */
-function CabinetSVG({ preset }: { preset: CabinetPreset }) {
-  const { style, doors, w, h, line } = preset
-  const drawers = preset.drawers ?? 0
-  const isSig = line === 'signature'
-  const SVG_W = 56
-  const SVG_H = Math.round(SVG_W * h / 36)
-
-  // Technica: recessed toe-kick; Signature: flat square base
-  const hasToeKick = (style === 'lower' || style === 'locker') && !isSig
-  const toeKickH   = hasToeKick ? Math.max(6, Math.round(SVG_H * 0.10)) : 0
-  const bodyH      = SVG_H - toeKickH
-
-  const drawerRowH  = drawers > 0 ? Math.round((6 / h) * bodyH) : 0
-  const drawerAreaH = drawerRowH * drawers
-
-  const drawerAreaY = 2
-  const doorAreaY   = 2 + drawerAreaH
-  const doorAreaH2  = bodyH - 4 - drawerAreaH
-  const doorW       = doors > 0 ? (SVG_W - 4) / doors : 0
-
-  const doorHandleY = style === 'upper' ? doorAreaY + doorAreaH2 - 9 : doorAreaY + 4
-
-  return (
-    <svg width={SVG_W} height={SVG_H} viewBox={`0 0 ${SVG_W} ${SVG_H}`}
-         style={{ display: 'block', flexShrink: 0 }} aria-hidden="true">
-      <rect x={1} y={1} width={SVG_W - 2} height={bodyH - 1} rx={2}
-            fill="#3a3a3a" stroke="#5a5a5a" strokeWidth={1} />
-      {hasToeKick && (
-        <rect x={5} y={bodyH} width={SVG_W - 10} height={toeKickH}
-              fill="#252525" rx={1} />
-      )}
-      {!hasToeKick && (style === 'lower' || style === 'locker') && (
-        /* Signature: flat base extending full width */
-        <rect x={1} y={bodyH} width={SVG_W - 2} height={Math.max(4, Math.round(SVG_H * 0.06))}
-              fill="#333" rx={1} />
-      )}
-      {doors > 0 && doorAreaH2 > 0 && Array.from({ length: doors }).map((_, i) => (
-        <rect key={`d${i}`}
-              x={2 + i * doorW + 1} y={doorAreaY}
-              width={doorW - 2} height={doorAreaH2}
-              rx={1} fill="#464646" stroke="#5c5c5c" strokeWidth={0.75} />
-      ))}
-      {/* Handles: Signature = full-length channel; Technica = short bar */}
-      {doors > 0 && Array.from({ length: doors }).map((_, i) => {
-        const cx = 2 + i * doorW + doorW / 2
-        if (isSig) {
-          // Full-length integrated channel on inner edge of each door
-          const chX = doors === 1 ? (2 + doorW - 4) : (i === 0 ? (2 + doorW - 4) : (2 + i * doorW + 3))
-          return (
-            <rect key={`dh${i}`}
-                  x={chX} y={doorAreaY + 2}
-                  width={2} height={doorAreaH2 - 4}
-                  rx={0.5} fill="#999" />
-          )
-        }
-        return (
-          <rect key={`dh${i}`}
-                x={cx - 1} y={doorHandleY}
-                width={2} height={7}
-                rx={1} fill="#888" />
-        )
-      })}
-      {drawers > 0 && Array.from({ length: drawers }).map((_, i) => {
-        const drawerY = drawerAreaY + i * drawerRowH
-        const dH = drawerRowH - 1
-        const cx = SVG_W / 2
-        const pullW = isSig ? 16 : 12
-        return (
-          <g key={`dr${i}`}>
-            <rect x={3} y={drawerY} width={SVG_W - 6} height={dH}
-                  rx={1} fill="#464646" stroke="#5c5c5c" strokeWidth={0.75} />
-            <rect x={cx - pullW / 2} y={drawerY + dH / 2 - 1} width={pullW} height={2}
-                  rx={1} fill={isSig ? '#999' : '#888'} />
-          </g>
-        )
-      })}
-    </svg>
-  )
-}
 
 const CABINET_COLORS: { id: string; name: string; hex: string }[] = [
   { id: 'charcoal',  name: 'Charcoal',  hex: '#3d3d3d' },
@@ -179,6 +99,17 @@ function CabinetEditor({ cab }: { cab: PlacedCabinet }) {
               />
             ))}
           </div>
+          {cab.doors === 1 && (
+            <button
+              className="cab-handle-toggle"
+              onClick={() => updateCabinet(cab.id, { handleSide: (cab.handleSide ?? 'right') === 'right' ? 'left' : 'right' })}
+              style={{ marginTop: 6, fontSize: 11, padding: '3px 8px', cursor: 'pointer',
+                background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)',
+                borderRadius: 4, color: '#ccc' }}
+            >
+              Handle: {(cab.handleSide ?? 'right') === 'right' ? 'Right' : 'Left'}
+            </button>
+          )}
         </div>
       )}
 
@@ -318,7 +249,7 @@ export default function CabinetsPanel() {
                   aria-label={`Add ${preset.label}${preset.price ? ` — $${preset.price}` : ''}`}
                   title={`${preset.label}\n${inchesToDisplay(preset.w)}W × ${inchesToDisplay(preset.d)}D × ${inchesToDisplay(preset.h)}H`}
                 >
-                  <CabinetSVG preset={preset} />
+                  <CabinetFrontSVG preset={preset} />
                   <span className="cab-preset-name">{preset.label}</span>
                   {preset.price != null && <span className="cab-preset-price">${preset.price}</span>}
                 </button>

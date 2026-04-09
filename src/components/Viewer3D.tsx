@@ -4,7 +4,7 @@ import {
   PerspectiveCamera, OrthographicCamera,
   Grid, Environment,
 } from '@react-three/drei'
-import { EffectComposer, N8AO, ToneMapping } from '@react-three/postprocessing'
+import { EffectComposer, N8AO, ToneMapping, SMAA } from '@react-three/postprocessing'
 import { ToneMappingMode } from 'postprocessing'
 import React, { Suspense, useRef, useEffect, useCallback, useState } from 'react'
 import * as THREE from 'three'
@@ -119,6 +119,7 @@ function SceneCamera({ orbitRef }: { orbitRef: React.RefObject<any> }) {
           target={target}
           maxPolarAngle={Math.PI * 0.92}
           enablePan enableZoom enableRotate
+          enableDamping dampingFactor={0.35}
           enabled={!isDraggingWall}
           mouseButtons={MOUSE_BUTTONS}
         />
@@ -131,7 +132,7 @@ function SceneCamera({ orbitRef }: { orbitRef: React.RefObject<any> }) {
       <>
         <OrthographicCamera key="top" makeDefault position={[cx, 500, cz]} up={[0, 0, -1]}
           left={-orthoF} right={orthoF} top={orthoF} bottom={-orthoF} near={0.1} far={1000} />
-        <MapControls ref={orbitRef} target={[cx, 0, cz]}
+        <MapControls ref={(r: any) => { orbitRef.current = r; if (r) r.zoomToCursor = true }} target={[cx, 0, cz]}
           enableRotate={false} screenSpacePanning enabled={!isDraggingWall} />
       </>
     )
@@ -545,21 +546,37 @@ export default function Viewer3D() {
   }, [exportShots.length, addExportShot])
 
   // ── Top view: pan/zoom state ──
-  const [fpZoom, setFpZoom] = useState(1)
-  const [fpPan, setFpPan] = useState<[number, number]>([0, 0])
+  // Use refs + forceUpdate so zoom and pan are always in sync (no stale-state batching issues)
+  const fpZoomRef = useRef(1)
+  const fpPanRef = useRef<[number, number]>([0, 0])
+  const [, forceUpdate] = useState(0)
   const fpDragging = useRef(false)
   const fpLastMouse = useRef<[number, number]>([0, 0])
 
   // Reset pan/zoom when entering top view
   useEffect(() => {
-    if (isTopView) { setFpZoom(1); setFpPan([0, 0]) }
+    if (isTopView) { fpZoomRef.current = 1; fpPanRef.current = [0, 0]; forceUpdate(n => n + 1) }
   }, [isTopView])
+
+  // Expose as local vars for rendering
+  const fpZoom = fpZoomRef.current
+  const fpPan = fpPanRef.current
 
   if (isTopView) {
     const handleWheel = (e: React.WheelEvent) => {
       e.preventDefault()
-      const delta = e.deltaY > 0 ? 0.9 : 1.1
-      setFpZoom(z => Math.min(Math.max(z * delta, 0.3), 8))
+      const factor = e.deltaY > 0 ? 0.9 : 1.1
+      const oldZ = fpZoomRef.current
+      const newZ = Math.min(Math.max(oldZ * factor, 0.3), 8)
+      const r = newZ / oldZ
+      // Zoom toward cursor: adjust pan so the point under the mouse stays fixed
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+      const mx = e.clientX - rect.left - rect.width / 2
+      const my = e.clientY - rect.top - rect.height / 2
+      const [px, py] = fpPanRef.current
+      fpZoomRef.current = newZ
+      fpPanRef.current = [mx * (1 - r) + px * r, my * (1 - r) + py * r]
+      forceUpdate(n => n + 1)
     }
     const handlePointerDown = (e: React.PointerEvent) => {
       // Don't start viewport pan if clicking on an interactive SVG element (rack polygon/circle)
@@ -574,7 +591,8 @@ export default function Viewer3D() {
       const dx = e.clientX - fpLastMouse.current[0]
       const dy = e.clientY - fpLastMouse.current[1]
       fpLastMouse.current = [e.clientX, e.clientY]
-      setFpPan(([px, py]) => [px + dx, py + dy])
+      fpPanRef.current = [fpPanRef.current[0] + dx, fpPanRef.current[1] + dy]
+      forceUpdate(n => n + 1)
     }
     const handlePointerUp = () => { fpDragging.current = false }
 
@@ -616,9 +634,10 @@ export default function Viewer3D() {
     <div className="viewer-wrap">
       <Canvas
         shadows={qualityPreset !== 'low'}
+        dpr={[1, 2]}
         gl={{
           preserveDrawingBuffer: true,
-          antialias: qualityPreset !== 'low',
+          antialias: true,
           toneMapping: THREE.NoToneMapping,
           powerPreference: qualityPreset === 'low' ? 'low-power' : 'high-performance',
         }}
@@ -667,7 +686,9 @@ export default function Viewer3D() {
             <ToneMapping mode={ToneMappingMode.AGX} />
           </EffectComposer>
         ) : (
-          <GLClear />
+          <EffectComposer key={`wire-${qualityPreset}`} multisampling={8}>
+            <SMAA />
+          </EffectComposer>
         )}
 
       </Canvas>

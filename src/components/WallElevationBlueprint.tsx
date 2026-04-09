@@ -358,8 +358,8 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, cabinets,
           const isLight = ['white', 'driftwood', 'stone'].includes(cab.color)
           const lineColor = isLight ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.25)'
           const handleColor = isLight ? '#999' : '#aab'
-          const hasToeKick = cab.style === 'lower' || cab.style === 'locker'
-          const tkH = hasToeKick ? 4 : 0
+          const hasToeKick = false
+          const tkH = 0
           const fr = 1.5  // frame rail width (inches)
           const drawerCount = cab.drawers ?? 0
 

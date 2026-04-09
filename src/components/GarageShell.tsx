@@ -4,7 +4,7 @@ import { useTexture, Text, useGLTF, MeshReflectorMaterial } from '@react-three/d
 import { useThree, useFrame } from '@react-three/fiber'
 import type { ThreeEvent } from '@react-three/fiber'
 import { useGarageStore, COUNTERTOP_DEPTH, COUNTERTOP_THICKNESS, CEILING_LIGHT_W, CEILING_LIGHT_L, CEILING_LIGHT_TH, RACK_DECK_THICKNESS, RACK_LEG_SIZE } from '../store/garageStore'
-import type { GarageWall, GarageShape, FloorPoint, SlatwallPanel, SlatwallAccessory, PlacedCabinet, Countertop, CeilingLight, PlacedItem, FloorStep, OverheadRack } from '../store/garageStore'
+import type { GarageWall, GarageShape, FloorPoint, SlatwallPanel, SlatwallAccessory, PlacedCabinet, Countertop, CeilingLight, PlacedItem, FloorStep, OverheadRack, WallOpening } from '../store/garageStore'
 import { slatwallColors } from '../data/slatwallColors'
 import { getTextureById, texturePath } from '../data/textureCatalog'
 import { flooringTexturePathById } from '../data/flooringColors'
@@ -893,6 +893,49 @@ const CT_COLORS: Record<string, string> = {
   'stainless-steel': '#b0b4b8',
 }
 
+/** Technica blade-style door handle: tapered bar with mounting pads at top & bottom, 1.25" protrusion. */
+function technicaBladeHandle(
+  prefix: string, hx: number, cy: number, doorFaceZ: number, totalH: number,
+  mat: JSX.Element
+): JSX.Element[] {
+  const m: JSX.Element[] = []
+  const top = cy + totalH / 2
+  const bot = cy - totalH / 2
+
+  // Mounting pad heights (used for bridge/bar layout, pads themselves are invisible)
+  const tpH = Math.max(FT(0.8), totalH * 0.09)
+  const bpH = Math.max(FT(0.6), totalH * 0.07)
+
+  // ── Main blade bar (standing off from door, tapered) ──
+  const barD = FT(0.28)
+  const standoff = FT(1.0) - barD
+  const barZ = doorFaceZ + standoff + barD / 2
+  const barTopW = FT(0.55)
+  const barBotW = FT(0.28)
+
+  // Bridge connectors (transition from pad to bar)
+  const bridgeD = standoff + barD
+  const bridgeZ = doorFaceZ + bridgeD / 2
+  const brH = Math.max(FT(0.2), totalH * 0.025)
+
+  m.push(<mesh key={`${prefix}tb`} position={[hx, top - tpH - brH / 2, bridgeZ]}>{mat}<boxGeometry args={[FT(0.45), brH, bridgeD]}/></mesh>)
+  m.push(<mesh key={`${prefix}bb`} position={[hx, bot + bpH + brH / 2, bridgeZ]}>{mat}<boxGeometry args={[FT(0.25), brH, bridgeD]}/></mesh>)
+
+  // Tapered bar segments (wider at top, narrower at bottom)
+  const barStart = bot + bpH + brH
+  const barEnd = top - tpH - brH
+  const barH = barEnd - barStart
+  const segs = 8
+  const segH = barH / segs
+  for (let i = 0; i < segs; i++) {
+    const t = segs > 1 ? i / (segs - 1) : 0.5
+    const w = barBotW + (barTopW - barBotW) * t
+    const y = barStart + segH * i + segH / 2
+    m.push(<mesh key={`${prefix}s${i}`} position={[hx, y, barZ]}>{mat}<boxGeometry args={[w, segH + FT(0.01), barD]}/></mesh>)
+  }
+  return m
+}
+
 const CabinetMesh = memo(function CabinetMesh({ cabinet, selected, wireframe, blueprint, onClick, onPointerDown, overlapping, groupRef }: {
   cabinet: PlacedCabinet; selected: boolean; wireframe: boolean; blueprint?: boolean; overlapping?: boolean
   onClick: () => void
@@ -905,17 +948,22 @@ const CabinetMesh = memo(function CabinetMesh({ cabinet, selected, wireframe, bl
 
   const wFt = FT(cabinet.w), hFt = FT(cabinet.h), dFt = FT(cabinet.d)
 
-  // 3/4" frame rail/stile
-  const fr  = FT(0.75)
+  // Signature: 3/4" frame rail/stile visible; Technica: full overlay (no visible frame)
+  const handleRight = (cabinet.handleSide ?? 'right') === 'right'
   const isSignature = cabinet.line === 'signature'
-  // Toe kick (lower and locker): 3.5" tall, 2" deep recess — Signature has flat/square base (no recess)
+  const fr  = isSignature ? FT(0.75) : FT(0.1)  // tiny gap for Technica, visible frame for Signature
+  // Flat base for both lines (no toe-kick recess)
   const isLocker = cabinet.style === 'locker'
-  const hasToeKick = (cabinet.style === 'lower' || isLocker) && !isSignature
-  const tkH = hasToeKick ? FT(3.5) : 0
+  const hasToeKick = false
+  const tkH = 0
   const tkD = FT(2)
 
   const drawerCount = cabinet.drawers ?? 0
-  const drawerH6    = FT(6) // fixed 6" per drawer row
+  // Combo drawer height matches the top drawer of the 5-drawer layout
+  // Technica 5-drawer top = 3.5/20 of usable height; Signature = 3/20
+  const usableH     = hFt - fr - fr  // top + bottom frame rails
+  const comboDrawerH = isSignature ? usableH * (3 / 20) : usableH * (3.5 / 20)
+  const drawerH6    = comboDrawerH
 
   // Door vertical extents
   // For 1-drawer + 2-door: doors occupy area below the drawer
@@ -930,6 +978,7 @@ const CabinetMesh = memo(function CabinetMesh({ cabinet, selected, wireframe, bl
   const doorH   = doorY1 - doorY0
   const doorMY  = (doorY0 + doorY1) / 2
   const doorZ   = dFt / 2 + FT(0.2)
+  const doorFrontZ = doorZ + FT(0.25)  // front face of the 0.5" door panel
 
   // Door widths (3/4" stiles on sides, 3/4" center stile for 2-door)
   const door1W = wFt - 2 * fr
@@ -939,7 +988,7 @@ const CabinetMesh = memo(function CabinetMesh({ cabinet, selected, wireframe, bl
 
   const handleMat = blueprint
     ? <meshBasicMaterial color="#666666" />
-    : <meshStandardMaterial color="#b0b4b8" metalness={0.4} roughness={0.45} />
+    : <meshStandardMaterial color="#c0c4c8" metalness={0.55} roughness={0.35} />
   const bodyMat   = blueprint
     ? <meshBasicMaterial color={bodyHex} />
     : wireframe
@@ -958,100 +1007,81 @@ const CabinetMesh = memo(function CabinetMesh({ cabinet, selected, wireframe, bl
   let handleMeshes: JSX.Element[] = []
 
   if (isSignature && cabinet.doors > 0) {
-    // ── Signature: full-length integrated aluminum channel on each door ──
+    // ── Signature: full-length recessed channel (indentation) flush with door face ──
+    // The handle is a dark groove cut into the door at the inner edge
     const sigW  = FT(0.6)    // channel width
-    const sigD  = FT(0.5)    // shallow integrated depth
-    const sigH  = doorH - FT(1)   // full door height minus small top/bottom margin
+    const sigD  = FT(0.55)   // depth of indentation (matches door thickness so it looks carved in)
+    const sigH  = doorH - FT(0.5)   // nearly full door height
     const sigY  = doorMY
-    const sigZ  = doorZ + sigD / 2
+    // Position flush with door front face (Z = door face, recessed inward)
+    const sigZ  = doorZ - FT(0.25) + sigD / 2
+    const sigMat = blueprint
+      ? <meshBasicMaterial color="#222222" />
+      : <meshPhysicalMaterial color="#1a1a1a" metalness={0.3} roughness={0.6} envMapIntensity={0.3} />
     if (cabinet.doors === 1) {
-      // Channel on the right edge of single door
-      const chX = door1W / 2 - FT(1.2)
+      // Channel at the handle side edge of single door
+      const chX = handleRight ? (door1W / 2 - sigW / 2) : (-door1W / 2 + sigW / 2)
       handleMeshes.push(
-        <mesh key="sig1" position={[chX, sigY, sigZ]}>{handleMat}
+        <mesh key="sig1" position={[chX, sigY, sigZ]}>{sigMat}
           <boxGeometry args={[sigW, sigH, sigD]} />
         </mesh>
       )
     } else {
-      // Channel on inner edge of each door
-      const chL = lDX + door2W / 2 - FT(1.2)
-      const chR = rDX - door2W / 2 + FT(1.2)
+      // Channel at inner edge of each door (touching the center stile)
+      const chL = lDX + door2W / 2 - sigW / 2
+      const chR = rDX - door2W / 2 + sigW / 2
       handleMeshes.push(
-        <mesh key="sigL" position={[chL, sigY, sigZ]}>{handleMat}
+        <mesh key="sigL" position={[chL, sigY, sigZ]}>{sigMat}
           <boxGeometry args={[sigW, sigH, sigD]} />
         </mesh>,
-        <mesh key="sigR" position={[chR, sigY, sigZ]}>{handleMat}
+        <mesh key="sigR" position={[chR, sigY, sigZ]}>{sigMat}
           <boxGeometry args={[sigW, sigH, sigD]} />
         </mesh>
       )
     }
   } else if (cabinet.style === 'locker') {
-    // Technica Locker: vertical bar, inner edge of each door, centered vertically
-    const vH   = doorH * 0.22           // ~22% of door height
-    const vY   = (doorY0 + doorY1) / 2  // centered on door
+    // Technica Locker: 19" blade handle, inner edge of each door, centered vertically
+    const vH   = FT(19)
+    const vY   = (doorY0 + doorY1) / 2
     const iEdgeL =  lDX + door2W / 2 - FT(1.5)
     const iEdgeR =  rDX - door2W / 2 + FT(1.5)
-    const iEdge1 = -door1W / 2 + FT(1.5)
+    const iEdge1 = handleRight ? (-door1W / 2 + FT(1.5)) : (door1W / 2 - FT(1.5))
     if (cabinet.doors === 1) {
-      handleMeshes.push(
-        <mesh key="locker1" position={[iEdge1, vY, doorZ + vD / 2]}>{handleMat}
-          <boxGeometry args={[vW, vH, vD]} />
-        </mesh>
-      )
+      handleMeshes.push(...technicaBladeHandle('lk1', iEdge1, vY, doorFrontZ, vH, handleMat))
     } else {
       handleMeshes.push(
-        <mesh key="lockerL" position={[iEdgeL, vY, doorZ + vD / 2]}>{handleMat}
-          <boxGeometry args={[vW, vH, vD]} />
-        </mesh>,
-        <mesh key="lockerR" position={[iEdgeR, vY, doorZ + vD / 2]}>{handleMat}
-          <boxGeometry args={[vW, vH, vD]} />
-        </mesh>
+        ...technicaBladeHandle('lkL', iEdgeL, vY, doorFrontZ, vH, handleMat),
+        ...technicaBladeHandle('lkR', iEdgeR, vY, doorFrontZ, vH, handleMat)
       )
     }
   } else if (cabinet.style === 'lower' && cabinet.doors > 0) {
-    // Technica Lower: vertical bar, inner edge, upper portion of door
-    const vH    = Math.min(doorH * 0.28, FT(6))
+    // Technica Lower: 8.5" blade handle, inner edge, upper portion of door
+    const vH    = FT(8.5)
     const vY    = doorY1 - vH / 2 - FT(1.5)
     const iEdgeL =  lDX + door2W / 2 - FT(1.5)
     const iEdgeR =  rDX - door2W / 2 + FT(1.5)
-    const iEdge1 =  door1W / 2 - FT(1.5)
+    const iEdge1 = handleRight ? (door1W / 2 - FT(1.5)) : (-door1W / 2 + FT(1.5))
     if (cabinet.doors === 1) {
-      handleMeshes.push(
-        <mesh key="lower1" position={[iEdge1, vY, doorZ + vD / 2]}>{handleMat}
-          <boxGeometry args={[vW, vH, vD]} />
-        </mesh>
-      )
+      handleMeshes.push(...technicaBladeHandle('lw1', iEdge1, vY, doorFrontZ, vH, handleMat))
     } else {
       handleMeshes.push(
-        <mesh key="lowerL" position={[iEdgeL, vY, doorZ + vD / 2]}>{handleMat}
-          <boxGeometry args={[vW, vH, vD]} />
-        </mesh>,
-        <mesh key="lowerR" position={[iEdgeR, vY, doorZ + vD / 2]}>{handleMat}
-          <boxGeometry args={[vW, vH, vD]} />
-        </mesh>
+        ...technicaBladeHandle('lwL', iEdgeL, vY, doorFrontZ, vH, handleMat),
+        ...technicaBladeHandle('lwR', iEdgeR, vY, doorFrontZ, vH, handleMat)
       )
     }
   } else if (cabinet.style === 'upper') {
-    // Technica Upper: vertical bar, inner edge, lower portion of door
-    const vH    = Math.min(doorH * 0.28, FT(5))
+    // Technica Upper: 8.5" blade handle, inner edge, lower portion of door
+    const vH    = FT(8.5)
     const vY    = doorY0 + vH / 2 + FT(1.5)
     const iEdgeL =  lDX + door2W / 2 - FT(1.5)
     const iEdgeR =  rDX - door2W / 2 + FT(1.5)
-    const iEdge1 =  door1W / 2 - FT(1.5)
+    const iEdge1 = handleRight ? (door1W / 2 - FT(1.5)) : (-door1W / 2 + FT(1.5))
     if (cabinet.doors === 1) {
-      handleMeshes.push(
-        <mesh key="upper1" position={[iEdge1, vY, doorZ + vD / 2]}>{handleMat}
-          <boxGeometry args={[vW, vH, vD]} />
-        </mesh>
-      )
+      handleMeshes.push(...technicaBladeHandle('up1', iEdge1, vY, doorFrontZ, vH, handleMat))
     } else {
       handleMeshes.push(
-        <mesh key="upperL" position={[iEdgeL, vY, doorZ + vD / 2]}>{handleMat}
-          <boxGeometry args={[vW, vH, vD]} />
-        </mesh>,
-        <mesh key="upperR" position={[iEdgeR, vY, doorZ + vD / 2]}>{handleMat}
-          <boxGeometry args={[vW, vH, vD]} />
-        </mesh>
+        ...technicaBladeHandle('upL', iEdgeL, vY, doorFrontZ, vH, handleMat),
+        ...technicaBladeHandle('upR', iEdgeR, vY, doorFrontZ, vH, handleMat)
       )
     }
   }
@@ -1107,26 +1137,49 @@ const CabinetMesh = memo(function CabinetMesh({ cabinet, selected, wireframe, bl
             // For combo (1-drawer + 2-door): sit at top, 6" per drawer
             const drawerAreaY0 = cabinet.doors === 0 ? baseY0 : fullY1 - drawerCount * drawerH6
             const drawerAreaH  = cabinet.doors === 0 ? fullY1 - baseY0 : drawerCount * drawerH6
-            const singleH      = drawerAreaH / drawerCount
-            // Drawer-only: single centered pull on each drawer (slim finger pull)
-            // Combo (1 drawer + doors): wider bar pull on the drawer
+            // 5-drawer layout (bottom to top):
+            //   Signature: 1 large, 2 medium, 2 small (6:4:4:3:3)
+            //   Technica:  1 large, 4 medium (6:3.5:3.5:3.5:3.5)
+            const sigRatios = [6, 4, 4, 3, 3]
+            const tecRatios = [6, 3.5, 3.5, 3.5, 3.5]
+            const drawerRatios = drawerCount === 5 ? (isSignature ? sigRatios : tecRatios) : Array(drawerCount).fill(1)
+            const ratioSum = drawerRatios.reduce((a, b) => a + b, 0)
+            const drawerHeights = drawerRatios.map(r => (r / ratioSum) * drawerAreaH)
             const isDrawerOnly = cabinet.doors === 0
-            // Signature: wider integrated channel pull; Technica: bar pull
-            const pullW = isSignature ? drawerFW * 0.55 : (isDrawerOnly ? FT(3.5) : FT(5))
-            const pullH = isSignature ? FT(0.5) : FT(0.35)
-            const pullD = isSignature ? FT(0.5) : (isDrawerOnly ? FT(0.6) : FT(1.1))
+            // Signature: wide silver bar recessed into top edge of each drawer
+            // Technica: same blade handle as doors, rotated horizontal (19" or capped to fit)
+            const sigPullW = drawerFW - FT(1)
+            const sigPullH = FT(0.5)
+            const sigPullD = FT(0.55)
+            const tecBladeLen = Math.min(FT(19), drawerFW - FT(2)) // cap to drawer width
+            let cumY = drawerAreaY0
             for (let i = 0; i < drawerCount; i++) {
-              const y0  = drawerAreaY0 + i * singleH
-              const fH  = singleH - gap
+              const y0  = cumY
+              const fH  = drawerHeights[i] - gap
+              cumY += drawerHeights[i]
               const fMY = y0 + fH / 2
               meshes.push(
                 <mesh key={`dr${i}`} position={[0, fMY, doorZ]} castShadow>{doorMat}
                   <boxGeometry args={[drawerFW, fH, FT(0.5)]} />
-                </mesh>,
-                <mesh key={`drh${i}`} position={[0, fMY, doorZ + pullD / 2]}>{handleMat}
-                  <boxGeometry args={[pullW, pullH, pullD]} />
                 </mesh>
               )
+              if (isSignature) {
+                // Signature: recessed bar at top edge
+                const drPullY = y0 + fH - sigPullH / 2
+                const drPullZ = doorZ - FT(0.25) + sigPullD / 2
+                meshes.push(
+                  <mesh key={`drh${i}`} position={[0, drPullY, drPullZ]}>{handleMat}
+                    <boxGeometry args={[sigPullW, sigPullH, sigPullD]} />
+                  </mesh>
+                )
+              } else {
+                // Technica: horizontal blade handle (same design as door handles, rotated 90°)
+                meshes.push(
+                  <group key={`drh${i}`} position={[0, fMY, 0]} rotation={[0, 0, -Math.PI / 2]}>
+                    {technicaBladeHandle(`dh${i}`, 0, 0, doorFrontZ, tecBladeLen, handleMat)}
+                  </group>
+                )
+              }
             }
             return meshes
           })()}
@@ -1501,7 +1554,7 @@ function BaseboardChain({ chain, floorSteps, cx, cz, baseTex, wireframe, side = 
   // Fallback color if both color and texture are missing
   const fallbackColor = '#ff00ff' // bright magenta for debug
   return (
-    <mesh geometry={geo}>
+    <mesh geometry={geo} frustumCulled={false}>
       <meshStandardMaterial
         key={`bb-mat-${useFlake}-${bbColor}-${wireframe}`}
         color={useFlake ? '#ffffff' : (bbColor || fallbackColor)}
@@ -1510,7 +1563,7 @@ function BaseboardChain({ chain, floorSteps, cx, cz, baseTex, wireframe, side = 
         roughness={0.85}
         side={THREE.DoubleSide}
         depthWrite
-        polygonOffset polygonOffsetFactor={1} polygonOffsetUnits={1}
+        polygonOffset polygonOffsetFactor={-1} polygonOffsetUnits={-1}
       />
     </mesh>
   )
@@ -1544,8 +1597,6 @@ function GarageBaseboards({ walls, floorSteps, baseTex, wireframe }: {
 //  1. Floor patch  — thin textured box fills the floor gap under the wall opening
 //  2. Threshold bump — small raised strip along the interior edge covers the floor cut-off
 const THRESH_H     = 0.5   // floor-patch height in inches (thin, almost flush with floor)
-const THRESH_BUMP_H = 1.5  // bump height in inches
-const THRESH_BUMP_D = 3.5  // bump depth in inches (along z through wall)
 
 function GarageDoorThreshold({ doorW, wallThickness, localX, baseTex, wireframe }: {
   doorW: number; wallThickness: number; localX: number
@@ -1555,10 +1606,8 @@ function GarageDoorThreshold({ doorW, wallThickness, localX, baseTex, wireframe 
   floorTex.repeat.set(FT(doorW) * baseTex.repeat.x, FT(wallThickness) * baseTex.repeat.y)
 
   const patchY  = FT(THRESH_H / 2)
-  const bumpY   = FT(THRESH_BUMP_H / 2)
 
   const wfColor = wireframe ? '#1a2a3a' : '#ffffff'
-  const bumpColor = wireframe ? '#1a2a3a' : '#909090'
 
   return (
     <group position={[localX, 0, 0]}>
@@ -1567,14 +1616,9 @@ function GarageDoorThreshold({ doorW, wallThickness, localX, baseTex, wireframe 
         <boxGeometry args={[FT(doorW), FT(THRESH_H), FT(wallThickness)]} />
         <meshStandardMaterial
           map={wireframe ? null : floorTex} color={wfColor}
-          wireframe={wireframe} roughness={0.2} metalness={0.04}
+          wireframe={wireframe} roughness={0.55} metalness={0.0}
           polygonOffset polygonOffsetFactor={-1} polygonOffsetUnits={-2}
         />
-      </mesh>
-      {/* Threshold bump — raised strip at the interior edge, covers floor cut-off */}
-      <mesh position={[0, bumpY, 0]}>
-        <boxGeometry args={[FT(doorW), FT(THRESH_BUMP_H), FT(THRESH_BUMP_D)]} />
-        <meshLambertMaterial wireframe={wireframe} color={bumpColor} />
       </mesh>
     </group>
   )
@@ -1746,6 +1790,105 @@ function OpeningGLBModel({ modelId, widthIn, heightIn }: {
   )
 }
 
+// ─── Stem wall mesh (flush with wall, floor-matched flake texture) ────────────
+// Splits into horizontal segments that skip garage-door openings that reach the floor.
+function StemWallMesh({ lengthIn, heightIn, thickFt, texture, wallColor, baseTex, wireframe, blueprint, openings, onClick, onPointerDown }: {
+  lengthIn: number; heightIn: number; thickFt: number
+  texture: 'concrete' | 'flake' | 'none'; wallColor: string
+  baseTex: THREE.Texture | null; wireframe: boolean; blueprint: boolean
+  openings: WallOpening[]
+  onClick: () => void; onPointerDown: (e: ThreeEvent<PointerEvent>) => void
+}) {
+  const swH = FT(heightIn)
+  const concreteColor = '#a8a098'
+  const stemColor = wireframe ? '#6a8a6a' : (texture === 'none' ? wallColor : concreteColor)
+
+  // Build horizontal segments that skip openings whose bottom edge is at or below stem wall height
+  const segments = useMemo(() => {
+    const cuts = openings
+      .filter(op => op.yOffset < heightIn) // opening bottom is within stem wall range
+      .sort((a, b) => a.xOffset - b.xOffset)
+    if (cuts.length === 0) return [{ x0: 0, x1: lengthIn }]
+    const segs: { x0: number; x1: number }[] = []
+    let cursor = 0
+    for (const op of cuts) {
+      const left = Math.max(0, op.xOffset)
+      const right = Math.min(lengthIn, op.xOffset + op.width)
+      if (left > cursor) segs.push({ x0: cursor, x1: left })
+      cursor = Math.max(cursor, right)
+    }
+    if (cursor < lengthIn) segs.push({ x0: cursor, x1: lengthIn })
+    return segs
+  }, [openings, lengthIn, heightIn])
+
+  // Validate baseTex is loaded (support HTMLImageElement, ImageBitmap, HTMLCanvasElement)
+  function isTextureLoaded(tex: any) {
+    if (!tex || !tex.image) return false
+    const img = tex.image
+    if (typeof window !== 'undefined' && window.Image && img instanceof window.Image) return img.naturalWidth > 0
+    if (typeof ImageBitmap !== 'undefined' && img instanceof ImageBitmap) return img.width > 0
+    if (img instanceof HTMLCanvasElement) return img.width > 0
+    if (typeof img.width === 'number') return img.width > 0
+    return false
+  }
+
+  const useFlake = texture === 'flake' && !wireframe && isTextureLoaded(baseTex)
+  const rptPerFoot = baseTex?.repeat.x ?? 1
+
+  return (
+    <>
+      {segments.map((seg, i) => {
+        const segW = seg.x1 - seg.x0
+        const localX = FT(-lengthIn / 2 + seg.x0 + segW / 2)
+        const segWFt = FT(segW)
+        return (
+          <mesh key={i} position={[localX, swH / 2, 0]}
+            onClick={(e) => { e.stopPropagation(); onClick() }}
+            onPointerDown={onPointerDown}
+            receiveShadow castShadow
+          >
+            <boxGeometry args={[segWFt, swH, thickFt + FT(0.05)]} />
+            {blueprint ? (
+              <meshBasicMaterial key={`sw-${texture}-bp`} color={stemColor} />
+            ) : (
+              <StemWallMaterial
+                useFlake={useFlake} baseTex={baseTex}
+                segWidthIn={segW} heightIn={heightIn} rptPerFoot={rptPerFoot}
+                stemColor={stemColor} texture={texture} wireframe={wireframe}
+              />
+            )}
+          </mesh>
+        )
+      })}
+    </>
+  )
+}
+
+// Extracted material so each segment gets its own cloned texture with correct repeat
+function StemWallMaterial({ useFlake, baseTex, segWidthIn, heightIn, rptPerFoot, stemColor, texture, wireframe }: {
+  useFlake: boolean; baseTex: THREE.Texture | null
+  segWidthIn: number; heightIn: number; rptPerFoot: number
+  stemColor: string; texture: string; wireframe: boolean
+}) {
+  const stemTex = useMemo(() => {
+    if (!useFlake || !baseTex) return null
+    const t = baseTex.clone()
+    t.repeat.set(FT(segWidthIn) * rptPerFoot, FT(heightIn) * rptPerFoot)
+    t.needsUpdate = true
+    return t
+  }, [baseTex, useFlake, segWidthIn, heightIn, rptPerFoot])
+
+  return (
+    <meshStandardMaterial
+      key={`sw-${texture}-${useFlake}-${wireframe}`}
+      color={useFlake ? '#ffffff' : stemColor}
+      map={useFlake ? stemTex : null}
+      roughness={useFlake ? 0.7 : (texture === 'concrete' ? 0.95 : 0.7)}
+      wireframe={wireframe}
+    />
+  )
+}
+
 // ─── Individual wall mesh ─────────────────────────────────────────────────────
 const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, onClick, onPointerDown, startExt, endExt, startTrim, endTrim, baseTex }: {
   wall: GarageWall; wireframe: boolean; blueprint?: boolean; selected: boolean; onClick: () => void
@@ -1865,6 +2008,17 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
           </mesh>
         )
       })}
+
+      {/* Stem wall — flush with wall face at the bottom, split around openings */}
+      {wall.stemWall && (wall.stemWallHeight ?? 0) > 0 && (
+        <StemWallMesh
+          lengthIn={lengthIn} heightIn={wall.stemWallHeight ?? 6} thickFt={thickFt}
+          texture={wall.stemWallTexture ?? 'concrete'} wallColor={wall.wallColor ?? '#e0dedd'}
+          baseTex={baseTex} wireframe={wireframe} blueprint={!!blueprint}
+          openings={wall.openings ?? []}
+          onClick={onClick} onPointerDown={onPointerDown}
+        />
+      )}
 
       {/* 3D Door & window meshes */}
       {!blueprint && openingMeshes}
@@ -2851,7 +3005,7 @@ export default function GarageShell() {
   const showDims  = viewMode === 'top' || viewMode === 'wireframe'
 
   // Keyboard shortcuts: Esc=deselect, R=rotate selected 90°, Delete=remove selected
-  const { deleteShape, deleteCabinet, deleteCountertop, deleteSlatwallPanel: deleteSlatPanel, deleteFloorStep: delFloorStep, deleteCeilingLight, removeItem, deleteRack } = useGarageStore()
+  const { deleteWall, deleteShape, deleteCabinet, deleteCountertop, deleteSlatwallPanel: deleteSlatPanel, deleteFloorStep: delFloorStep, deleteCeilingLight, removeItem, deleteRack } = useGarageStore()
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
@@ -2901,11 +3055,12 @@ export default function GarageShell() {
         else if (state.selectedFloorStepId) delFloorStep(state.selectedFloorStepId)
         else if (state.selectedCeilingLightId) deleteCeilingLight(state.selectedCeilingLightId)
         else if (state.selectedRackId) { const r = state.overheadRacks.find(r => r.id === state.selectedRackId); if (r && !r.locked) deleteRack(state.selectedRackId) }
+        else if (state.selectedWallId) deleteWall(state.selectedWallId)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selectWall, selectShape, selectSlatwallPanel, selectCabinet, setFloorSelected, selectItem, selectCountertop, selectFloorStep, selectCeilingLight, selectRack, updateCabinet, updateItem, updateCountertop, updateCeilingLight, updateRack, deleteCabinet, removeItem, deleteShape, deleteCountertop, deleteSlatPanel, delFloorStep, deleteCeilingLight, deleteRack])
+  }, [selectWall, selectShape, selectSlatwallPanel, selectCabinet, setFloorSelected, selectItem, selectCountertop, selectFloorStep, selectCeilingLight, selectRack, updateCabinet, updateItem, updateCountertop, updateCeilingLight, updateRack, deleteWall, deleteCabinet, removeItem, deleteShape, deleteCountertop, deleteSlatPanel, delFloorStep, deleteCeilingLight, deleteRack])
 
   // Derive floor polygon from wall footprint — falls back to convex hull, then stored floorPoints
   const effectiveFloorPts = useMemo(
@@ -3794,10 +3949,12 @@ export default function GarageShell() {
   // Each cell of the composite is rotated 0/90/180/270° using a deterministic pattern
   // so the epoxy chip flakes never align across cells, but individual chip size is preserved.
   const detileFloorTex = useMemo(() => {
-    const img = floorTex.image as HTMLImageElement | null
-    if (!img || !img.naturalWidth) return floorTex  // fallback: texture not yet decoded
-    const tileW = img.naturalWidth
-    const tileH = img.naturalHeight
+    const img = floorTex.image as (HTMLImageElement & { width: number; height: number }) | null
+    if (!img) return floorTex  // fallback: texture not yet decoded
+    // Support both HTMLImageElement (.naturalWidth) and ImageBitmap (.width)
+    const tileW = (img as any).naturalWidth ?? img.width
+    const tileH = (img as any).naturalHeight ?? img.height
+    if (!tileW || !tileH) return floorTex
     const SIZE = 2048
     const canvas = document.createElement('canvas')
     canvas.width = SIZE; canvas.height = SIZE
@@ -3925,7 +4082,7 @@ export default function GarageShell() {
           startWallDrag(wall.id, 'body', e)
         }
         return (
-          <group key={wall.id}>
+          <group key={wall.id} visible={wall.visible !== false}>
             <WallMesh wall={wall} wireframe={wireframe} blueprint={blueprint}
               selected={isSel}
               onClick={() => { if (suppressNextClick.current) { suppressNextClick.current = false; return } selectWall(wall.id) }}

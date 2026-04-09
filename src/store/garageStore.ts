@@ -76,12 +76,9 @@ export const CABINET_PRESETS: CabinetPreset[] = [
   { key: 't-lower-28-2',    label: '28" 2-Door Lower',          line: 'technica', style: 'lower',  doors: 2, w: 28, d: 24, h: 31.25, sku: 'GL-TEC-BASE-28',      price: 319 },
   { key: 't-lower-36-2',    label: '36" 2-Door Lower',          line: 'technica', style: 'lower',  doors: 2, w: 36, d: 24, h: 31.25, sku: 'GL-TEC-BASE-36',      price: 429 },
   { key: 't-lower-36-1d2d', label: '36" 1-Drawer 2-Door Lower', line: 'technica', style: 'lower',  doors: 2, drawers: 1, w: 36, d: 24, h: 31.25, sku: 'GL-TEC-BASE-36-1D',  price: 469 },
-  { key: 't-lower-36-3dr',  label: '36" 3-Drawer Lower',        line: 'technica', style: 'lower',  doors: 0, drawers: 3, w: 36, d: 24, h: 31.25, sku: 'GL-TEC-BASE-36-3DR', price: 489 },
-  { key: 't-lower-28-3dr',  label: '28" 3-Drawer Lower',        line: 'technica', style: 'lower',  doors: 0, drawers: 3, w: 28, d: 24, h: 31.25, sku: 'GL-TEC-BASE-28-3DR', price: 439 },
-  { key: 't-lower-20-3dr',  label: '20" 3-Drawer Lower',        line: 'technica', style: 'lower',  doors: 0, drawers: 3, w: 20, d: 24, h: 31.25, sku: 'GL-TEC-BASE-20-3DR', price: 379 },
-  { key: 't-lower-36-4dr',  label: '36" 4-Drawer Lower',        line: 'technica', style: 'lower',  doors: 0, drawers: 4, w: 36, d: 24, h: 31.25, sku: 'GL-TEC-BASE-36-4DR', price: 519 },
-  { key: 't-lower-28-4dr',  label: '28" 4-Drawer Lower',        line: 'technica', style: 'lower',  doors: 0, drawers: 4, w: 28, d: 24, h: 31.25, sku: 'GL-TEC-BASE-28-4DR', price: 469 },
-  { key: 't-lower-20-4dr',  label: '20" 4-Drawer Lower',        line: 'technica', style: 'lower',  doors: 0, drawers: 4, w: 20, d: 24, h: 31.25, sku: 'GL-TEC-BASE-20-4DR', price: 409 },
+  { key: 't-lower-36-5dr',  label: '36" 5-Drawer Lower',        line: 'technica', style: 'lower',  doors: 0, drawers: 5, w: 36, d: 24, h: 31.25, sku: 'GL-TEC-BASE-36-5DR', price: 549 },
+  { key: 't-lower-28-5dr',  label: '28" 5-Drawer Lower',        line: 'technica', style: 'lower',  doors: 0, drawers: 5, w: 28, d: 24, h: 31.25, sku: 'GL-TEC-BASE-28-5DR', price: 499 },
+  { key: 't-lower-20-5dr',  label: '20" 5-Drawer Lower',        line: 'technica', style: 'lower',  doors: 0, drawers: 5, w: 20, d: 24, h: 31.25, sku: 'GL-TEC-BASE-20-5DR', price: 449 },
   { key: 't-locker-36-2',   label: '36" 2-Door Locker',         line: 'technica', style: 'locker', doors: 2, w: 36, d: 24, h: 80, sku: 'GL-TEC-TALL-36', price: 699 },
   { key: 't-locker-28-2',   label: '28" 2-Door Locker',         line: 'technica', style: 'locker', doors: 2, w: 28, d: 24, h: 80, sku: 'GL-TEC-TALL-28', price: 649 },
   { key: 't-locker-20-1',   label: '20" 1-Door Locker',         line: 'technica', style: 'locker', doors: 1, w: 20, d: 24, h: 80, sku: 'GL-TEC-TALL-20', price: 599 },
@@ -93,12 +90,9 @@ export const CABINET_PRESETS: CabinetPreset[] = [
   { key: 's-lower-28-2',    label: '28" 2-Door Lower',          line: 'signature', style: 'lower',  doors: 2, w: 28, d: 24, h: 31.25, sku: 'GL-SIG-BASE-28',      price: 379 },
   { key: 's-lower-36-2',    label: '36" 2-Door Lower',          line: 'signature', style: 'lower',  doors: 2, w: 36, d: 24, h: 31.25, sku: 'GL-SIG-BASE-36',      price: 499 },
   { key: 's-lower-36-1d2d', label: '36" 1-Drawer 2-Door Lower', line: 'signature', style: 'lower',  doors: 2, drawers: 1, w: 36, d: 24, h: 31.25, sku: 'GL-SIG-BASE-36-1D',  price: 539 },
-  { key: 's-lower-36-3dr',  label: '36" 3-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 3, w: 36, d: 24, h: 31.25, sku: 'GL-SIG-BASE-36-3DR', price: 559 },
-  { key: 's-lower-28-3dr',  label: '28" 3-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 3, w: 28, d: 24, h: 31.25, sku: 'GL-SIG-BASE-28-3DR', price: 509 },
-  { key: 's-lower-20-3dr',  label: '20" 3-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 3, w: 20, d: 24, h: 31.25, sku: 'GL-SIG-BASE-20-3DR', price: 449 },
-  { key: 's-lower-36-4dr',  label: '36" 4-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 4, w: 36, d: 24, h: 31.25, sku: 'GL-SIG-BASE-36-4DR', price: 589 },
-  { key: 's-lower-28-4dr',  label: '28" 4-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 4, w: 28, d: 24, h: 31.25, sku: 'GL-SIG-BASE-28-4DR', price: 539 },
-  { key: 's-lower-20-4dr',  label: '20" 4-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 4, w: 20, d: 24, h: 31.25, sku: 'GL-SIG-BASE-20-4DR', price: 479 },
+  { key: 's-lower-36-5dr',  label: '36" 5-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 5, w: 36, d: 24, h: 31.25, sku: 'GL-SIG-BASE-36-5DR', price: 619 },
+  { key: 's-lower-28-5dr',  label: '28" 5-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 5, w: 28, d: 24, h: 31.25, sku: 'GL-SIG-BASE-28-5DR', price: 569 },
+  { key: 's-lower-20-5dr',  label: '20" 5-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 5, w: 20, d: 24, h: 31.25, sku: 'GL-SIG-BASE-20-5DR', price: 519 },
   { key: 's-locker-36-2',   label: '36" 2-Door Locker',         line: 'signature', style: 'locker', doors: 2, w: 36, d: 24, h: 80, sku: 'GL-SIG-TALL-36', price: 799 },
   { key: 's-locker-28-2',   label: '28" 2-Door Locker',         line: 'signature', style: 'locker', doors: 2, w: 28, d: 24, h: 80, sku: 'GL-SIG-TALL-28', price: 749 },
   { key: 's-locker-20-1',   label: '20" 1-Door Locker',         line: 'signature', style: 'locker', doors: 1, w: 20, d: 24, h: 80, sku: 'GL-SIG-TALL-20', price: 699 },
@@ -123,6 +117,7 @@ export interface PlacedCabinet {
   z: number
   rotY: number  // radians
   color: string // 'charcoal' | 'white' | 'driftwood' | 'slate' | 'stone'
+  handleSide?: 'left' | 'right' // single-door handle position (default 'right')
   locked?: boolean
   sku?: string
   price?: number
@@ -172,6 +167,10 @@ export interface GarageWall {
   baseboardHeight: number // inches (default 3.5)
   baseboardColor: string  // hex color (default '#cccccc')
   baseboardTexture: boolean // apply floor flake texture to baseboard (default false)
+  stemWall: boolean          // stem wall at bottom of wall, flush with wall face (default false)
+  stemWallHeight: number     // inches (default 4)
+  stemWallTexture: 'concrete' | 'flake' | 'none' // texture style (default 'concrete')
+  visible: boolean          // whether wall is rendered (default true)
 }
 
 export type ShapeType = 'box' | 'cylinder' | 'beam'
@@ -311,6 +310,7 @@ function makeDefaultWalls(widthIn: number, depthIn: number, heightIn: number): G
   const base: Omit<GarageWall, 'id' | 'label' | 'x1' | 'z1' | 'x2' | 'z2'> = {
     height: heightIn, yOffset: 0, thickness: 3.5, locked: false,
     wallColor: '#e0dedd', openings: [], baseboard: true, baseboardHeight: 4, baseboardColor: '#cccccc', baseboardTexture: false,
+    stemWall: false, stemWallHeight: 4, stemWallTexture: 'concrete' as const, visible: true,
   }
   return [
     { id: uid(), label: 'Back Wall',  x1: -hw, z1: -hd, x2:  hw, z2: -hd, ...base },
@@ -565,7 +565,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
   viewMode: 'perspective',
   cameraAngle: 0,
   elevationWallIndex: 0,
-  qualityPreset: 'medium' as QualityPreset,
+  qualityPreset: 'low' as QualityPreset,
   isExporting: false,
 
   isDraggingWall: false,
@@ -655,6 +655,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       height: ch, yOffset: 0, thickness: 3.5,
       locked: false,
       wallColor: '#e0dedd', openings: [], baseboard: true, baseboardHeight: 4, baseboardColor: '#cccccc', baseboardTexture: false,
+      stemWall: false, stemWallHeight: 4, stemWallTexture: 'concrete' as const, visible: true,
       ...overrides,
     }
     set(s => ({ walls: [...s.walls, wall], selectedWallId: wall.id }))
@@ -1093,7 +1094,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       garageDepth:      (d.garageDepth as number)       ?? 264,
       ceilingHeight:    (d.ceilingHeight as number)     ?? 108,
       floorPoints:      (d.floorPoints as FloorPoint[]) ?? [],
-      walls:            (d.walls as GarageWall[])       ?? [],
+      walls:            ((d.walls as GarageWall[]) ?? []).map(w => ({ ...w, visible: w.visible ?? true, stemWall: w.stemWall ?? false, stemWallHeight: w.stemWallHeight ?? 6, stemWallTexture: w.stemWallTexture ?? 'concrete' as const })),
       slatwallPanels:   (d.slatwallPanels as SlatwallPanel[]) ?? [],
       floorSteps:       (d.floorSteps as FloorStep[])   ?? [],
       shapes:           (d.shapes as GarageShape[])     ?? [],

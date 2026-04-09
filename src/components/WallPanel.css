@@ -75,10 +75,49 @@
 .wall-actions .delete-btn:hover { border-color: var(--danger); color: #f87171; }
 
 .wall-detail {
-  padding: 10px;
+  padding: 4px 0 0;
   border-top: 1px solid var(--border);
   background: rgba(0,0,0,0.12);
   animation: fadeIn 0.2s ease-out;
+}
+
+/* ── Collapsible sections ────────────────────────────────────────────────── */
+.wall-section {
+  border-bottom: 1px solid var(--border);
+}
+.wall-section:last-child { border-bottom: none; }
+
+.wall-section-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 10px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.wall-section-header:hover { background: rgba(255,255,255,0.04); }
+
+.wall-section-chevron {
+  display: inline-block;
+  font-size: 10px;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+}
+.wall-section-chevron[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+.wall-section-body {
+  padding: 4px 10px 10px;
 }
 
 .wall-coords { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
@@ -278,3 +317,28 @@
 }
 .slat-acc-item .slat-acc-price { flex: 1; text-align: right; }
 .slat-acc-item .delete-btn { flex-shrink: 0; }
+
+/* ── Stem wall texture picker ────────────────────────────────────────────── */
+.stem-wall-texture-row {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+}
+.stem-wall-tex-btn {
+  flex: 1;
+  padding: 5px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.stem-wall-tex-btn:hover { border-color: var(--border2); color: var(--text); }
+.stem-wall-tex-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
