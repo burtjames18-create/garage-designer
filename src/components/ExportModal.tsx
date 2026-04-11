@@ -1,12 +1,97 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
+import jsPDF from 'jspdf'
 import { useGarageStore } from '../store/garageStore'
 import type { GarageWall, PlacedCabinet, Countertop } from '../store/garageStore'
 import { exportCaptureRef } from '../utils/exportCapture'
 import WallElevationBlueprint from './WallElevationBlueprint'
 import FloorPlanBlueprint from './FloorPlanBlueprint'
-import { IconDelete, IconPrint, IconDownload } from './Icons'
+import { IconDelete, IconDownload } from './Icons'
 import './ExportModal.css'
+
+// ── PDF helpers ──────────────────────────────────────────────────────────────
+// Rasterize an <img> or data URL source to a PNG data URL at a target width.
+// Used to convert the .webp logo into a jsPDF-compatible PNG (jsPDF has no
+// native webp support) and to size it correctly for the footer.
+function rasterizeImageToPng(src: string, targetWidthPx: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => {
+      const aspect = img.naturalHeight / img.naturalWidth
+      const w = Math.max(1, Math.round(targetWidthPx))
+      const h = Math.max(1, Math.round(targetWidthPx * aspect))
+      const canvas = document.createElement('canvas')
+      canvas.width = w
+      canvas.height = h
+      const ctx = canvas.getContext('2d')
+      if (!ctx) { reject(new Error('no 2d context')); return }
+      ctx.drawImage(img, 0, 0, w, h)
+      resolve(canvas.toDataURL('image/png'))
+    }
+    img.onerror = () => reject(new Error('image load failed'))
+    img.src = src
+  })
+}
+
+// Rasterize a live <svg> DOM node to a PNG data URL at a target pixel width.
+// We serialize the SVG (with a white background, in case it has none) and
+// load it into an <img>, then draw to a canvas at the requested width. This
+// bypasses the browser's print-path re-encoding entirely.
+function rasterizeSvgToPng(svg: SVGSVGElement, targetWidthPx: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    // Clone so we don't mutate the live DOM
+    const clone = svg.cloneNode(true) as SVGSVGElement
+    if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+    // The SVG inherits font-family from page CSS when displayed in the modal,
+    // but serializing it into an isolated <img> loses that context and the
+    // browser falls back to Times. Inject the app's font stack explicitly so
+    // dimension text renders with the same Segoe UI / sans-serif face as the
+    // on-screen preview.
+    clone.setAttribute(
+      'font-family',
+      "'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif"
+    )
+    // Determine intrinsic size from viewBox (SVGs here are viewBox-driven)
+    const vb = clone.viewBox?.baseVal
+    const vbW = vb && vb.width ? vb.width : (svg.clientWidth || 1000)
+    const vbH = vb && vb.height ? vb.height : (svg.clientHeight || 1000)
+    const aspect = vbH / vbW
+    const w = Math.max(1, Math.round(targetWidthPx))
+    const h = Math.max(1, Math.round(targetWidthPx * aspect))
+    clone.setAttribute('width', String(w))
+    clone.setAttribute('height', String(h))
+
+    const xml = new XMLSerializer().serializeToString(clone)
+    const svg64 = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(xml)
+
+    const img = new Image()
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = w
+      canvas.height = h
+      const ctx = canvas.getContext('2d')
+      if (!ctx) { reject(new Error('no 2d context')); return }
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, w, h)
+      ctx.drawImage(img, 0, 0, w, h)
+      resolve(canvas.toDataURL('image/png'))
+    }
+    img.onerror = () => reject(new Error('svg rasterize failed'))
+    img.src = svg64
+  })
+}
+
+// Get the pixel dimensions of a PNG/JPEG data URL so we can preserve its
+// aspect ratio when fitting into a PDF content box.
+function imageSize(dataUrl: string): Promise<{ w: number; h: number }> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight })
+    img.onerror = () => reject(new Error('image size probe failed'))
+    img.src = dataUrl
+  })
+}
 
 interface ExportModalProps {
   onClose: () => void
@@ -48,8 +133,10 @@ export default function ExportModal({ onClose }: ExportModalProps) {
   const [captures, setCaptures] = useState<string[]>([])
   const [status, setStatus] = useState<'capturing' | 'ready' | 'no-shots'>('capturing')
   const [progress, setProgress] = useState(0)
+  const [downloading, setDownloading] = useState(false)
   const logoRef = useRef<HTMLImageElement>(null)
   const modalRef = useRef<HTMLDivElement>(null)
+  const pagesRef = useRef<HTMLDivElement>(null)
   const previousFocus = useRef<HTMLElement | null>(null)
 
   const today = new Date().toLocaleDateString('en-US', {
@@ -124,142 +211,136 @@ export default function ExportModal({ onClose }: ExportModalProps) {
     return () => { cancelled = true }
   }, [exportShots])
 
-  const handlePrint = () => {
-    // Open a dedicated print window with just the export content.
-    // This avoids CSS conflicts with the app's DOM tree.
-    const printWin = window.open('', '_blank', 'width=1100,height=800')
-    if (!printWin) return
+  // Build a PDF entirely in-memory with jsPDF. 3D renders are embedded as
+  // lossless PNG (compression: 'NONE'), which bypasses Chrome's print-to-PDF
+  // re-encoding path that caused visible banding/rings on smooth spotlight
+  // gradients. Blueprint SVGs are rasterized to high-DPI PNG and embedded
+  // the same way.
+  const handleDownloadPdf = async () => {
+    if (downloading) return
+    setDownloading(true)
+    try {
+      // US Letter landscape: 11 × 8.5 in = 792 × 612 pt
+      const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' })
+      const pageW = doc.internal.pageSize.getWidth()
+      const pageH = doc.internal.pageSize.getHeight()
 
-    const logoUrl = `${window.location.origin}${import.meta.env.BASE_URL}assets/gl-logo.png.webp`
+      // Layout (points)
+      const marginX = 36
+      const marginTop = 24
+      const footerH = 72
+      const footerGap = 12
+      const contentTop = marginTop
+      const contentBottom = pageH - marginX - footerH - footerGap
+      const contentW = pageW - marginX * 2
+      const contentH = contentBottom - contentTop
 
-    const footerHtml = `
-      <div class="footer">
-        <div class="footer-logo"><img src="${logoUrl}" alt="Garage Living" onerror="this.style.display='none'" /></div>
-        <div class="footer-fields">
-          <div class="footer-field" style="border-right:1px solid #333;border-bottom:1px solid #333">
-            <span class="footer-label">Customer Name</span>
-            <span class="footer-value">${customerName || '—'}</span>
-          </div>
-          <div class="footer-field" style="border-bottom:1px solid #333">
-            <span class="footer-label">Site Address</span>
-            <span class="footer-value">${siteAddress || '—'}</span>
-          </div>
-          <div class="footer-field" style="border-right:1px solid #333">
-            <span class="footer-label">Design Consultant</span>
-            <span class="footer-value">${consultantName || 'Garage Living'}</span>
-          </div>
-          <div class="footer-field">
-            <span class="footer-label">Date</span>
-            <span class="footer-value">${today}</span>
-          </div>
-        </div>
-      </div>
-    `
+      // Preload the logo as PNG (jsPDF doesn't support webp)
+      let logoPng: string | null = null
+      let logoSize: { w: number; h: number } | null = null
+      try {
+        const logoUrl = `${import.meta.env.BASE_URL}assets/gl-logo.png.webp`
+        logoPng = await rasterizeImageToPng(logoUrl, 400)
+        logoSize = await imageSize(logoPng)
+      } catch {
+        // Logo optional — continue without it
+      }
 
-    // Build render pages
-    const renderPages = captures.map((src, i) => `
-      <div class="page">
-        <div class="page-image-wrap">
-          <img src="${src}" class="page-image" />
-        </div>
-        ${footerHtml}
-      </div>
-    `).join('')
+      // ── Footer drawing (jsPDF primitives — crisp vector text & lines) ──
+      const drawFooter = () => {
+        const fx = marginX
+        const fy = pageH - marginX - footerH
+        const fw = contentW
+        const fh = footerH
 
-    // Grab blueprint SVGs from the modal DOM
-    const blueprintEls = document.querySelectorAll('#export-pages .export-page-blueprint')
-    const blueprintPages = Array.from(blueprintEls).map(el => {
-      const svgWrap = el.querySelector('.export-page-svg-wrap')
-      const svgHtml = svgWrap?.innerHTML || ''
-      return `
-        <div class="page">
-          <div class="page-svg-wrap">${svgHtml}</div>
-          ${footerHtml}
-        </div>
-      `
-    }).join('')
+        doc.setDrawColor(51)
+        doc.setLineWidth(0.75)
+        doc.rect(fx, fy, fw, fh)
 
-    printWin.document.write(`<!DOCTYPE html>
-<html><head><title>${customerName || 'Garage'} — Export</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: 'Segoe UI', 'DM Sans', Arial, sans-serif; }
-  .page {
-    width: 100%;
-    height: 100vh;
-    display: flex;
-    flex-direction: column;
-    page-break-after: always;
-    break-after: page;
-  }
-  .page:last-child { page-break-after: auto; }
-  .page-image-wrap {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 0;
-    padding: 8px;
-  }
-  .page-image {
-    max-width: 100%;
-    max-height: 100%;
-    object-fit: contain;
-  }
-  .page-svg-wrap {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 8px;
-    min-height: 0;
-  }
-  .page-svg-wrap svg {
-    max-width: 100%;
-    max-height: 100%;
-  }
-  .footer {
-    display: flex;
-    align-items: stretch;
-    border: 1px solid #333;
-    margin: 8px 20px 12px;
-    flex-shrink: 0;
-  }
-  .footer-logo {
-    width: 160px;
-    flex-shrink: 0;
-    border-right: 1px solid #333;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 10px 14px;
-  }
-  .footer-logo img { max-width: 100%; max-height: 56px; object-fit: contain; }
-  .footer-fields {
-    flex: 1;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: 1fr 1fr;
-  }
-  .footer-field {
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    padding: 6px 16px;
-    gap: 2px;
-  }
-  .footer-label { font-size: 10px; color: #444; }
-  .footer-value { font-size: 16px; font-weight: 700; color: #111; }
-</style>
-</head><body>${renderPages}${blueprintPages}</body></html>`)
-    printWin.document.close()
+        const logoBoxW = 160
+        // Logo cell divider
+        doc.line(fx + logoBoxW, fy, fx + logoBoxW, fy + fh)
 
-    // Wait for images to load then print
-    printWin.onload = () => {
-      setTimeout(() => {
-        printWin.print()
-        printWin.close()
-      }, 500)
+        if (logoPng && logoSize) {
+          const pad = 12
+          const maxW = logoBoxW - pad * 2
+          const maxH = fh - pad * 2
+          const aspect = logoSize.h / logoSize.w
+          let lw = maxW
+          let lh = lw * aspect
+          if (lh > maxH) { lh = maxH; lw = lh / aspect }
+          const lx = fx + (logoBoxW - lw) / 2
+          const ly = fy + (fh - lh) / 2
+          doc.addImage(logoPng, 'PNG', lx, ly, lw, lh, undefined, 'NONE')
+        }
+
+        // Fields grid: 2 columns × 2 rows to the right of the logo
+        const gx = fx + logoBoxW
+        const gw = fw - logoBoxW
+        const colW = gw / 2
+        const rowH = fh / 2
+
+        // Inner grid lines
+        doc.line(gx + colW, fy, gx + colW, fy + fh)
+        doc.line(gx, fy + rowH, gx + fw - logoBoxW, fy + rowH)
+
+        const drawField = (col: number, row: number, label: string, value: string) => {
+          const cx = gx + col * colW + 14
+          const cy = fy + row * rowH
+          doc.setFont('helvetica', 'normal')
+          doc.setFontSize(8)
+          doc.setTextColor(80)
+          doc.text(label, cx, cy + rowH / 2 - 6)
+          doc.setFont('helvetica', 'bold')
+          doc.setFontSize(13)
+          doc.setTextColor(17)
+          doc.text(value || '—', cx, cy + rowH / 2 + 12)
+        }
+
+        drawField(0, 0, 'Customer Name', customerName || '—')
+        drawField(1, 0, 'Site Address', siteAddress || '—')
+        drawField(0, 1, 'Design Consultant', consultantName || 'Garage Living')
+        drawField(1, 1, 'Date', today)
+      }
+
+      // ── Fit an image into the content box, preserving aspect ──
+      const drawContentImage = async (dataUrl: string) => {
+        const { w: iw, h: ih } = await imageSize(dataUrl)
+        const scale = Math.min(contentW / iw, contentH / ih)
+        const w = iw * scale
+        const h = ih * scale
+        const x = marginX + (contentW - w) / 2
+        const y = contentTop + (contentH - h) / 2
+        // 'NONE' = no deflate, lossless embedding — the whole reason for this rewrite
+        doc.addImage(dataUrl, 'PNG', x, y, w, h, undefined, 'NONE')
+      }
+
+      // ── 3D render pages ──
+      for (let i = 0; i < captures.length; i++) {
+        if (i > 0) doc.addPage()
+        await drawContentImage(captures[i])
+        drawFooter()
+      }
+
+      // ── Blueprint pages (rasterized from live SVG nodes in the modal) ──
+      const blueprintEls = pagesRef.current?.querySelectorAll('.export-page-blueprint') ?? []
+      for (const el of Array.from(blueprintEls)) {
+        const svg = el.querySelector('svg') as SVGSVGElement | null
+        if (!svg) continue
+        // 2400px wide gives ~216 DPI on an 11" page — plenty for crisp lines
+        const png = await rasterizeSvgToPng(svg, 2400)
+        doc.addPage()
+        await drawContentImage(png)
+        drawFooter()
+      }
+
+      const filename = `${customerName || 'Garage'} — Export.pdf`
+      doc.save(filename)
+    } catch (e) {
+      console.error('PDF export failed:', e)
+      alert('PDF export failed. Check the console for details.')
+    } finally {
+      setDownloading(false)
     }
   }
 
@@ -311,10 +392,10 @@ export default function ExportModal({ onClose }: ExportModalProps) {
         <div className="export-modal-header">
           <h2>Export Renderings</h2>
           <div className="export-header-actions">
-            <button className="export-print-btn" onClick={handlePrint}
-              disabled={status !== 'ready' || captures.length === 0}
-              aria-label="Print or save as PDF">
-              <IconPrint size={13} /> Print / Save PDF
+            <button className="export-print-btn" onClick={handleDownloadPdf}
+              disabled={status !== 'ready' || captures.length === 0 || downloading}
+              aria-label="Download PDF">
+              <IconDownload size={13} /> {downloading ? 'Building PDF…' : 'Download PDF'}
             </button>
             <button className="export-close-btn" onClick={onClose} aria-label="Close export modal">
               <IconDelete size={12} />
@@ -323,7 +404,7 @@ export default function ExportModal({ onClose }: ExportModalProps) {
         </div>
 
         {/* Scrollable content area */}
-        <div className="export-pages" id="export-pages">
+        <div className="export-pages" id="export-pages" ref={pagesRef}>
 
           {status === 'no-shots' && (
             <div className="export-capturing" role="alert">
