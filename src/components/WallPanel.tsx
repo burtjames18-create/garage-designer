@@ -72,22 +72,32 @@ function WallEditor({ wall }: { wall: GarageWall }) {
     addOpening, updateOpening, removeOpening,
     slatwallPanels, addSlatwallPanel, updateSlatwallPanel, deleteSlatwallPanel, selectSlatwallPanel, selectedSlatwallPanelId,
     slatwallAccessories, addSlatwallAccessory, deleteSlatwallAccessory,
+    stainlessBacksplashPanels, addStainlessBacksplashPanel, updateStainlessBacksplashPanel, deleteStainlessBacksplashPanel, selectStainlessBacksplashPanel, selectedStainlessBacksplashPanelId,
     importedAssets,
   } = useGarageStore()
   const importedWallTextures = importedAssets.filter((a: ImportedAsset) => a.assetType === 'wall-texture')
   const wallPanels = slatwallPanels.filter(p => p.wallId === wall.id)
+  const wallBacksplashes = stainlessBacksplashPanels.filter(p => p.wallId === wall.id)
   const selected = selectedWallId === wall.id
   const len = wallLengthIn(wall.x1, wall.z1, wall.x2, wall.z2)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const wallScrollRef = useScrollToSelected<HTMLDivElement>(selected)
   const slatwallRef = useRef<HTMLDivElement>(null)
+  const backsplashRef = useRef<HTMLDivElement>(null)
   const hasSlatwallSelected = wallPanels.some(p => p.id === selectedSlatwallPanelId)
+  const hasBacksplashSelected = wallBacksplashes.some(p => p.id === selectedStainlessBacksplashPanelId)
 
   useEffect(() => {
     if (hasSlatwallSelected && slatwallRef.current) {
       slatwallRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }
   }, [hasSlatwallSelected, selectedSlatwallPanelId])
+
+  useEffect(() => {
+    if (hasBacksplashSelected && backsplashRef.current) {
+      backsplashRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }, [hasBacksplashSelected, selectedStainlessBacksplashPanelId])
 
   const handleLengthChange = (newLen: number) => {
     if (newLen <= 0) return
@@ -475,6 +485,92 @@ function WallEditor({ wall }: { wall: GarageWall }) {
                         ))}
                       </div>
                     )}
+                  </div>
+                </div>
+              )
+            })}
+          </Section>
+
+          {/* Stainless steel backsplash — mounts and moves like slatwall but
+              it's a thin (1/8") brushed stainless plate with no color options */}
+          <Section title={`Stainless Backsplash (${wallBacksplashes.length})`} forceOpen={hasBacksplashSelected} sectionRef={backsplashRef}>
+            <div className="openings-header">
+              <button className="opening-add-btn" onClick={() => addStainlessBacksplashPanel(wall.id)}>+ Add Backsplash</button>
+            </div>
+            {wallBacksplashes.map(panel => {
+              const panelW = panel.alongEnd - panel.alongStart
+              const panelH = panel.yTop - panel.yBottom
+              return (
+                <div key={panel.id}
+                  className={`opening-item${selectedStainlessBacksplashPanelId === panel.id ? ' selected' : ''}`}
+                  onClick={() => selectStainlessBacksplashPanel(panel.id)}
+                >
+                  <div className="opening-item-header">
+                    <span className="opening-type-label">
+                      Backsplash — {inchesToDisplay(panelW)} × {inchesToDisplay(panelH)}
+                    </span>
+                    <button className="delete-btn" onClick={e => { e.stopPropagation(); deleteStainlessBacksplashPanel(panel.id) }}
+                      aria-label="Delete stainless backsplash">
+                      <IconDelete size={10} />
+                    </button>
+                  </div>
+                  <div onClick={e => e.stopPropagation()}>
+                    <div className="dim-grid">
+                      <MeasureInput label="Width" inches={panelW}
+                        onChange={v => updateStainlessBacksplashPanel(panel.id, { alongEnd: panel.alongStart + Math.max(1, Math.min(v, len - panel.alongStart)) })}
+                        min={1} max={len} compact />
+                      <MeasureInput label="Height" inches={panelH}
+                        onChange={v => updateStainlessBacksplashPanel(panel.id, { yTop: panel.yBottom + Math.max(1, v) })}
+                        min={1} max={wall.height} compact />
+                      <MeasureInput label="Left Offset" inches={panel.alongStart}
+                        onChange={v => {
+                          const clamped = Math.max(0, Math.min(v, len - panelW))
+                          updateStainlessBacksplashPanel(panel.id, { alongStart: clamped, alongEnd: clamped + panelW })
+                        }}
+                        min={0} max={len} compact />
+                      <MeasureInput label="Bottom" inches={panel.yBottom}
+                        onChange={v => {
+                          const clamped = Math.max(0, Math.min(v, wall.height - panelH))
+                          updateStainlessBacksplashPanel(panel.id, { yBottom: clamped, yTop: clamped + panelH })
+                        }}
+                        min={0} max={wall.height} compact />
+                    </div>
+                    {(() => {
+                      const current = panel.texture ?? 'stainless'
+                      const options: { id: 'stainless' | 'diamondplate'; label: string }[] = [
+                        { id: 'stainless', label: 'Brushed Stainless' },
+                        { id: 'diamondplate', label: 'Diamond Plate' },
+                      ]
+                      return (
+                        <div role="radiogroup" aria-label="Backsplash finish" style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                          {options.map(o => {
+                            const active = current === o.id
+                            return (
+                              <button
+                                key={o.id}
+                                role="radio"
+                                aria-checked={active}
+                                onClick={() => updateStainlessBacksplashPanel(panel.id, { texture: o.id })}
+                                style={{
+                                  flex: 1,
+                                  padding: '6px 8px',
+                                  fontSize: 11,
+                                  fontWeight: active ? 600 : 400,
+                                  color: active ? '#0b62c4' : '#333',
+                                  background: active ? '#eaf3fc' : '#fafafa',
+                                  border: active ? '2px solid #2a8cf0' : '1px solid #ccc',
+                                  borderRadius: 4,
+                                  cursor: 'pointer',
+                                  outline: 'none',
+                                }}
+                              >
+                                {o.label}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      )
+                    })()}
                   </div>
                 </div>
               )

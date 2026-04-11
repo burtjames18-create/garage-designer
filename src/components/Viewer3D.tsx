@@ -327,12 +327,17 @@ function ExportCapture({ orbitRef }: { orbitRef: React.RefObject<any> }) {
   useEffect(() => {
     const chFt = FT(ceilingHeight)
 
-    // Save current camera view as an export shot (returns shot data + thumbnail)
+    // Save current camera view as an export shot (returns shot data + thumbnail).
+    // Read the canvas directly — preserveDrawingBuffer=true means it holds the
+    // latest composited frame from R3F's render loop. Do NOT call gl.render
+    // imperatively: postprocessing's EffectComposer disables autoClear and may
+    // leave the render target bound to its internal input buffer, so an
+    // imperative render writes into that buffer instead of the canvas and
+    // toDataURL reads a stale/blank backing store.
     exportCaptureRef.saveShot = () => {
       if (!camera || !orbitRef.current) return null
       const pos = camera.position.clone()
       const tgt = orbitRef.current.target?.clone() ?? new THREE.Vector3(0, chFt * 0.35, 0)
-      gl.render(scene, camera)
       const thumbnail = gl.domElement.toDataURL('image/jpeg', 0.6)
       return {
         id: '', label: '',
@@ -342,53 +347,37 @@ function ExportCapture({ orbitRef }: { orbitRef: React.RefObject<any> }) {
       }
     }
 
-    // Export capture — captures exactly what the viewport shows, just at higher DPR.
-    // No quality changes, no isExporting toggle — if you want high-quality exports,
-    // set the viewport to high quality first.
+    // Export capture — captures exactly what the viewport shows at the current DPR.
+    // No DPR bump: bumping DPR mid-capture forces EffectComposer to resize all its
+    // render targets, and the post-loop restore can clear the backing store during
+    // the last iteration's flush — leaving the final shot as a blank white image.
+    // Keep it simple: native DPR (typically 2) gives ~2× viewport resolution which
+    // is plenty for PDF print, and removes the whole class of DPR-race bugs.
     exportCaptureRef.capture = async (shots: ExportShot[], onProgress?: (step: number) => void) => {
       const results: string[] = []
 
       if (orbitRef.current) orbitRef.current.enabled = false
 
-      // Save camera state
       const origCamPos = camera.position.clone()
       const origTarget = orbitRef.current?.target?.clone() ?? new THREE.Vector3(0, chFt * 0.35, 0)
-      const origPR = gl.getPixelRatio()
-      const origWidth = gl.domElement.width
-      const origHeight = gl.domElement.height
-
-      // Bump pixel ratio for high-res capture — backing store density increases
-      // but canvas CSS size stays the same, so no visible layout changes.
-      gl.setPixelRatio(3)
 
       for (let i = 0; i < shots.length; i++) {
         if (onProgress) onProgress(i)
         const shot = shots[i]
 
-        // Move camera to shot position
         camera.position.set(shot.camX, shot.camY, shot.camZ)
         camera.lookAt(shot.targetX, shot.targetY, shot.targetZ)
         ;(camera as THREE.PerspectiveCamera).updateProjectionMatrix?.()
         camera.updateMatrixWorld(true)
 
-        // Let R3F's render loop run frames so reflector / shadows converge for the
-        // new camera angle. The reflector updates its FBO inside its own useFrame,
-        // so we MUST let R3F's loop render (not call gl.render imperatively, which
-        // would bypass the reflector's update and use a stale reflection texture).
+        // Let R3F's render loop run frames so the reflector FBO, shadow maps,
+        // and SSAO converge for the new camera angle. Must go through R3F's loop
+        // (not gl.render imperatively) or the reflector uses a stale texture.
         await waitFrames(6)
-        // Yield once more via rAF so the final render flushes to the backing store
-        // before toDataURL reads it.
         await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
-        // PNG is lossless — no JPEG banding on smooth gradient surfaces like walls
         results.push(gl.domElement.toDataURL('image/png'))
       }
 
-      // Restore pixel ratio and canvas size. setPixelRatio alone doesn't resize the
-      // backing store — we need to explicitly setSize to the pre-export dimensions
-      // at the original DPR, otherwise the WebGL context stays at the inflated size
-      // and performance tanks.
-      gl.setPixelRatio(origPR)
-      gl.setSize(origWidth / origPR, origHeight / origPR, false)
       camera.position.copy(origCamPos)
       if (orbitRef.current?.target) {
         orbitRef.current.target.copy(origTarget)
@@ -571,7 +560,15 @@ export default function Viewer3D() {
         {/* Post-processing: SSAO + tone mapping — keyed so clean unmount/remount on mode switch.
             Low quality: tone mapping only (no SSAO). Medium: SSAO low quality. High: SSAO medium. */}
         {!isWireframe ? (
-          <EffectComposer key={`${viewMode}-${qualityPreset}`}>
+          /* multisampling enables MSAA on the composer's internal render
+             target. Without it, Canvas's gl.antialias=true has no effect
+             because the scene renders into a non-multisampled offscreen
+             buffer, and everything comes out aliased — worst on rounded
+             geometry and high-frequency textures like the countertops. */
+          <EffectComposer
+            key={`${viewMode}-${qualityPreset}`}
+            multisampling={qualityPreset === 'high' ? 8 : 4}
+          >
             {qualityPreset !== 'low' && (
               <N8AO
                 aoRadius={qualityPreset === 'high' ? 0.8 : 0.5}

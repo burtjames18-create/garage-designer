@@ -43,7 +43,7 @@ function countertopOnWall(ct: Countertop, w: GarageWall) {
 
 export default function ExportModal({ onClose }: ExportModalProps) {
   const { customerName, siteAddress, consultantName,
-    walls, slatwallPanels, cabinets, countertops, floorPoints, floorSteps,
+    walls, slatwallPanels, stainlessBacksplashPanels, cabinets, countertops, floorPoints, floorSteps,
     overheadRacks, exportShots } = useGarageStore()
   const [captures, setCaptures] = useState<string[]>([])
   const [status, setStatus] = useState<'capturing' | 'ready' | 'no-shots'>('capturing')
@@ -56,9 +56,10 @@ export default function ExportModal({ onClose }: ExportModalProps) {
     month: '2-digit', day: '2-digit', year: '2-digit',
   })
 
-  // Walls that have at least one cabinet, slatwall panel, or countertop placed
+  // Walls that have at least one cabinet, slatwall panel, backsplash, or countertop placed
   const activeWalls = walls.filter(w =>
     slatwallPanels.some(p => p.wallId === w.id) ||
+    stainlessBacksplashPanels.some(p => p.wallId === w.id) ||
     cabinets.some(c => cabinetOnWall(c, w)) ||
     countertops.some(ct => countertopOnWall(ct, w))
   )
@@ -381,6 +382,7 @@ export default function ExportModal({ onClose }: ExportModalProps) {
                   floorPoints={floorPoints}
                   floorSteps={floorSteps}
                   slatwallPanels={slatwallPanels}
+                  stainlessBacksplashPanels={stainlessBacksplashPanels}
                   overheadRacks={overheadRacks}
                 />
               </div>
@@ -396,6 +398,7 @@ export default function ExportModal({ onClose }: ExportModalProps) {
                 <WallElevationBlueprint
                   wall={w}
                   slatwallPanels={slatwallPanels}
+                  stainlessBacksplashPanels={stainlessBacksplashPanels}
                   cabinets={cabinets}
                   countertops={countertops}
                   allWalls={walls}

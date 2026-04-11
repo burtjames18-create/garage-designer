@@ -2,12 +2,12 @@
 # Rebuilds the desktop app.asar whenever source files have changed since the last build.
 # Kills any running instance first, rebuilds, then relaunches.
 
-PROJ="c:/Users/james/Desktop/GL 3d render/garage-designer"
+PROJ="g:/My Drive/Apps and Projects/GL 3d render/garage-designer"
 ASAR="$PROJ/release/win-unpacked/resources/app.asar"
-ASAR_WIN="c:\\Users\\james\\Desktop\\GL 3d render\\garage-designer\\release\\win-unpacked\\resources\\app.asar"
-INSTALLED_ASAR="C:/Users/james/AppData/Local/Programs/Garage Living Designer/resources/app.asar"
-INSTALLED_ASAR_WIN="C:\\Users\\james\\AppData\\Local\\Programs\\Garage Living Designer\\resources\\app.asar"
-EXE_WIN="C:\\Users\\james\\AppData\\Local\\Programs\\Garage Living Designer\\Garage Living Designer.exe"
+ASAR_WIN="g:\\My Drive\\Apps and Projects\\GL 3d render\\garage-designer\\release\\win-unpacked\\resources\\app.asar"
+INSTALLED_ASAR="C:/Users/james/AppData/Local/Programs/garage-designer/resources/app.asar"
+INSTALLED_ASAR_WIN="C:\\Users\\james\\AppData\\Local\\Programs\\garage-designer\\resources\\app.asar"
+EXE_WIN="C:\\Users\\james\\AppData\\Local\\Programs\\garage-designer\\Garage Living Designer.exe"
 ASAR_BIN="$PROJ/node_modules/@electron/asar/bin/asar.mjs"
 
 # Only rebuild if any src file is newer than the current asar
@@ -21,12 +21,18 @@ echo "Source changed — rebuilding desktop app..."
 cmd.exe /c "taskkill /F /IM \"Garage Living Designer.exe\" 2>nul"
 sleep 2
 
-# Build the Vite bundle
-cd "$PROJ" && npm run build || { echo "Vite build failed"; exit 1; }
+# Build the Vite bundle into a local (non-Google-Drive) temp dir.
+# Google Drive locks files inside $PROJ/renderer/assets, causing vite's
+# prepare-out-dir step to fail with EINVAL on mkdir. Writing somewhere
+# local avoids the GDrive filesystem altogether.
+RENDER_OUT="C:/Users/james/AppData/Local/Temp/gl-renderer-build"
+rm -rf "$RENDER_OUT" 2>/dev/null
+cd "$PROJ" && npx vite build --outDir "$RENDER_OUT" --emptyOutDir || { echo "Vite build failed"; exit 1; }
 
-# Stage: dist/ + electron/ + package.json (mirrors what electron-builder packs)
+# Stage: renderer/ (vite output) + electron/ + package.json.
+# main.cjs loads '../renderer/index.html' so the staged folder name must be 'renderer'.
 STAGE=$(mktemp -d)
-cp -r "$PROJ/dist"     "$STAGE/"
+cp -r "$RENDER_OUT"    "$STAGE/renderer"
 cp -r "$PROJ/electron" "$STAGE/"
 cp    "$PROJ/package.json" "$STAGE/"
 

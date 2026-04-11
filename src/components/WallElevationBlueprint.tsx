@@ -1,7 +1,8 @@
-import type { GarageWall, SlatwallPanel, PlacedCabinet, Countertop, FloorStep } from '../store/garageStore'
+import type { GarageWall, SlatwallPanel, StainlessBacksplashPanel, PlacedCabinet, Countertop, FloorStep } from '../store/garageStore'
 import { COUNTERTOP_THICKNESS } from '../store/garageStore'
 import { slatwallColors } from '../data/slatwallColors'
 import { inchesToDisplay } from '../utils/measurements'
+import { cabinetFrontPaths } from './CabinetFrontSVG'
 
 // ── Geometry helpers ──────────────────────────────────────────────────────────
 function wallLen(w: GarageWall) { return Math.hypot(w.x2 - w.x1, w.z2 - w.z1) }
@@ -63,24 +64,9 @@ function getWallStubs(wall: GarageWall, allWalls: GarageWall[]) {
   return stubs
 }
 
-// Technica colors (cabinet body and doors share the same color)
-const TEC_COLORS: Record<string, string> = {
-  titanium: '#5a5650', 'ash-grey': '#d4cfc0', 'harbor-blue': '#283448',
-  evergreen: '#4d5e4c', sandstone: '#b09475', mica: '#6e6e6e',
-  graphite: '#3a3a3c', obsidian: '#1a1a1a', silver: '#b8bcc0',
-  'metallic-grey': '#989a9a', 'argento-blu': '#9aa8b0', ruby: '#b02020',
-}
-const SIG_SHELL: Record<string, string> = {
-  black: '#1a1a1c', granite: '#48484a',
-}
-const SIG_DOOR: Record<string, string> = {
-  black: '#1a1a1c', granite: '#48484a', 'harbor-blue': '#283448',
-  latte: '#b0a08a', 'midnight-blue': '#1e2d4d', red: '#b82020', silver: '#b0b4b8',
-}
-// Lighter color IDs (where dark line/handle accents look better)
-const LIGHT_COLORS = new Set(['ash-grey', 'sandstone', 'silver', 'metallic-grey', 'argento-blu', 'latte'])
 const COUNTERTOP_HEX: Record<string, string> = {
-  'butcher-block': '#b5813a', white: '#e8e8e4', black: '#2a2a2a', concrete: '#8a8a80',
+  'butcher-block': '#b5813a', 'stainless-steel': '#b0b4b8', 'black-stainless': '#484b50',
+  white: '#e8e8e4', black: '#2a2a2a', concrete: '#8a8a80',
 }
 
 /** Project a floor step onto a wall and return the along-wall range if adjacent */
@@ -116,6 +102,7 @@ function getStepWallProjection(
 interface Props {
   wall: GarageWall
   slatwallPanels: SlatwallPanel[]
+  stainlessBacksplashPanels?: StainlessBacksplashPanel[]
   cabinets: PlacedCabinet[]
   countertops: Countertop[]
   allWalls: GarageWall[]
@@ -124,7 +111,7 @@ interface Props {
 
 const PAD = 44
 
-export default function WallElevationBlueprint({ wall, slatwallPanels, cabinets, countertops, allWalls, floorSteps = [] }: Props) {
+export default function WallElevationBlueprint({ wall, slatwallPanels, stainlessBacksplashPanels = [], cabinets, countertops, allWalls, floorSteps = [] }: Props) {
   const wLen = wallLen(wall)
   const wH = wall.height
   const bbH = wall.baseboard ? wall.baseboardHeight : 0
@@ -134,6 +121,7 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, cabinets,
   const toY = (h: number) => PAD + wH - h
 
   const wallPanels = slatwallPanels.filter(p => p.wallId === wall.id && (p.side ?? 'interior') === 'interior')
+  const wallBacksplashes = stainlessBacksplashPanels.filter(p => p.wallId === wall.id && (p.side ?? 'interior') === 'interior')
   const wallCabinets = cabinets.filter(c => isCabinetOnWall(c, wall))
   const wallCountertops = countertops.filter(ct => isCountertopOnWall(ct, wall))
   const wallStubs = getWallStubs(wall, allWalls)
@@ -362,102 +350,34 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, cabinets,
           )
         })}
 
-        {/* Cabinets — detailed elevation view */}
+        {/* Stainless steel backsplash panels — thin plate, brushed silver */}
+        {wallBacksplashes.map(panel => {
+          const vizStart = Math.abs(panel.alongStart - leftEdge) < 2 ? 0 : panel.alongStart
+          const vizEnd = Math.abs(panel.alongEnd - rightEdge) < 2 ? wLen : panel.alongEnd
+          return (
+            <rect key={panel.id}
+              x={toX(vizStart)} y={toY(panel.yTop)}
+              width={vizEnd - vizStart} height={panel.yTop - panel.yBottom}
+              fill="#b8bcc0" stroke="rgba(0,0,0,0.4)" strokeWidth={0.4} />
+          )
+        })}
+
+        {/* Cabinets — rendered via the shared cabinetFrontPaths function so
+            the blueprint matches the 3D render and the left-panel thumbnails
+            exactly (same door/drawer/handle geometry and colors). */}
         {wallCabinets.map(cab => {
           const { along } = projectCabinet(cab, wall)
           const cx = toX(along - cab.w / 2)
           const cy = toY(cab.y + cab.h)
-          const isSig = cab.line === 'signature'
-          const bodyHex = isSig
-            ? (SIG_SHELL[cab.shellColor ?? 'black'] ?? SIG_SHELL.black)
-            : (TEC_COLORS[cab.color] ?? TEC_COLORS.titanium)
-          const isLight = LIGHT_COLORS.has(cab.color)
-          const lineColor = isLight ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.25)'
-          const handleColor = isLight ? '#999' : '#aab'
-          const hasToeKick = false
-          const tkH = 0
-          const fr = 1.5  // frame rail width (inches)
-          const drawerCount = cab.drawers ?? 0
-
-          // Door area: above toe kick and below drawers
-          const doorY0 = cab.y + tkH + fr
-          const fullTop = cab.y + cab.h - fr
-          const drawerH6 = 6
-          const doorY1 = drawerCount > 0 && cab.doors > 0
-            ? fullTop - drawerCount * drawerH6
-            : fullTop
-          const doorH = Math.max(0, doorY1 - doorY0)
-
-          // Drawer area
-          const drawerAreaY0 = cab.doors === 0 ? doorY0 : fullTop - drawerCount * drawerH6
-          const drawerAreaH = cab.doors === 0 ? fullTop - doorY0 : drawerCount * drawerH6
-
-          // Door width
-          const doorW1 = cab.w - 2 * fr         // single door width
-          const doorW2 = (cab.w - 2 * fr - 1) / 2  // double door width (1" center gap)
-
           return (
-            <g key={cab.id}>
-              {/* Body fill */}
-              <rect x={cx} y={cy} width={cab.w} height={cab.h} fill={bodyHex} stroke="#222" strokeWidth={0.5} />
-
-              {/* Toe kick recess */}
-              {hasToeKick && (
-                <rect x={cx + 3} y={toY(cab.y + tkH)} width={cab.w - 6} height={tkH}
-                  fill="rgba(0,0,0,0.3)" stroke="none" />
-              )}
-
-              {/* Door panels */}
-              {cab.doors === 1 && doorH > 0 && (
-                <g>
-                  <rect x={cx + fr} y={toY(doorY1)} width={doorW1} height={doorH}
-                    fill="none" stroke={lineColor} strokeWidth={0.5} />
-                  {/* Handle — vertical bar, right side */}
-                  <rect x={cx + cab.w - fr - 3} y={toY((doorY0 + doorY1) / 2 + 4)}
-                    width={0.8} height={8} fill={handleColor} rx={0.3} />
-                </g>
-              )}
-              {cab.doors === 2 && doorH > 0 && (
-                <g>
-                  {/* Left door */}
-                  <rect x={cx + fr} y={toY(doorY1)} width={doorW2} height={doorH}
-                    fill="none" stroke={lineColor} strokeWidth={0.5} />
-                  {/* Left handle — inner edge */}
-                  <rect x={cx + fr + doorW2 - 3} y={toY((doorY0 + doorY1) / 2 + 4)}
-                    width={0.8} height={8} fill={handleColor} rx={0.3} />
-                  {/* Right door */}
-                  <rect x={cx + fr + doorW2 + 1} y={toY(doorY1)} width={doorW2} height={doorH}
-                    fill="none" stroke={lineColor} strokeWidth={0.5} />
-                  {/* Right handle — inner edge */}
-                  <rect x={cx + fr + doorW2 + 1 + 2.2} y={toY((doorY0 + doorY1) / 2 + 4)}
-                    width={0.8} height={8} fill={handleColor} rx={0.3} />
-                </g>
-              )}
-
-              {/* Drawer fronts */}
-              {drawerCount > 0 && (() => {
-                const elems: JSX.Element[] = []
-                const singleH = drawerAreaH / drawerCount
-                const gap = 0.5
-                const drawerW = cab.w - 2 * fr
-                const pullW = cab.doors === 0 ? 3.5 : 5
-                for (let i = 0; i < drawerCount; i++) {
-                  const dy0 = drawerAreaY0 + i * singleH
-                  const fH = singleH - gap
-                  const fY = toY(dy0 + fH)
-                  elems.push(
-                    <g key={`dr${i}`}>
-                      {/* Drawer front panel */}
-                      <rect x={cx + fr} y={fY} width={drawerW} height={fH}
-                        fill="none" stroke={lineColor} strokeWidth={0.5} />
-                      {/* Horizontal pull handle — centered */}
-                      <rect x={cx + cab.w / 2 - pullW / 2} y={fY + fH / 2 - 0.4}
-                        width={pullW} height={0.8} fill={handleColor} rx={0.3} />
-                    </g>
-                  )
-                }
-                return elems
-              })()}
+            <g key={cab.id} transform={`translate(${cx}, ${cy})`}>
+              {cabinetFrontPaths({
+                w: cab.w, h: cab.h,
+                doors: cab.doors, drawers: cab.drawers,
+                style: cab.style, line: cab.line ?? 'technica',
+                color: cab.color, shellColor: cab.shellColor,
+                handleColor: cab.handleColor, handleSide: cab.handleSide,
+              })}
             </g>
           )
         })}

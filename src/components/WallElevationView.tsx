@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react'
 import { useGarageStore, CABINET_PRESETS, COUNTERTOP_THICKNESS, COUNTERTOP_DEPTH } from '../store/garageStore'
-import type { GarageWall, PlacedCabinet, SlatwallPanel, Countertop, FloorStep } from '../store/garageStore'
+import type { GarageWall, PlacedCabinet, SlatwallPanel, StainlessBacksplashPanel, Countertop, FloorStep } from '../store/garageStore'
 import { slatwallColors } from '../data/slatwallColors'
 import { snapToGrid, inchesToDisplay } from '../utils/measurements'
 import { cabinetFrontPaths } from './CabinetFrontSVG'
@@ -117,7 +117,7 @@ function getStepWallProjection(
 // ─── Drag state ───────────────────────────────────────────────────────────────
 
 interface SvgDrag {
-  type: 'panel-body' | 'panel-corner' | 'cabinet' | 'countertop'
+  type: 'panel-body' | 'panel-corner' | 'backsplash-body' | 'backsplash-corner' | 'cabinet' | 'countertop'
   id: string
   corner?: 0 | 1 | 2 | 3
   moved: boolean  // becomes true once pointer moves past click threshold
@@ -141,16 +141,19 @@ interface SvgDrag {
 
 // ─── Display colors ───────────────────────────────────────────────────────────
 const COUNTERTOP_HEX: Record<string, string> = {
-  'butcher-block': '#b5813a', 'stainless-steel': '#b0b4b8', white: '#e8e8e4', black: '#2a2a2a', concrete: '#8a8a80',
+  'butcher-block': '#b5813a', 'stainless-steel': '#b0b4b8', 'black-stainless': '#484b50',
+  white: '#e8e8e4', black: '#2a2a2a', concrete: '#8a8a80',
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function WallElevationView() {
   const {
-    walls, slatwallPanels, cabinets, countertops, floorSteps,
+    walls, slatwallPanels, stainlessBacksplashPanels, cabinets, countertops, floorSteps,
     elevationWallIndex, setElevationWallIndex,
     updateSlatwallPanel, selectSlatwallPanel, selectedSlatwallPanelId, addSlatwallPanel, deleteSlatwallPanel,
+    updateStainlessBacksplashPanel, selectStainlessBacksplashPanel, selectedStainlessBacksplashPanelId,
+    addStainlessBacksplashPanel, deleteStainlessBacksplashPanel,
     updateCabinet, selectCabinet, selectedCabinetId, addCabinet, deleteCabinet,
     updateCountertop, selectCountertop, selectedCountertopId, addCountertop, deleteCountertop,
   } = useGarageStore()
@@ -189,6 +192,7 @@ export default function WallElevationView() {
   const fromY = (svgY: number) => wH - (svgY - PAD)
 
   const wallPanels = slatwallPanels.filter(p => p.wallId === wall.id && (p.side ?? 'interior') === wallSide)
+  const wallBacksplashes = stainlessBacksplashPanels.filter(p => p.wallId === wall.id && (p.side ?? 'interior') === wallSide)
   const wallCabinets = cabinets.filter(c => isCabinetOnWall(c, wall, wallSide))
   const wallCountertops = countertops.filter(ct => isCountertopOnWall(ct, wall))
   const [dx, dz] = wallDir(wall)
@@ -255,6 +259,15 @@ export default function WallElevationView() {
       snaps.push({ target: p.alongEnd - halfW,   forEdge: 'right' })  // align right edges
     }
 
+    // Stainless backsplash panels — cross-snap with slatwall
+    for (const p of wallBacksplashes) {
+      if (p.id === selfId) continue
+      snaps.push({ target: p.alongEnd + halfW,   forEdge: 'left' })
+      snaps.push({ target: p.alongStart - halfW, forEdge: 'right' })
+      snaps.push({ target: p.alongStart + halfW, forEdge: 'left' })
+      snaps.push({ target: p.alongEnd - halfW,   forEdge: 'right' })
+    }
+
     // Cabinets
     for (const cab of wallCabinets) {
       if (cab.id === selfId) continue
@@ -291,6 +304,13 @@ export default function WallElevationView() {
       snaps.push({ target: bbH, forEdge: 'top' })
     }
     for (const p of wallPanels) {
+      if (p.id === selfId) continue
+      snaps.push({ target: p.yTop,    forEdge: 'bottom' })
+      snaps.push({ target: p.yBottom, forEdge: 'top' })
+      snaps.push({ target: p.yBottom, forEdge: 'bottom' })
+      snaps.push({ target: p.yTop,    forEdge: 'top' })
+    }
+    for (const p of wallBacksplashes) {
       if (p.id === selfId) continue
       snaps.push({ target: p.yTop,    forEdge: 'bottom' })
       snaps.push({ target: p.yBottom, forEdge: 'top' })
@@ -439,6 +459,48 @@ export default function WallElevationView() {
     }
   }
 
+  const onBacksplashDown = (e: React.MouseEvent, panel: StainlessBacksplashPanel) => {
+    e.stopPropagation()
+
+    // Ctrl+click = duplicate the backsplash panel
+    if (e.ctrlKey || e.metaKey) {
+      addStainlessBacksplashPanel(wall.id, wallSide)
+      const panels = useGarageStore.getState().stainlessBacksplashPanels
+      const newPanel = panels[panels.length - 1]
+      if (newPanel) {
+        updateStainlessBacksplashPanel(newPanel.id, {
+          alongStart: panel.alongStart, alongEnd: panel.alongEnd,
+          yBottom: panel.yBottom + (panel.yTop - panel.yBottom) + 2,
+          yTop: panel.yTop + (panel.yTop - panel.yBottom) + 2,
+        })
+        selectStainlessBacksplashPanel(newPanel.id)
+      }
+      return
+    }
+
+    const pt = getSvgPt(e)
+    if (!pt) return
+    dragRef.current = {
+      type: 'backsplash-body', id: panel.id, moved: false,
+      startSvgX: pt.x, startSvgY: pt.y,
+      startAlongStart: panel.alongStart, startAlongEnd: panel.alongEnd,
+      startYBottom: panel.yBottom, startYTop: panel.yTop,
+    }
+  }
+
+  const onBacksplashCornerDown = (e: React.MouseEvent, panel: StainlessBacksplashPanel, corner: 0 | 1 | 2 | 3) => {
+    e.stopPropagation()
+    selectStainlessBacksplashPanel(panel.id)
+    const pt = getSvgPt(e)
+    if (!pt) return
+    dragRef.current = {
+      type: 'backsplash-corner', id: panel.id, corner, moved: false,
+      startSvgX: pt.x, startSvgY: pt.y,
+      startAlongStart: panel.alongStart, startAlongEnd: panel.alongEnd,
+      startYBottom: panel.yBottom, startYTop: panel.yTop,
+    }
+  }
+
   const onCabDown = (e: React.MouseEvent, cab: PlacedCabinet) => {
     e.stopPropagation()
 
@@ -561,6 +623,55 @@ export default function WallElevationView() {
       updateSlatwallPanel(drag.id, { alongStart: newStart, alongEnd: newEnd, yBottom: newBottom, yTop: newTop })
     }
 
+    // ── Backsplash panel body drag ─────────────────────────────────────────
+    if (drag.type === 'backsplash-body') {
+      const panel = stainlessBacksplashPanels.find(p => p.id === drag.id)
+      if (!panel) return
+      const panelW = drag.startAlongEnd! - drag.startAlongStart!
+      const panelH = drag.startYTop! - drag.startYBottom!
+      const rawCenter = drag.startAlongStart! + panelW / 2 + dAlong
+      const rawBottom = drag.startYBottom! + dHeight
+
+      const newCenter = findBestAlong(rawCenter, panelW / 2, panel.id)
+      const newStart = newCenter - panelW / 2
+      const newBottom = Math.max(0, Math.min(findBestY(rawBottom, panelH, panel.id), wH - panelH))
+
+      updateStainlessBacksplashPanel(drag.id, {
+        alongStart: newStart, alongEnd: newStart + panelW,
+        yBottom: newBottom, yTop: newBottom + panelH,
+      })
+    }
+
+    // ── Backsplash panel corner drag (resize) ──────────────────────────────
+    if (drag.type === 'backsplash-corner') {
+      const panel = stainlessBacksplashPanels.find(p => p.id === drag.id)
+      if (!panel) return
+      let newStart = drag.startAlongStart!
+      let newEnd = drag.startAlongEnd!
+      let newBottom = drag.startYBottom!
+      let newTop = drag.startYTop!
+      const c = drag.corner!
+      const { leftEdge, rightEdge } = getWallEdges()
+
+      if (c === 0 || c === 3) {
+        newStart = findBestEdge(drag.startAlongStart! + dAlong, panel.id, 'left')
+        newStart = Math.max(leftEdge, Math.min(newStart, newEnd - 1))
+      }
+      if (c === 1 || c === 2) {
+        newEnd = findBestEdge(drag.startAlongEnd! + dAlong, panel.id, 'right')
+        newEnd = Math.max(newStart + 1, Math.min(newEnd, rightEdge))
+      }
+      if (c === 0 || c === 1) {
+        newTop = findBestYEdge(drag.startYTop! + dHeight, panel.id, 'top')
+        newTop = Math.min(wH, Math.max(newTop, newBottom + 1))
+      }
+      if (c === 2 || c === 3) {
+        newBottom = findBestYEdge(drag.startYBottom! + dHeight, panel.id, 'bottom')
+        newBottom = Math.max(0, Math.min(newBottom, newTop - 1))
+      }
+      updateStainlessBacksplashPanel(drag.id, { alongStart: newStart, alongEnd: newEnd, yBottom: newBottom, yTop: newTop })
+    }
+
     // ── Cabinet body drag ──────────────────────────────────────────────────
     if (drag.type === 'cabinet') {
       const cab = cabinets.find(c => c.id === drag.id)
@@ -631,6 +742,7 @@ export default function WallElevationView() {
     if (drag && !drag.moved) {
       // Pure click (no drag) — open the item's settings by selecting it
       if (drag.type === 'panel-body' || drag.type === 'panel-corner') selectSlatwallPanel(drag.id)
+      else if (drag.type === 'backsplash-body' || drag.type === 'backsplash-corner') selectStainlessBacksplashPanel(drag.id)
       else if (drag.type === 'cabinet') selectCabinet(drag.id)
       else if (drag.type === 'countertop') selectCountertop(drag.id)
     }
@@ -641,12 +753,12 @@ export default function WallElevationView() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        selectSlatwallPanel(null); selectCabinet(null); selectCountertop(null)
+        selectSlatwallPanel(null); selectStainlessBacksplashPanel(null); selectCabinet(null); selectCountertop(null)
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [selectSlatwallPanel, selectCabinet, selectCountertop])
+  }, [selectSlatwallPanel, selectStainlessBacksplashPanel, selectCabinet, selectCountertop])
 
   // ── Add cabinet to this wall ───────────────────────────────────────────────
 
@@ -697,9 +809,13 @@ export default function WallElevationView() {
       <div className="wall-elev-controls">
         <div className="wall-elev-actions">
           <button className="wall-elev-btn" onClick={() => addSlatwallPanel(wall.id, wallSide)}>+ Slatwall</button>
+          <button className="wall-elev-btn" onClick={() => addStainlessBacksplashPanel(wall.id, wallSide)}>+ Backsplash</button>
           <button className="wall-elev-btn" onClick={addCountertopToWall}>+ Countertop</button>
           {selectedSlatwallPanelId && wallPanels.some(p => p.id === selectedSlatwallPanelId) && (
             <button className="wall-elev-del" onClick={() => deleteSlatwallPanel(selectedSlatwallPanelId)}>✕ Panel</button>
+          )}
+          {selectedStainlessBacksplashPanelId && wallBacksplashes.some(p => p.id === selectedStainlessBacksplashPanelId) && (
+            <button className="wall-elev-del" onClick={() => deleteStainlessBacksplashPanel(selectedStainlessBacksplashPanelId)}>✕ Backsplash</button>
           )}
           {selectedCabinetId && wallCabinets.some(c => c.id === selectedCabinetId) && (
             <button className="wall-elev-del" onClick={() => deleteCabinet(selectedCabinetId)}>✕ Cabinet</button>
@@ -795,6 +911,13 @@ export default function WallElevationView() {
                 return <rect x={cl} y={PAD} width={cr - cl} height={wH} />
               })()}
             </clipPath>
+            <pattern id="backsplash-diamondplate" patternUnits="userSpaceOnUse" width={12} height={12}>
+              <image
+                href={`${import.meta.env.BASE_URL}assets/textures/metal/diamondplate/color.jpg`}
+                x={0} y={0} width={12} height={12}
+                preserveAspectRatio="xMidYMid slice"
+              />
+            </pattern>
           </defs>
 
           {/* Outer background */}
@@ -964,6 +1087,43 @@ export default function WallElevationView() {
                         fill="#cc22aa" stroke="#fff" strokeWidth={0.5}
                         style={{ cursor: 'crosshair' }}
                         onMouseDown={e => onCornerDown(e, panel, c)}
+                        onClick={e => e.stopPropagation()} />
+                    ))}
+                  </>)}
+                </g>
+              )
+            })}
+
+            {/* Stainless steel backsplash panels */}
+            {wallBacksplashes.map(panel => {
+              const isSel = panel.id === selectedStainlessBacksplashPanelId
+              const { leftEdge, rightEdge } = getWallEdges()
+              const vizStart = Math.abs(panel.alongStart - leftEdge) < 2 ? 0 : panel.alongStart
+              const vizEnd = Math.abs(panel.alongEnd - rightEdge) < 2 ? wLen : panel.alongEnd
+              const px = toX(vizStart), py = toY(panel.yTop)
+              const pw = vizEnd - vizStart
+              const ph = panel.yTop - panel.yBottom
+              return (
+                <g key={panel.id}>
+                  <rect x={px} y={py} width={pw} height={ph}
+                    fill={(panel.texture ?? 'stainless') === 'diamondplate' ? 'url(#backsplash-diamondplate)' : '#b8bcc0'}
+                    stroke="rgba(0,0,0,0.5)"
+                    strokeWidth={0.4}
+                    style={{ cursor: 'move' }}
+                    onMouseDown={e => onBacksplashDown(e, panel)}
+                    onClick={e => e.stopPropagation()} />
+                  {isSel && (<>
+                    {([
+                      [panel.alongStart, panel.yTop,    0],
+                      [panel.alongEnd,   panel.yTop,    1],
+                      [panel.alongEnd,   panel.yBottom, 2],
+                      [panel.alongStart, panel.yBottom, 3],
+                    ] as [number, number, 0 | 1 | 2 | 3][]).map(([a, h, c]) => (
+                      <circle key={c}
+                        cx={toX(a)} cy={toY(h)} r={HANDLE_R}
+                        fill="#22aaee" stroke="#fff" strokeWidth={0.5}
+                        style={{ cursor: 'crosshair' }}
+                        onMouseDown={e => onBacksplashCornerDown(e, panel, c)}
                         onClick={e => e.stopPropagation()} />
                     ))}
                   </>)}

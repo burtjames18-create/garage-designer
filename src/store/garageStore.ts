@@ -126,6 +126,11 @@ export interface PlacedCabinet {
   locked?: boolean
   sku?: string
   price?: number
+  // Under-cabinet puck spotlight (upper cabinets only). Points straight down
+  // from the center of the bottom of the cabinet. underLightAngle is the
+  // spotlight cone half-angle in radians.
+  underLight?: boolean
+  underLightAngle?: number
 }
 
 export const COUNTERTOP_DEPTH = 25      // inches, fixed
@@ -212,6 +217,21 @@ export interface SlatwallPanel {
   yBottom: number     // inches from floor (bottom edge)
   yTop: number        // inches from floor (top edge)
   color: string       // slatwall color id (see slatwallColors.ts)
+}
+
+/** Texture finish options for the metal backsplash panel. */
+export type BacksplashTexture = 'stainless' | 'diamondplate'
+
+/** A metal backsplash panel — 1/8" thick, mounted like slatwall. */
+export interface StainlessBacksplashPanel {
+  id: string
+  wallId: string
+  side: 'interior' | 'exterior'
+  alongStart: number  // inches from wall start
+  alongEnd: number    // inches from wall start
+  yBottom: number     // inches from floor
+  yTop: number        // inches from floor
+  texture?: BacksplashTexture  // defaults to 'stainless' when omitted
 }
 
 /** A raised floor step/platform — sits on the floor surface, uses floor texture. */
@@ -348,6 +368,8 @@ interface GarageStore {
   // Slatwall panels
   slatwallPanels: SlatwallPanel[]
   selectedSlatwallPanelId: string | null
+  stainlessBacksplashPanels: StainlessBacksplashPanel[]
+  selectedStainlessBacksplashPanelId: string | null
 
   // Floor steps
   floorSteps: FloorStep[]
@@ -423,6 +445,11 @@ interface GarageStore {
   updateSlatwallPanel: (id: string, changes: Partial<SlatwallPanel>) => void
   deleteSlatwallPanel: (id: string) => void
   selectSlatwallPanel: (id: string | null) => void
+
+  addStainlessBacksplashPanel: (wallId: string, side?: 'interior' | 'exterior') => void
+  updateStainlessBacksplashPanel: (id: string, changes: Partial<StainlessBacksplashPanel>) => void
+  deleteStainlessBacksplashPanel: (id: string) => void
+  selectStainlessBacksplashPanel: (id: string | null) => void
 
   addFloorStep: () => void
   updateFloorStep: (id: string, changes: Partial<FloorStep>) => void
@@ -549,7 +576,7 @@ function buildPuckGrid(wFt: number, dFt: number): CeilingLight[] {
         label: `Puck ${lights.length + 1}`,
         kind: 'puck',
         x, z, rotY: 0,
-        color: '#f0f4ff', intensity: 5.0, enabled: true,
+        color: '#ffffff', intensity: 5.0, enabled: true,
       })
     }
   }
@@ -572,6 +599,8 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
 
   slatwallPanels: [],
   selectedSlatwallPanelId: null,
+  stainlessBacksplashPanels: [],
+  selectedStainlessBacksplashPanelId: null,
 
   floorSteps: [],
   selectedFloorStepId: null,
@@ -701,7 +730,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       selectedWallId: s.selectedWallId === id ? null : s.selectedWallId,
     })),
 
-  selectWall: (id) => set({ selectedWallId: id, selectedShapeId: null, selectedSlatwallPanelId: null, selectedCabinetId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'walls' as SidebarTab } : {}) }),
+  selectWall: (id) => set({ selectedWallId: id, selectedShapeId: null, selectedSlatwallPanelId: null, selectedStainlessBacksplashPanelId: null, selectedCabinetId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'walls' as SidebarTab } : {}) }),
 
   duplicateWall: (id) => {
     const wall = get().walls.find(w => w.id === id)
@@ -782,7 +811,42 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
 
   selectSlatwallPanel: (id) => set(s => {
     const panel = id ? s.slatwallPanels.find(p => p.id === id) : null
-    return { selectedSlatwallPanelId: id, selectedWallId: panel?.wallId ?? s.selectedWallId, selectedShapeId: null, selectedCabinetId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'walls' as SidebarTab } : {}) }
+    return { selectedSlatwallPanelId: id, selectedStainlessBacksplashPanelId: null, selectedWallId: panel?.wallId ?? s.selectedWallId, selectedShapeId: null, selectedCabinetId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'walls' as SidebarTab } : {}) }
+  }),
+
+  addStainlessBacksplashPanel: (wallId, side = 'interior') => {
+    const wall = get().walls.find(w => w.id === wallId)
+    if (!wall) return
+    const trim = wall.thickness / 2
+    const yBottom = wall.baseboard ? wall.baseboardHeight : 0
+    const panel: StainlessBacksplashPanel = {
+      id: uid(), wallId,
+      side,
+      alongStart: trim,
+      alongEnd: trim + 12,    // 1ft wide default
+      yBottom,
+      yTop: yBottom + 12,     // 1ft tall default
+      texture: 'stainless',
+    }
+    set(s => ({
+      stainlessBacksplashPanels: [...s.stainlessBacksplashPanels, panel],
+      selectedStainlessBacksplashPanelId: panel.id,
+      selectedSlatwallPanelId: null,
+    }))
+  },
+
+  updateStainlessBacksplashPanel: (id, changes) =>
+    set(s => ({ stainlessBacksplashPanels: s.stainlessBacksplashPanels.map(p => p.id === id ? { ...p, ...changes } : p) })),
+
+  deleteStainlessBacksplashPanel: (id) =>
+    set(s => ({
+      stainlessBacksplashPanels: s.stainlessBacksplashPanels.filter(p => p.id !== id),
+      selectedStainlessBacksplashPanelId: s.selectedStainlessBacksplashPanelId === id ? null : s.selectedStainlessBacksplashPanelId,
+    })),
+
+  selectStainlessBacksplashPanel: (id) => set(s => {
+    const panel = id ? s.stainlessBacksplashPanels.find(p => p.id === id) : null
+    return { selectedStainlessBacksplashPanelId: id, selectedSlatwallPanelId: null, selectedWallId: panel?.wallId ?? s.selectedWallId, selectedShapeId: null, selectedCabinetId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'walls' as SidebarTab } : {}) }
   }),
 
   addFloorStep: () => {
@@ -812,6 +876,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
     selectedFloorStepId: id,
     selectedWallId: null,
     selectedSlatwallPanelId: null,
+    selectedStainlessBacksplashPanelId: null,
     selectedShapeId: null,
     selectedCabinetId: null,
     selectedCeilingLightId: null,
@@ -844,7 +909,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       selectedShapeId: s.selectedShapeId === id ? null : s.selectedShapeId,
     })),
 
-  selectShape: (id) => set({ selectedShapeId: id, selectedWallId: null, selectedSlatwallPanelId: null, selectedCabinetId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'shapes' as SidebarTab } : {}) }),
+  selectShape: (id) => set({ selectedShapeId: id, selectedWallId: null, selectedSlatwallPanelId: null, selectedStainlessBacksplashPanelId: null, selectedCabinetId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'shapes' as SidebarTab } : {}) }),
 
   setActiveTab: (tab) => set({ activeTab: tab }),
 
@@ -860,9 +925,11 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
   ),
   setCameraAngle: (angle) => set({ cameraAngle: angle }),
   setElevationWallIndex: (i) => set({ elevationWallIndex: i }),
-  setQualityPreset: (preset) => set(preset === 'high'
-    ? { qualityPreset: preset, floorReflection: 0.9, envReflection: 0.25, bounceDistance: 48 }
-    : { qualityPreset: preset }),
+  setQualityPreset: (preset) => set(
+    preset === 'high'   ? { qualityPreset: preset, floorReflection: 0.9, envReflection: 0.15, bounceDistance: 48 } :
+    preset === 'medium' ? { qualityPreset: preset, floorReflection: 0.4, envReflection: 0.12, bounceDistance: 36 } :
+                          { qualityPreset: preset, floorReflection: 0.1, envReflection: 0.05, bounceDistance: 30 }
+  ),
   setIsExporting: (v) => set({ isExporting: v }),
   setIsDraggingWall: (v) => set({ isDraggingWall: v }),
   beginDrag: () => set(s => { const n = s.dragCount + 1; return { dragCount: n, isDraggingWall: n > 0 } }),
@@ -881,8 +948,8 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       w: preset.w, d: preset.d, h: preset.h,
       x: spawnX, y: defaultY, z: spawnZ,
       rotY: spawnRotY,
-      color: preset.line === 'signature' ? 'black' : 'mica',
-      shellColor: preset.line === 'signature' ? 'black' : undefined,
+      color: preset.line === 'signature' ? 'granite' : 'mica',
+      shellColor: preset.line === 'signature' ? 'granite' : undefined,
       sku: preset.sku,
       price: preset.price,
     }
@@ -898,7 +965,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       selectedCabinetId: s.selectedCabinetId === id ? null : s.selectedCabinetId,
     })),
 
-  selectCabinet: (id) => set({ selectedCabinetId: id, selectedWallId: null, selectedShapeId: null, selectedSlatwallPanelId: null, selectedCountertopId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'cabinets' as SidebarTab } : {}) }),
+  selectCabinet: (id) => set({ selectedCabinetId: id, selectedWallId: null, selectedShapeId: null, selectedSlatwallPanelId: null, selectedStainlessBacksplashPanelId: null, selectedCountertopId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'cabinets' as SidebarTab } : {}) }),
 
   addCountertop: () => {
     const { garageDepth, walls } = get()
@@ -920,7 +987,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       countertops: s.countertops.filter(c => c.id !== id),
       selectedCountertopId: s.selectedCountertopId === id ? null : s.selectedCountertopId,
     })),
-  selectCountertop: (id) => set({ selectedCountertopId: id, selectedWallId: null, selectedShapeId: null, selectedSlatwallPanelId: null, selectedCabinetId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'cabinets' as SidebarTab } : {}) }),
+  selectCountertop: (id) => set({ selectedCountertopId: id, selectedWallId: null, selectedShapeId: null, selectedSlatwallPanelId: null, selectedStainlessBacksplashPanelId: null, selectedCabinetId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'cabinets' as SidebarTab } : {}) }),
 
   slatwallAccessories: [],
   selectedAccessoryId: null,
@@ -973,7 +1040,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       overheadRacks: s.overheadRacks.filter(r => r.id !== id),
       selectedRackId: s.selectedRackId === id ? null : s.selectedRackId,
     })),
-  selectRack: (id) => set({ selectedRackId: id, selectedWallId: null, selectedShapeId: null, selectedSlatwallPanelId: null, selectedCabinetId: null, selectedCountertopId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, ...(id !== null ? { floorSelected: false, activeTab: 'overhead' as SidebarTab } : {}) }),
+  selectRack: (id) => set({ selectedRackId: id, selectedWallId: null, selectedShapeId: null, selectedSlatwallPanelId: null, selectedStainlessBacksplashPanelId: null, selectedCabinetId: null, selectedCountertopId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, ...(id !== null ? { floorSelected: false, activeTab: 'overhead' as SidebarTab } : {}) }),
 
   addItem: (item) => set(s => ({ items: [...s.items, item] })),
   removeItem: (id) => set(s => ({ items: s.items.filter(i => i.id !== id) })),
@@ -988,7 +1055,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       label: kind === 'puck' ? 'Puck Light' : 'LED Bar',
       kind,
       x: 0, z: 0, rotY: 0,
-      color: kind === 'puck' ? '#f0f4ff' : '#fff8f0',
+      color: '#ffffff',   // Day color (matches LightingPanel's DAYLIGHT preset)
       intensity: kind === 'puck' ? 5.0 : 1.5,
       enabled: true,
     }
@@ -1001,7 +1068,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       ceilingLights: s.ceilingLights.filter(l => l.id !== id),
       selectedCeilingLightId: s.selectedCeilingLightId === id ? null : s.selectedCeilingLightId,
     })),
-  selectCeilingLight: (id) => set({ selectedCeilingLightId: id, selectedWallId: null, selectedShapeId: null, selectedSlatwallPanelId: null, selectedCabinetId: null, selectedCountertopId: null, selectedFloorStepId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'lighting' as SidebarTab } : {}) }),
+  selectCeilingLight: (id) => set({ selectedCeilingLightId: id, selectedWallId: null, selectedShapeId: null, selectedSlatwallPanelId: null, selectedStainlessBacksplashPanelId: null, selectedCabinetId: null, selectedCountertopId: null, selectedFloorStepId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'lighting' as SidebarTab } : {}) }),
 
   autoLighting: () => {
     const { garageWidth, garageDepth, ceilingHeight } = get()
@@ -1113,6 +1180,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       floorPoints: s.floorPoints,
       walls: s.walls,
       slatwallPanels: s.slatwallPanels,
+      stainlessBacksplashPanels: s.stainlessBacksplashPanels,
       floorSteps: s.floorSteps,
       shapes: s.shapes,
       cabinets: s.cabinets,
@@ -1163,6 +1231,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       floorPoints:      (d.floorPoints as FloorPoint[]) ?? [],
       walls:            ((d.walls as GarageWall[]) ?? []).map(w => ({ ...w, visible: w.visible ?? true, stemWall: w.stemWall ?? false, stemWallHeight: w.stemWallHeight ?? 6, stemWallTexture: w.stemWallTexture ?? 'concrete' as const })),
       slatwallPanels:   (d.slatwallPanels as SlatwallPanel[]) ?? [],
+      stainlessBacksplashPanels: (d.stainlessBacksplashPanels as StainlessBacksplashPanel[]) ?? [],
       floorSteps:       (d.floorSteps as FloorStep[])   ?? [],
       shapes:           (d.shapes as GarageShape[])     ?? [],
       cabinets:         ((d.cabinets as PlacedCabinet[]) ?? []).map(c => ({ ...c, line: c.line ?? 'technica' as const })),
@@ -1195,6 +1264,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       // reset selection state
       selectedWallId: null,
       selectedSlatwallPanelId: null,
+      selectedStainlessBacksplashPanelId: null,
       selectedFloorStepId: null,
       selectedShapeId: null,
       selectedCabinetId: null,

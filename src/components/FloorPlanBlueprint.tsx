@@ -1,5 +1,5 @@
 import { useRef, useCallback, useState } from 'react'
-import type { GarageWall, PlacedCabinet, Countertop, FloorPoint, FloorStep, SlatwallPanel, OverheadRack } from '../store/garageStore'
+import type { GarageWall, PlacedCabinet, Countertop, FloorPoint, FloorStep, SlatwallPanel, StainlessBacksplashPanel, OverheadRack } from '../store/garageStore'
 import { COUNTERTOP_DEPTH, useGarageStore } from '../store/garageStore'
 import { inchesToDisplay, snapToGrid, snapRackToWalls, type RackSnapResult } from '../utils/measurements'
 
@@ -23,13 +23,14 @@ interface Props {
   floorPoints: FloorPoint[]
   floorSteps?: FloorStep[]
   slatwallPanels?: SlatwallPanel[]
+  stainlessBacksplashPanels?: StainlessBacksplashPanel[]
   overheadRacks?: OverheadRack[]
 }
 
 const PAD = 80  // more space for two tiers of dimension lines
 const SLATWALL_DEPTH = 3  // visual depth of slatwall on floor plan (inches)
 
-export default function FloorPlanBlueprint({ walls, cabinets, countertops, floorPoints, floorSteps = [], slatwallPanels = [], overheadRacks = [] }: Props) {
+export default function FloorPlanBlueprint({ walls, cabinets, countertops, floorPoints, floorSteps = [], slatwallPanels = [], stainlessBacksplashPanels = [], overheadRacks = [] }: Props) {
   const { selectRack, updateRack, selectedRackId } = useGarageStore()
   const svgRef = useRef<SVGSVGElement>(null)
   const rackDragRef = useRef<{ rackId: string; startX: number; startZ: number; startMouseX: number; startMouseZ: number } | null>(null)
@@ -351,6 +352,39 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
         return (
           <polygon key={panel.id} points={points}
             fill="#c8d0d8" stroke="#889" strokeWidth={0.4} opacity={0.7} />
+        )
+      })}
+
+      {/* Stainless steel backsplash panels — thin strip along wall interior */}
+      {stainlessBacksplashPanels.map(panel => {
+        const w = walls.find(wl => wl.id === panel.wallId)
+        if (!w) return null
+        const [wdx, wdz] = wallDir(w)
+        const perpX = -wdz, perpZ = wdx
+        const wallMx = (w.x1 + w.x2) / 2, wallMz = (w.z1 + w.z2) / 2
+        const toCx = cx - wallMx, toCz = cz - wallMz
+        const dot = perpX * toCx + perpZ * toCz
+        let inX = dot >= 0 ? perpX : -perpX
+        let inZ = dot >= 0 ? perpZ : -perpZ
+        if ((panel.side ?? 'interior') === 'exterior') { inX = -inX; inZ = -inZ }
+
+        const halfT = w.thickness / 2
+        const p1x = w.x1 + wdx * panel.alongStart + inX * halfT
+        const p1z = w.z1 + wdz * panel.alongStart + inZ * halfT
+        const p2x = w.x1 + wdx * panel.alongEnd + inX * halfT
+        const p2z = w.z1 + wdz * panel.alongEnd + inZ * halfT
+        // Render at 1" visual depth (real thickness 1/8" is too thin to see on plan)
+        const d = 1
+        const points = [
+          `${sx(p1x)},${sz(p1z)}`,
+          `${sx(p2x)},${sz(p2z)}`,
+          `${sx(p2x + inX * d)},${sz(p2z + inZ * d)}`,
+          `${sx(p1x + inX * d)},${sz(p1z + inZ * d)}`,
+        ].join(' ')
+
+        return (
+          <polygon key={panel.id} points={points}
+            fill="#d8dce0" stroke="#667" strokeWidth={0.5} opacity={0.9} />
         )
       })}
 

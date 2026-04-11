@@ -4,7 +4,7 @@ import { useTexture, Text, useGLTF, MeshReflectorMaterial, RoundedBox } from '@r
 import { useThree, useFrame } from '@react-three/fiber'
 import type { ThreeEvent } from '@react-three/fiber'
 import { useGarageStore, COUNTERTOP_DEPTH, COUNTERTOP_THICKNESS, CEILING_LIGHT_W, CEILING_LIGHT_L, CEILING_LIGHT_TH, RACK_DECK_THICKNESS, RACK_LEG_SIZE } from '../store/garageStore'
-import type { GarageWall, GarageShape, FloorPoint, SlatwallPanel, SlatwallAccessory, PlacedCabinet, Countertop, CeilingLight, PlacedItem, FloorStep, OverheadRack, WallOpening } from '../store/garageStore'
+import type { GarageWall, GarageShape, FloorPoint, SlatwallPanel, StainlessBacksplashPanel, SlatwallAccessory, PlacedCabinet, Countertop, CeilingLight, PlacedItem, FloorStep, OverheadRack, WallOpening } from '../store/garageStore'
 import { slatwallColors } from '../data/slatwallColors'
 import { getTextureById, texturePath } from '../data/textureCatalog'
 import { flooringTexturePathById } from '../data/flooringColors'
@@ -909,6 +909,7 @@ const HANDLE_HEX: Record<string, string> = {
 const CT_COLORS: Record<string, string> = {
   'butcher-block':   '#c4a070',
   'stainless-steel': '#b0b4b8',
+  'black-stainless': '#484b50',
 }
 
 // ─── Procedural powder-coat texture (used by Technica cabinets) ───────────────
@@ -976,15 +977,18 @@ function getPowderCoatTextures(): { normalMap: THREE.Texture; roughnessMap: THRE
   }
   nctx.putImageData(normalData, 0, 0)
 
+  // Lower repeat = larger speckle features = more visible from a distance.
+  // At 4×4 repeat on a 3ft cabinet, each speckle is ~0.14" (vs ~0.07" at 8×8),
+  // which survives mipmapping when the camera pulls back.
   const normalTex = new THREE.CanvasTexture(normalCanvas)
   normalTex.wrapS = normalTex.wrapT = THREE.RepeatWrapping
-  normalTex.repeat.set(8, 8)
+  normalTex.repeat.set(4, 4)
   normalTex.colorSpace = THREE.NoColorSpace
   normalTex.anisotropy = 8
 
   const roughTex = new THREE.CanvasTexture(roughCanvas)
   roughTex.wrapS = roughTex.wrapT = THREE.RepeatWrapping
-  roughTex.repeat.set(8, 8)
+  roughTex.repeat.set(4, 4)
   roughTex.colorSpace = THREE.NoColorSpace
   roughTex.anisotropy = 8
 
@@ -1062,7 +1066,7 @@ const CabinetMesh = memo(function CabinetMesh({ cabinet, selected, wireframe, bl
 }) {
   const _sig        = cabinet.line === 'signature'
   const shellHex    = _sig
-    ? (SIG_SHELL[cabinet.shellColor ?? 'black'] ?? SIG_SHELL.black)
+    ? (SIG_SHELL[cabinet.shellColor ?? 'granite'] ?? SIG_SHELL.granite)
     : (TEC_COLORS[cabinet.color] ?? TEC_COLORS.titanium)
   const doorRawHex  = _sig
     ? (SIG_DOOR[cabinet.color] ?? SIG_DOOR.black)
@@ -1121,26 +1125,77 @@ const CabinetMesh = memo(function CabinetMesh({ cabinet, selected, wireframe, bl
 
   const handleHex = HANDLE_HEX[cabinet.handleColor ?? 'brushed'] ?? HANDLE_HEX.brushed
   const handleIsBlack = (cabinet.handleColor ?? 'brushed') === 'black'
-  // Powder-coat texture only loaded for Technica (not Signature, not blueprint, not wireframe)
-  const powder = (!blueprint && !wireframe && !isSignature) ? getPowderCoatTextures() : null
+  // Powder-coat texture — used by Technica, Signature, and overhead racks.
+  const powder = (!blueprint && !wireframe) ? getPowderCoatTextures() : null
+
+  // Brushed stainless PBR set — reused for the "brushed" handle variant.
+  // useTexture is a drei hook; must run unconditionally.
+  const brushedHandleSrc = useTexture({
+    map:          `${import.meta.env.BASE_URL}assets/textures/metal/brushed-stainless/color.jpg`,
+    normalMap:    `${import.meta.env.BASE_URL}assets/textures/metal/brushed-stainless/normal.jpg`,
+    roughnessMap: `${import.meta.env.BASE_URL}assets/textures/metal/brushed-stainless/roughness.jpg`,
+  })
+  // Clone + tile for handle-scale geometry. Handles are small (an inch or two
+  // wide, several inches tall) — modest repeats keep the streak scale visible
+  // without it looking zoomed-in.
+  const brushedHandleMaps = useMemo(() => {
+    if (blueprint || wireframe || handleIsBlack) return null
+    const map          = brushedHandleSrc.map.clone()
+    const normalMap    = brushedHandleSrc.normalMap.clone()
+    const roughnessMap = brushedHandleSrc.roughnessMap.clone()
+    for (const t of [map, normalMap, roughnessMap]) {
+      t.wrapS = t.wrapT = THREE.RepeatWrapping
+      t.repeat.set(1, 3)
+      t.needsUpdate = true
+    }
+    map.colorSpace = THREE.SRGBColorSpace
+    normalMap.colorSpace = THREE.NoColorSpace
+    roughnessMap.colorSpace = THREE.NoColorSpace
+    return { map, normalMap, roughnessMap }
+  }, [blueprint, wireframe, handleIsBlack, brushedHandleSrc])
 
   const handleMat = blueprint
     ? <meshBasicMaterial color="#666666" />
     : handleIsBlack
     ? <meshStandardMaterial color={handleHex} metalness={0.05} roughness={0.55} />
-    : <meshStandardMaterial color={handleHex} metalness={0.55} roughness={0.35} />
+    : (
+      <meshPhysicalMaterial
+        map={brushedHandleMaps?.map}
+        normalMap={brushedHandleMaps?.normalMap}
+        normalScale={[0.6, 0.6] as unknown as THREE.Vector2}
+        roughnessMap={brushedHandleMaps?.roughnessMap}
+        color="#ffffff"
+        metalness={0}
+        roughness={0.55}
+        envMapIntensity={0}
+      />
+    )
   const bodyMat   = blueprint
     ? <meshBasicMaterial color={bodyHex} />
     : wireframe
     ? <meshLambertMaterial wireframe color={bodyHex} emissive={selEmissive} emissiveIntensity={selected ? 0.3 : 0} />
     : isSignature
-    ? <meshPhysicalMaterial color={bodyHex} metalness={0.0} roughness={0.75} clearcoat={0.08} clearcoatRoughness={0.6} reflectivity={0.15} specularIntensity={0.3} emissive={selEmissive} emissiveIntensity={selected ? 0.3 : overlapping ? 0.4 : 0} envMapIntensity={0.15} />
+    ? <meshPhysicalMaterial
+        color={bodyHex}
+        metalness={0.0}
+        roughness={0.75}
+        normalMap={powder?.normalMap}
+        normalScale={[0.45, 0.45] as unknown as THREE.Vector2}
+        roughnessMap={powder?.roughnessMap}
+        clearcoat={0.08}
+        clearcoatRoughness={0.6}
+        reflectivity={0.15}
+        specularIntensity={0.3}
+        emissive={selEmissive}
+        emissiveIntensity={selected ? 0.3 : overlapping ? 0.4 : 0}
+        envMapIntensity={0.15}
+      />
     : <meshPhysicalMaterial
         color={bodyHex}
         metalness={0.08}
         roughness={0.62}
         normalMap={powder?.normalMap}
-        normalScale={[0.28, 0.28] as unknown as THREE.Vector2}
+        normalScale={[0.55, 0.55] as unknown as THREE.Vector2}
         roughnessMap={powder?.roughnessMap}
         clearcoat={0.15}
         clearcoatRoughness={0.55}
@@ -1155,13 +1210,25 @@ const CabinetMesh = memo(function CabinetMesh({ cabinet, selected, wireframe, bl
     : wireframe
     ? <meshLambertMaterial color={doorHex} />
     : isSignature
-    ? <meshPhysicalMaterial color={doorHex} metalness={0.0} roughness={0.70} clearcoat={0.10} clearcoatRoughness={0.5} reflectivity={0.15} specularIntensity={0.3} envMapIntensity={0.18} />
+    ? <meshPhysicalMaterial
+        color={doorHex}
+        metalness={0.0}
+        roughness={0.70}
+        normalMap={powder?.normalMap}
+        normalScale={[0.5, 0.5] as unknown as THREE.Vector2}
+        roughnessMap={powder?.roughnessMap}
+        clearcoat={0.10}
+        clearcoatRoughness={0.5}
+        reflectivity={0.15}
+        specularIntensity={0.3}
+        envMapIntensity={0.18}
+      />
     : <meshPhysicalMaterial
         color={doorHex}
         metalness={0.08}
         roughness={0.6}
         normalMap={powder?.normalMap}
-        normalScale={[0.3, 0.3] as unknown as THREE.Vector2}
+        normalScale={[0.6, 0.6] as unknown as THREE.Vector2}
         roughnessMap={powder?.roughnessMap}
         clearcoat={0.18}
         clearcoatRoughness={0.5}
@@ -1189,7 +1256,18 @@ const CabinetMesh = memo(function CabinetMesh({ cabinet, selected, wireframe, bl
       ? <meshBasicMaterial color="#666666" />
       : handleIsBlack
       ? <meshStandardMaterial color={handleHex} metalness={0.05} roughness={0.55} />
-      : <meshStandardMaterial color={handleHex} metalness={0.55} roughness={0.35} />
+      : (
+        <meshPhysicalMaterial
+          map={brushedHandleMaps?.map}
+          normalMap={brushedHandleMaps?.normalMap}
+          normalScale={[0.6, 0.6] as unknown as THREE.Vector2}
+          roughnessMap={brushedHandleMaps?.roughnessMap}
+          color="#ffffff"
+          metalness={0}
+          roughness={0.55}
+          envMapIntensity={0}
+        />
+      )
     if (cabinet.doors === 1) {
       const chX = handleRight ? (door1W / 2 - sigW / 2) : (-door1W / 2 + sigW / 2)
       handle1.push(<mesh key="sig1" position={[chX, sigRelY, sigRelZ - doorZ]}>{sigMat}<boxGeometry args={[sigW, sigH, sigD]} /></mesh>)
@@ -1357,9 +1435,77 @@ const CabinetMesh = memo(function CabinetMesh({ cabinet, selected, wireframe, bl
           })()}
         </>)}
       </>
+      {/* Under-cabinet puck spotlight (upper cabinets only). The cabinet group
+          origin is at the bottom-center of the cabinet, so this spotlight aims
+          straight down at a local target just below. Shadow frustum FOV tracks
+          the cone angle so edge artifacts don't appear when the beam widens. */}
+      {cabinet.style === 'upper' && cabinet.underLight && !blueprint && !wireframe && (() => {
+        const coneAngle = cabinet.underLightAngle ?? (75 * Math.PI) / 180
+        const fovDeg = Math.min(170, (coneAngle * 2 * 180) / Math.PI + 10)
+        return (
+          <UnderCabinetPuck coneAngle={coneAngle} fovDeg={fovDeg} />
+        )
+      })()}
     </group>
   )
 })
+
+/** Under-cabinet puck spotlight. Rendered as a child of the cabinet group so
+ *  its target (also a local child) moves with the cabinet — prevents the
+ *  spotlight from aiming at world origin when the cabinet is repositioned. */
+function UnderCabinetPuck({ coneAngle, fovDeg }: { coneAngle: number; fovDeg: number }) {
+  const targetRef = useRef<THREE.Object3D>(null!)
+  const spotRef = useRef<THREE.SpotLight>(null!)
+  useEffect(() => {
+    if (spotRef.current && targetRef.current) {
+      spotRef.current.target = targetRef.current
+    }
+  }, [])
+  // Matches the ceiling puck visual: 4" trim ring + bright white diffuser disc,
+  // both hanging just below the cabinet bottom panel (which is 0.75" thick).
+  // Local y=0 is the underside of the cabinet; the puck hangs below it so the
+  // diffuser isn't z-fought by the panel.
+  const PUCK_R    = 2 / 12             // 2" radius = 4" diameter, matches ceiling
+  const PUCK_TRIM = 2.3 / 12           // slightly larger bezel
+  const PUCK_H    = (1 / 16) / 12      // 1/16" trim thickness
+  const DROP      = 0.2 / 12           // 0.2" below the cabinet underside
+  return (
+    <>
+      {/* Trim ring — matches ceiling puck material */}
+      <mesh position={[0, -DROP - PUCK_H / 2, 0]}>
+        <cylinderGeometry args={[PUCK_TRIM, PUCK_TRIM, PUCK_H, 24]} />
+        <meshLambertMaterial color="#d0d0cc" />
+      </mesh>
+      {/* Bright white diffuser disc — MeshBasicMaterial with toneMapped off so
+          it renders flat white regardless of scene exposure, exactly like the
+          ceiling pucks. */}
+      <mesh position={[0, -DROP - PUCK_H - 0.005, 0]}>
+        <cylinderGeometry args={[PUCK_R, PUCK_R, 0.01, 24]} />
+        <meshBasicMaterial color="#ffffff" toneMapped={false} />
+      </mesh>
+      {/* Target sits directly below the puck — spotlight aims straight down */}
+      <object3D ref={targetRef} position={[0, -5, 0]} />
+      <spotLight
+        ref={spotRef}
+        position={[0, -DROP - PUCK_H - 0.02, 0]}
+        angle={coneAngle}
+        penumbra={0.6}
+        intensity={8}
+        color="#fff5e0"
+        decay={1.5}
+        distance={18}
+        castShadow
+        shadow-mapSize-width={1024}
+        shadow-mapSize-height={1024}
+        shadow-bias={-0.0008}
+        shadow-normalBias={0.04}
+        shadow-camera-near={0.1}
+        shadow-camera-far={20}
+        shadow-camera-fov={fovDeg}
+      />
+    </>
+  )
+}
 
 // ─── Countertop mesh ─────────────────────────────────────────────────────────
 // Singleton butcher-block texture — created once and reused across all countertops
@@ -1377,7 +1523,8 @@ function CountertopMesh({ ct, selected, wireframe, blueprint, onClick, onPointer
   const wFt = FT(ct.width), dFt = FT(COUNTERTOP_DEPTH), tFt = FT(COUNTERTOP_THICKNESS)
   const col = blueprint ? (selected ? '#555555' : '#444444') : wireframe ? (selected ? '#ffcc00' : '#ff9944') : (CT_COLORS[ct.color] ?? CT_COLORS['butcher-block'])
   const isButcherBlock = ct.color === 'butcher-block'
-  const isStainless = ct.color === 'stainless-steel'
+  const isStainless = ct.color === 'stainless-steel' || ct.color === 'black-stainless'
+  const isBlackStainless = ct.color === 'black-stainless'
 
   // Butcher-block: tile the wood texture proportionally to countertop size
   const bbTex = useMemo(() => {
@@ -1389,6 +1536,40 @@ function CountertopMesh({ ct, selected, wireframe, blueprint, onClick, onPointer
     return tex
   }, [isButcherBlock, blueprint, wireframe, wFt, dFt])
 
+  // Brushed stainless PBR texture set (AmbientCG Metal009). useTexture is a
+  // drei hook so it must run unconditionally; the cloned tiled instances
+  // below are only actually applied to the material when isStainless is true.
+  const stainlessSrc = useTexture({
+    map:          `${import.meta.env.BASE_URL}assets/textures/metal/brushed-stainless/color.jpg`,
+    normalMap:    `${import.meta.env.BASE_URL}assets/textures/metal/brushed-stainless/normal.jpg`,
+    roughnessMap: `${import.meta.env.BASE_URL}assets/textures/metal/brushed-stainless/roughness.jpg`,
+    metalnessMap: `${import.meta.env.BASE_URL}assets/textures/metal/brushed-stainless/metalness.jpg`,
+  })
+
+  // Clone the shared textures per-countertop and set repeat so the brush
+  // streaks run along the long (X) axis and stay visually consistent across
+  // widths. The source texture has horizontal strokes, so U maps to width
+  // (brush direction) and V maps to depth.
+  const stainlessMaps = useMemo(() => {
+    if (!isStainless || blueprint || wireframe) return null
+    const map          = stainlessSrc.map.clone()
+    const normalMap    = stainlessSrc.normalMap.clone()
+    const roughnessMap = stainlessSrc.roughnessMap.clone()
+    const metalnessMap = stainlessSrc.metalnessMap.clone()
+    const repX = Math.max(1, wFt / 2)
+    const repY = Math.max(1, dFt / 1.5)
+    for (const t of [map, normalMap, roughnessMap, metalnessMap]) {
+      t.wrapS = t.wrapT = THREE.RepeatWrapping
+      t.repeat.set(repX, repY)
+      t.needsUpdate = true
+    }
+    map.colorSpace = THREE.SRGBColorSpace
+    normalMap.colorSpace = THREE.NoColorSpace
+    roughnessMap.colorSpace = THREE.NoColorSpace
+    metalnessMap.colorSpace = THREE.NoColorSpace
+    return { map, normalMap, roughnessMap, metalnessMap }
+  }, [isStainless, blueprint, wireframe, wFt, dFt, stainlessSrc])
+
   return (
     <group
       position={[FT(ct.x), FT(ct.y), FT(ct.z)]}
@@ -1396,8 +1577,15 @@ function CountertopMesh({ ct, selected, wireframe, blueprint, onClick, onPointer
       onClick={(e) => { e.stopPropagation(); onClick() }}
       onPointerDown={onPointerDown}
     >
-      <mesh position={[0, tFt / 2, 0]} castShadow receiveShadow>
-        <boxGeometry args={[wFt, tFt, dFt]} />
+      <RoundedBox
+        args={[wFt, tFt, dFt]}
+        radius={FT(0.075)}
+        smoothness={16}
+        creaseAngle={1.5}
+        position={[0, tFt / 2, 0]}
+        castShadow
+        receiveShadow
+      >
         {blueprint ? (
           <meshBasicMaterial color={col} />
         ) : wireframe ? (
@@ -1414,20 +1602,30 @@ function CountertopMesh({ ct, selected, wireframe, blueprint, onClick, onPointer
             envMapIntensity={0.3}
           />
         ) : isStainless ? (
-          <meshStandardMaterial
-            color={col}
-            roughness={0.25}
-            metalness={0.7}
+          /* Pure texture lookup — no env-map reflections. metalness forced
+             to 0 (dielectric) and envMapIntensity 0 so the surface only
+             shows the diffuse color map + normal relief + direct scene
+             lighting. */
+          <meshPhysicalMaterial
+            map={stainlessMaps?.map}
+            normalMap={stainlessMaps?.normalMap}
+            normalScale={[0.8, 0.8] as unknown as THREE.Vector2}
+            roughnessMap={stainlessMaps?.roughnessMap}
+            color={isBlackStainless ? '#3d4045' : '#ffffff'}
+            metalness={0}
+            roughness={0.65}
+            clearcoat={0}
             emissive={selected ? '#445566' : '#000000'}
             emissiveIntensity={selected ? 0.25 : 0}
-            envMapIntensity={0.8}
+            envMapIntensity={0}
           />
         ) : (
           <meshStandardMaterial color={col}
             roughness={0.45} metalness={0.05}
             emissive={selected ? '#445566' : '#000000'} emissiveIntensity={selected ? 0.25 : 0} />
         )}
-      </mesh>
+      </RoundedBox>
+
     </group>
   )
 }
@@ -1467,6 +1665,9 @@ function OverheadRackMesh({ rack, chFt, selected, wireframe, onClick, onPointerD
   const frameColor = wireframe ? (selected ? '#ffcc00' : '#ff6644') : rack.color
   const deckColor = wireframe ? frameColor : '#555555'
   const highlight = selected ? 0.3 : 0
+  // Shared powder-coat texture — same one Technica cabinets use. Gives the
+  // rack frame rails / legs / brackets the fine painted-metal surface finish.
+  const rackPowder = wireframe ? null : getPowderCoatTextures()
 
   return (
     <group
@@ -1483,6 +1684,9 @@ function OverheadRackMesh({ rack, chFt, selected, wireframe, onClick, onPointerD
           color: frameColor,
           metalness: 0.03 as number,
           roughness: 0.50 as number,
+          normalMap: rackPowder?.normalMap ?? null,
+          normalScale: [0.4, 0.4] as unknown as THREE.Vector2,
+          roughnessMap: rackPowder?.roughnessMap ?? null,
           emissive: selected ? '#ffcc00' : '#000000',
           emissiveIntensity: highlight,
         }
@@ -1544,8 +1748,14 @@ function OverheadRackMesh({ rack, chFt, selected, wireframe, onClick, onPointerD
         const bTh = 0.008          // plate thickness ~1/8"
         const bFlange = 2           // 2 feet bracket bar on ceiling
         const bMat = {
-          color: frameColor, metalness: 0.03 as number, roughness: 0.50 as number,
-          emissive: selected ? '#ffcc00' : '#000000', emissiveIntensity: highlight,
+          color: frameColor,
+          metalness: 0.03 as number,
+          roughness: 0.50 as number,
+          normalMap: rackPowder?.normalMap ?? null,
+          normalScale: [0.4, 0.4] as unknown as THREE.Vector2,
+          roughnessMap: rackPowder?.roughnessMap ?? null,
+          emissive: selected ? '#ffcc00' : '#000000',
+          emissiveIntensity: highlight,
         }
 
         return (
@@ -1558,6 +1768,9 @@ function OverheadRackMesh({ rack, chFt, selected, wireframe, onClick, onPointerD
                 color={frameColor}
                 metalness={0.03}
                 roughness={0.50}
+                normalMap={rackPowder?.normalMap}
+                normalScale={[0.4, 0.4] as unknown as THREE.Vector2}
+                roughnessMap={rackPowder?.roughnessMap}
                 emissive={selected ? '#ffcc00' : '#000000'}
                 emissiveIntensity={highlight}
               />
@@ -2458,6 +2671,100 @@ const SlatwallPanelMesh = memo(function SlatwallPanelMesh({ panel, wall, wirefra
   )
 })
 
+// ─── Stainless steel backsplash panel mesh (1/8" thick, mounted like slatwall) ──
+const StainlessBacksplashPanelMesh = memo(function StainlessBacksplashPanelMesh({ panel, wall, wireframe, selected, onClick, onPointerDown }: {
+  panel: StainlessBacksplashPanel; wall: GarageWall; wireframe: boolean; selected: boolean
+  onClick: () => void
+  onPointerDown?: (e: ThreeEvent<PointerEvent>) => void
+}) {
+  const dx = wall.x2 - wall.x1, dz = wall.z2 - wall.z1
+  const lengthIn = Math.hypot(dx, dz)
+  const rotY  = -Math.atan2(dz, dx)
+  const midX  = FT((wall.x1 + wall.x2) / 2)
+  const midZ  = FT((wall.z1 + wall.z2) / 2)
+
+  const panelW = panel.alongEnd - panel.alongStart
+  const panelH = panel.yTop - panel.yBottom
+  const localX = FT(-lengthIn / 2 + panel.alongStart + panelW / 2)
+  const localY = FT((panel.yBottom + panel.yTop) / 2)
+  const sideSign = panel.side === 'exterior' ? -1 : 1
+  const thickFt = FT(0.125)   // 1/8" total thickness
+  // Center of plate sits just proud of the wall face (half-thickness + a hair
+  // for z-fight safety), same pattern as slatwall's 0.6ft offset but scaled to
+  // match the much thinner plate.
+  const localZ = sideSign * (FT(wall.thickness / 2) + thickFt / 2 + FT(0.02))
+
+  const wFt = FT(panelW), hFt = FT(panelH)
+  const textureKind = panel.texture ?? 'stainless'
+
+  // Load both PBR texture sets so switching finishes is instant.
+  const stainlessSrc = useTexture({
+    map:          `${import.meta.env.BASE_URL}assets/textures/metal/brushed-stainless/color.jpg`,
+    normalMap:    `${import.meta.env.BASE_URL}assets/textures/metal/brushed-stainless/normal.jpg`,
+    roughnessMap: `${import.meta.env.BASE_URL}assets/textures/metal/brushed-stainless/roughness.jpg`,
+    metalnessMap: `${import.meta.env.BASE_URL}assets/textures/metal/brushed-stainless/metalness.jpg`,
+  })
+  const diamondSrc = useTexture({
+    map:          `${import.meta.env.BASE_URL}assets/textures/metal/diamondplate/color.jpg`,
+    normalMap:    `${import.meta.env.BASE_URL}assets/textures/metal/diamondplate/normal.jpg`,
+    roughnessMap: `${import.meta.env.BASE_URL}assets/textures/metal/diamondplate/roughness.jpg`,
+    metalnessMap: `${import.meta.env.BASE_URL}assets/textures/metal/diamondplate/metalness.jpg`,
+  })
+  const src = textureKind === 'diamondplate' ? diamondSrc : stainlessSrc
+
+  const maps = useMemo(() => {
+    if (wireframe) return null
+    const map          = src.map.clone()
+    const normalMap    = src.normalMap.clone()
+    const roughnessMap = src.roughnessMap.clone()
+    const metalnessMap = src.metalnessMap.clone()
+    // Diamondplate tile is a repeating pattern — tile tighter so the diamonds
+    // stay visually crisp on wider panels; stainless uses the original ratio.
+    const repX = textureKind === 'diamondplate'
+      ? Math.max(1, wFt / 1)
+      : Math.max(1, wFt / 2)
+    const repY = textureKind === 'diamondplate'
+      ? Math.max(1, hFt / 1)
+      : Math.max(1, hFt / 1.5)
+    for (const t of [map, normalMap, roughnessMap, metalnessMap]) {
+      t.wrapS = t.wrapT = THREE.RepeatWrapping
+      t.repeat.set(repX, repY)
+      t.needsUpdate = true
+    }
+    map.colorSpace = THREE.SRGBColorSpace
+    normalMap.colorSpace = THREE.NoColorSpace
+    roughnessMap.colorSpace = THREE.NoColorSpace
+    metalnessMap.colorSpace = THREE.NoColorSpace
+    return { map, normalMap, roughnessMap, metalnessMap }
+  }, [wireframe, wFt, hFt, src, textureKind])
+
+  return (
+    <group position={[midX, 0, midZ]} rotation={[0, rotY, 0]}>
+      <group onClick={(e) => { e.stopPropagation(); onClick() }} onPointerDown={onPointerDown}>
+        <mesh position={[localX, localY, localZ]} castShadow receiveShadow>
+          <boxGeometry args={[wFt, hFt, thickFt]} />
+          {wireframe ? (
+            <meshLambertMaterial wireframe color={selected ? '#ffcc00' : '#c0c4c8'} />
+          ) : (
+            <meshPhysicalMaterial
+              map={maps?.map}
+              normalMap={maps?.normalMap}
+              normalScale={[0.8, 0.8] as unknown as THREE.Vector2}
+              roughnessMap={maps?.roughnessMap}
+              color="#ffffff"
+              metalness={0}
+              roughness={0.65}
+              emissive={selected ? '#4488bb' : '#000000'}
+              emissiveIntensity={selected ? 0.25 : 0}
+              envMapIntensity={0}
+            />
+          )}
+        </mesh>
+      </group>
+    </group>
+  )
+})
+
 // ─── Slatwall accessory mesh — positioned on parent panel's wall ─────────────
 const SlatwallAccessoryMesh = memo(function SlatwallAccessoryMesh({ acc, panel, wall, wireframe, selected, onClick }: {
   acc: SlatwallAccessory; panel: SlatwallPanel; wall: GarageWall
@@ -3221,6 +3528,7 @@ export default function GarageShell() {
   const {
     walls, shapes, floorPoints, ceilingHeight, garageWidth, garageDepth, flooringColor, floorTextureScale, floorReflection,
     slatwallPanels, selectedSlatwallPanelId,
+    stainlessBacksplashPanels, selectedStainlessBacksplashPanelId, selectStainlessBacksplashPanel, updateStainlessBacksplashPanel,
     floorSteps, selectedFloorStepId, selectFloorStep, updateFloorStep: updateFloorStepAction,
     deleteFloorStep,
     cabinets, selectedCabinetId, selectCabinet, updateCabinet,
@@ -3333,10 +3641,12 @@ export default function GarageShell() {
   const shapesRef       = useRef(shapes);                   useEffect(() => { shapesRef.current = shapes }, [shapes])
   const floorPtsRef     = useRef(effectiveFloorPts);        useEffect(() => { floorPtsRef.current = effectiveFloorPts }, [effectiveFloorPts])
   const slatsRef        = useRef(slatwallPanels);  useEffect(() => { slatsRef.current = slatwallPanels }, [slatwallPanels])
+  const backsplashesRef = useRef(stainlessBacksplashPanels); useEffect(() => { backsplashesRef.current = stainlessBacksplashPanels }, [stainlessBacksplashPanels])
   const cabinetsRef     = useRef(cabinets);         useEffect(() => { cabinetsRef.current = cabinets }, [cabinets])
   const updateWallRef   = useRef(updateWall);      useEffect(() => { updateWallRef.current = updateWall }, [updateWall])
   const updateShapeRef  = useRef(updateShape);     useEffect(() => { updateShapeRef.current = updateShape }, [updateShape])
   const updateSlatRef       = useRef(updateSlatwallPanel); useEffect(() => { updateSlatRef.current = updateSlatwallPanel }, [updateSlatwallPanel])
+  const updateBacksplashRef = useRef(updateStainlessBacksplashPanel); useEffect(() => { updateBacksplashRef.current = updateStainlessBacksplashPanel }, [updateStainlessBacksplashPanel])
   const slatwallPanelsRef   = useRef(slatwallPanels);      useEffect(() => { slatwallPanelsRef.current = slatwallPanels }, [slatwallPanels])
   const updateCabRef    = useRef(updateCabinet);    useEffect(() => { updateCabRef.current = updateCabinet }, [updateCabinet])
   const countertopsRef  = useRef(countertops);       useEffect(() => { countertopsRef.current = countertops }, [countertops])
@@ -3360,6 +3670,8 @@ export default function GarageShell() {
   const vertDragRef       = useRef<VertDragState | null>(null)
   const slatBodyDragRef     = useRef<SlatwallBodyDragState | null>(null)
   const slatCornerDragRef   = useRef<SlatwallCornerDragState | null>(null)
+  const backsplashBodyDragRef   = useRef<SlatwallBodyDragState | null>(null)
+  const backsplashCornerDragRef = useRef<SlatwallCornerDragState | null>(null)
   const cabinetDragRef      = useRef<CabinetDragState | null>(null)
   // Direct mesh mutation: registry of cabinet Three.js groups + transient drag position
   const cabinetGroupRefs    = useRef<Record<string, THREE.Group>>({})
@@ -3596,6 +3908,90 @@ export default function GarageShell() {
     beginDrag()
   }, [beginDrag, selectSlatwallPanel])
 
+  // ── Start backsplash body drag ───────────────────────────────────────────
+  const startBacksplashBodyDrag = useCallback((panelId: string, e: ThreeEvent<PointerEvent>) => {
+    if (e.nativeEvent.button !== 0) return
+    const panel = backsplashesRef.current.find(p => p.id === panelId)
+    if (!panel) return
+    const wall = wallsRef.current.find(w => w.id === panel.wallId)
+    if (!wall) return
+    e.stopPropagation()
+    e.nativeEvent.stopImmediatePropagation()
+    selectStainlessBacksplashPanel(panelId)
+
+    const dx = wall.x2 - wall.x1, dz = wall.z2 - wall.z1
+    const len = Math.hypot(dx, dz)
+    const sideSign = (panel.side ?? 'interior') === 'exterior' ? -1 : 1
+    const nx = sideSign * (-dz / len), nz = sideSign * (dx / len)
+    const midXFt = FT((wall.x1 + wall.x2) / 2)
+    const midZFt = FT((wall.z1 + wall.z2) / 2)
+    const planePt = new THREE.Vector3(
+      midXFt + nx * FT(wall.thickness / 2 + 0.5),
+      FT((panel.yBottom + panel.yTop) / 2),
+      midZFt + nz * FT(wall.thickness / 2 + 0.5),
+    )
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(new THREE.Vector3(nx, 0, nz), planePt)
+
+    const relHitX = e.point.x - midXFt, relHitZ = e.point.z - midZFt
+    const hitAlong  = (relHitX * (dx / len) + relHitZ * (dz / len)) * 12 + len / 2
+    const hitHeight = e.point.y * 12
+
+    const { startTrim, endTrim } = computeCornerAdj(wall, wallsRef.current)
+    backsplashBodyDragRef.current = {
+      panelId, plane,
+      wallMidX: midXFt, wallMidZ: midZFt,
+      wallUx: dx / len, wallUz: dz / len,
+      wallLenIn: len,
+      startTrimIn: startTrim, endTrimIn: endTrim,
+      startAlongIn: panel.alongStart, endAlongIn: panel.alongEnd,
+      startYBottom: panel.yBottom, startYTop: panel.yTop,
+      hitAlongIn: hitAlong, hitHeightIn: hitHeight,
+      wallId: wall.id,
+    }
+    beginDrag()
+  }, [selectStainlessBacksplashPanel, beginDrag])
+
+  // ── Start backsplash corner drag ─────────────────────────────────────────
+  const startBacksplashCornerDrag = useCallback((
+    panelId: string, corner: 0 | 1 | 2 | 3,
+    e: ThreeEvent<PointerEvent>,
+  ) => {
+    if (e.nativeEvent.button !== 0) return
+    const panel = backsplashesRef.current.find(p => p.id === panelId)
+    if (!panel) return
+    const wall = wallsRef.current.find(w => w.id === panel.wallId)
+    if (!wall) return
+    e.stopPropagation()
+    e.nativeEvent.stopImmediatePropagation()
+
+    const dx = wall.x2 - wall.x1, dz = wall.z2 - wall.z1
+    const len = Math.hypot(dx, dz)
+    const sideSign = (panel.side ?? 'interior') === 'exterior' ? -1 : 1
+    const nx = sideSign * (-dz / len), nz = sideSign * (dx / len)
+    const midXFt = FT((wall.x1 + wall.x2) / 2)
+    const midZFt = FT((wall.z1 + wall.z2) / 2)
+    const planePt = new THREE.Vector3(
+      midXFt + nx * FT(wall.thickness / 2 + 0.5),
+      FT((panel.yBottom + panel.yTop) / 2),
+      midZFt + nz * FT(wall.thickness / 2 + 0.5),
+    )
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(
+      new THREE.Vector3(nx, 0, nz), planePt
+    )
+    const { startTrim: cST, endTrim: cET } = computeCornerAdj(wall, wallsRef.current)
+    backsplashCornerDragRef.current = {
+      panelId, corner, plane,
+      wallMidX: midXFt, wallMidZ: midZFt,
+      wallUx: dx / len, wallUz: dz / len,
+      wallLenIn: len,
+      startTrimIn: cST,
+      endTrimIn: cET,
+      wallId: wall.id,
+    }
+    selectStainlessBacksplashPanel(panelId)
+    beginDrag()
+  }, [beginDrag, selectStainlessBacksplashPanel])
+
   // ── Raw DOM move/up handlers ─────────────────────────────────────────────
   useEffect(() => {
     const canvas = gl.domElement
@@ -3619,6 +4015,7 @@ export default function GarageShell() {
       // Capture pointer on first drag move to prevent dropped drags during fast mouse movement
       const isDragging = wallDragRef.current || shapeDragRef.current || floorPointDragRef.current ||
         vertDragRef.current || slatBodyDragRef.current || slatCornerDragRef.current ||
+        backsplashBodyDragRef.current || backsplashCornerDragRef.current ||
         cabinetDragRef.current || countertopDragRef.current || lightDragRef.current ||
         ceilingLightDragRef.current || itemDragRef.current || rackDragRef.current || floorStepDragRef.current || floorStepCornerDragRef.current
       if (isDragging && !hasCaptured) {
@@ -3693,6 +4090,88 @@ export default function GarageShell() {
             alongStart: newStart, alongEnd: newEnd,
             yBottom: newBottom, yTop: newTop,
           })
+        }
+        return
+      }
+
+      // Backsplash body drag — slide panel along and up/down the wall
+      const bbd = backsplashBodyDragRef.current
+      if (bbd) {
+        const rect = gl.domElement.getBoundingClientRect()
+        const ndc = new THREE.Vector2(
+          ((e.clientX - rect.left) / rect.width) * 2 - 1,
+          ((e.clientY - rect.top)  / rect.height) * -2 + 1,
+        )
+        ray.setFromCamera(ndc, cameraRef.current)
+        const hitPt = new THREE.Vector3()
+        if (ray.ray.intersectPlane(bbd.plane, hitPt)) {
+          const relX = hitPt.x - bbd.wallMidX, relZ = hitPt.z - bbd.wallMidZ
+          const curAlong = (relX * bbd.wallUx + relZ * bbd.wallUz) * 12 + bbd.wallLenIn / 2
+          const curHeight = hitPt.y * 12
+          const dAlong = curAlong - bbd.hitAlongIn
+          const dHeight = curHeight - bbd.hitHeightIn
+
+          const panelW = bbd.endAlongIn - bbd.startAlongIn
+          const panelH = bbd.startYTop - bbd.startYBottom
+          const minA = bbd.startTrimIn, maxA = bbd.wallLenIn - bbd.endTrimIn
+
+          let newStart = snapToGrid(bbd.startAlongIn + dAlong)
+          let newEnd   = snapToGrid(bbd.endAlongIn   + dAlong)
+          if (newStart < minA) { newStart = minA; newEnd = minA + panelW }
+          if (newEnd   > maxA) { newEnd = maxA; newStart = maxA - panelW }
+
+          const dragWall = wallsRef.current.find(w => w.id === bbd.wallId)
+          const wallH    = dragWall?.height ?? 9999
+          const bbH      = (dragWall?.baseboard && dragWall.baseboardHeight > 0) ? dragWall.baseboardHeight : 0
+
+          let newBottom = snapToGrid(bbd.startYBottom + dHeight)
+          if (bbH > 0 && Math.abs(newBottom - bbH) <= 3) newBottom = bbH
+          newBottom = Math.max(0, Math.min(newBottom, wallH - panelH))
+          const newTop = newBottom + panelH
+
+          updateBacksplashRef.current(bbd.panelId, {
+            alongStart: newStart, alongEnd: newEnd,
+            yBottom: newBottom, yTop: newTop,
+          })
+        }
+        return
+      }
+
+      // Backsplash corner drag — uses wall-face plane, no floor hit needed
+      const bsc = backsplashCornerDragRef.current
+      if (bsc) {
+        const rect = gl.domElement.getBoundingClientRect()
+        const ndc = new THREE.Vector2(
+          ((e.clientX - rect.left) / rect.width) * 2 - 1,
+          ((e.clientY - rect.top)  / rect.height) * -2 + 1,
+        )
+        ray.setFromCamera(ndc, cameraRef.current)
+        const hitPt = new THREE.Vector3()
+        if (ray.ray.intersectPlane(bsc.plane, hitPt)) {
+          const relX = hitPt.x - bsc.wallMidX
+          const relZ = hitPt.z - bsc.wallMidZ
+          const along   = snapToGrid((relX * bsc.wallUx + relZ * bsc.wallUz) * 12 + bsc.wallLenIn / 2)
+          const heightIn = snapToGrid(hitPt.y * 12)
+          const panel = backsplashesRef.current.find(p => p.id === bsc.panelId)
+          const cWall = wallsRef.current.find(w => w.id === bsc.wallId)
+          if (panel && cWall) {
+            const wallH = cWall.height
+            const bbH   = cWall.baseboard ? cWall.baseboardHeight : 0
+            const changes: Partial<StainlessBacksplashPanel> = {}
+            const minAlong = bsc.startTrimIn
+            const maxAlong = bsc.wallLenIn - bsc.endTrimIn
+            if (bsc.corner === 0 || bsc.corner === 3) {
+              changes.alongStart = Math.max(minAlong, Math.min(along, panel.alongEnd - 6))
+            } else {
+              changes.alongEnd = Math.max(panel.alongStart + 6, Math.min(along, maxAlong))
+            }
+            if (bsc.corner === 0 || bsc.corner === 1) {
+              changes.yTop = Math.max(panel.yBottom + 6, Math.min(heightIn, wallH))
+            } else {
+              changes.yBottom = Math.max(bbH, Math.min(heightIn, panel.yTop - 6))
+            }
+            updateBacksplashRef.current(bsc.panelId, changes)
+          }
         }
         return
       }
@@ -4172,13 +4651,15 @@ export default function GarageShell() {
         updateCabRef.current(cd.cabinetId, { x: dragPos.x, z: dragPos.z, y: dragPos.y, rotY: dragPos.rotY })
         cabinetDragPosRef.current = null
       }
-      const wasDragging = wallDragRef.current || shapeDragRef.current || floorPointDragRef.current || vertDragRef.current || slatBodyDragRef.current || slatCornerDragRef.current || cabinetDragRef.current || countertopDragRef.current || lightDragRef.current || ceilingLightDragRef.current || itemDragRef.current || rackDragRef.current || floorStepDragRef.current || floorStepCornerDragRef.current
+      const wasDragging = wallDragRef.current || shapeDragRef.current || floorPointDragRef.current || vertDragRef.current || slatBodyDragRef.current || slatCornerDragRef.current || backsplashBodyDragRef.current || backsplashCornerDragRef.current || cabinetDragRef.current || countertopDragRef.current || lightDragRef.current || ceilingLightDragRef.current || itemDragRef.current || rackDragRef.current || floorStepDragRef.current || floorStepCornerDragRef.current
       wallDragRef.current = null
       shapeDragRef.current = null
       floorPointDragRef.current = null
       vertDragRef.current = null
       slatBodyDragRef.current = null
       slatCornerDragRef.current = null
+      backsplashBodyDragRef.current = null
+      backsplashCornerDragRef.current = null
       cabinetDragRef.current = null
       countertopDragRef.current = null
       lightDragRef.current = null
@@ -4343,12 +4824,12 @@ export default function GarageShell() {
         return (
           <group key={wall.id} visible={wall.visible !== false}>
             <WallMesh wall={wall} wireframe={wireframe} blueprint={blueprint}
-              selected={isSel}
+              selected={isSel && !selectedSlatwallPanelId && !selectedStainlessBacksplashPanelId}
               onClick={() => { if (suppressNextClick.current) { suppressNextClick.current = false; return } selectWall(wall.id) }}
               onPointerDown={handleWallDown}
               startExt={startExt} endExt={endExt} startTrim={startTrim} endTrim={endTrim}
               baseTex={detileFloorTex} />
-            {isSel && !selectedSlatwallPanelId && <>
+            {isSel && !selectedSlatwallPanelId && !selectedStainlessBacksplashPanelId && <>
               <DragHandle
                 position={[FT(wall.x1), 0.08, FT(wall.z1)]}
                 color='#ff8800'
@@ -4378,6 +4859,49 @@ export default function GarageShell() {
             selected={selectedSlatwallPanelId === panel.id}
             onClick={() => selectSlatwallPanel(panel.id)}
             onPointerDown={(e) => startSlatwallBodyDrag(panel.id, e)} />
+        )
+      })}
+
+      {/* Stainless steel backsplash panels — hidden in blueprint view */}
+      {!blueprint && stainlessBacksplashPanels.map(panel => {
+        const wall = walls.find(w => w.id === panel.wallId)
+        if (!wall) return null
+        return (
+          <StainlessBacksplashPanelMesh key={panel.id}
+            panel={panel} wall={wall} wireframe={wireframe}
+            selected={selectedStainlessBacksplashPanelId === panel.id}
+            onClick={() => selectStainlessBacksplashPanel(panel.id)}
+            onPointerDown={(e) => startBacksplashBodyDrag(panel.id, e)} />
+        )
+      })}
+
+      {/* Stainless backsplash corner handles — hidden in blueprint view */}
+      {!blueprint && stainlessBacksplashPanels.filter(p => p.id === selectedStainlessBacksplashPanelId).map(panel => {
+        const wall = walls.find(w => w.id === panel.wallId)
+        if (!wall) return null
+        const wdx = wall.x2 - wall.x1, wdz = wall.z2 - wall.z1
+        const wLen = Math.hypot(wdx, wdz)
+        const rotY = -Math.atan2(wdz, wdx)
+        const midX = FT((wall.x1 + wall.x2) / 2)
+        const midZ = FT((wall.z1 + wall.z2) / 2)
+        // Position handles a hair proud of the 1/8" plate surface
+        const localZ = FT(wall.thickness / 2 + 0.3)
+        const corners: [0|1|2|3, number, number][] = [
+          [0, FT(-wLen / 2 + panel.alongStart), FT(panel.yTop)],
+          [1, FT(-wLen / 2 + panel.alongEnd),   FT(panel.yTop)],
+          [2, FT(-wLen / 2 + panel.alongEnd),   FT(panel.yBottom)],
+          [3, FT(-wLen / 2 + panel.alongStart), FT(panel.yBottom)],
+        ]
+        return (
+          <group key={panel.id + '-bs-handles'} position={[midX, 0, midZ]} rotation={[0, rotY, 0]}>
+            {corners.map(([c, lx, ly]) => (
+              <DragHandle key={c}
+                position={[lx, ly, localZ]}
+                color="#22bbee"
+                size={0.14}
+                onPointerDown={(e) => startBacksplashCornerDrag(panel.id, c, e)} />
+            ))}
+          </group>
         )
       })}
 

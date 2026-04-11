@@ -52,11 +52,11 @@ export function cabinetFrontPaths({ w, h, doors, drawers: drawersProp, style, li
   const fr = isSignature ? 0.75 : 0.1
 
   const bodyHex = isSignature
-    ? (SIG_SHELL[shellColor ?? 'black'] ?? SIG_SHELL.black)
-    : (TEC_COLORS[color ?? 'titanium'] ?? TEC_COLORS.titanium)
+    ? (SIG_SHELL[shellColor ?? 'granite'] ?? SIG_SHELL.granite)
+    : (TEC_COLORS[color ?? 'mica'] ?? TEC_COLORS.mica)
   const doorHex = isSignature
-    ? (SIG_DOOR[color ?? 'black'] ?? SIG_DOOR.black)
-    : (TEC_COLORS[color ?? 'titanium'] ?? TEC_COLORS.titanium)
+    ? (SIG_DOOR[color ?? 'granite'] ?? SIG_DOOR.granite)
+    : (TEC_COLORS[color ?? 'mica'] ?? TEC_COLORS.mica)
 
   // Door geometry (matching GarageShell CabinetMesh)
   const baseY0 = fr
@@ -219,25 +219,11 @@ const THUMB_DIMS: Record<string, { w: number; h: number; svgW: number; svgH: num
   locker: { w: 40, h: 80,    svgW: 52, svgH: 62 },
 }
 
-/** Sidebar thumbnail SVG — consistent size per cabinet style, outline mode for Technica */
+/** Sidebar thumbnail SVG — consistent size per cabinet style. Both Signature
+ *  and Technica render as colored filled fronts matching their spawn defaults
+ *  (Signature: granite/granite, Technica: mica). */
 export default function CabinetFrontSVG({ preset }: { preset: CabinetPreset }) {
   const thumb = THUMB_DIMS[preset.style] ?? THUMB_DIMS.lower
-  const isTechnica = preset.line === 'technica'
-
-  // For Technica we draw a flat outline schematic instead of a filled colour render
-  if (isTechnica) {
-    return (
-      <svg width={thumb.svgW} height={thumb.svgH}
-        viewBox={`0 0 ${thumb.w} ${thumb.h}`}
-        style={{ display: 'block', flexShrink: 0, overflow: 'visible' }}
-        aria-hidden="true">
-        <TechnicaOutline w={preset.w} h={preset.h}
-          thumbW={thumb.w} thumbH={thumb.h}
-          doors={preset.doors} drawers={preset.drawers ?? 0}
-          style={preset.style} />
-      </svg>
-    )
-  }
 
   return (
     <svg width={thumb.svgW} height={thumb.svgH}
@@ -252,130 +238,3 @@ export default function CabinetFrontSVG({ preset }: { preset: CabinetPreset }) {
   )
 }
 
-/** Outline-only schematic for Technica cabinet selector tiles */
-function TechnicaOutline({ w: realW, h: realH, thumbW, thumbH, doors, drawers, style }:
-  { w: number; h: number; thumbW: number; thumbH: number;
-    doors: number; drawers: number; style: string }) {
-
-  // Always scale by height so all cabinets of the same style fill the same vertical space
-  const sc = thumbH / realH
-
-  // Rendered dimensions (centred in thumb box)
-  const rW = realW * sc
-  const rH = realH * sc
-  const ox = (thumbW - rW) / 2  // x offset to centre
-  const oy = (thumbH - rH) / 2  // y offset to centre
-
-  const stroke = 'rgba(180,200,230,0.75)'
-  const strokeW = 0.6
-  const handleStroke = 'rgba(180,200,230,0.95)'
-  const fr = 0.6 * sc  // frame rail in scaled units
-
-  const elements: JSX.Element[] = []
-
-  // Outer body rectangle
-  elements.push(
-    <rect key="body" x={ox} y={oy} width={rW} height={rH}
-      fill="none" stroke={stroke} strokeWidth={strokeW} rx={0.3} />
-  )
-
-  // Work in real-inch space offset by ox/oy, scaled by sc
-  const X = (x: number) => ox + x * sc
-  const Y = (y: number) => oy + y * sc  // y=0 is top of cabinet
-
-  const fr_in = 0.6  // frame rail in inches
-
-  // Y-down: drawers sit at the TOP of the cabinet, doors fill the rest below them
-  const usableH_in = realH - 2 * fr_in
-  const comboDrawerH_in = usableH_in * (3.5 / 20)
-  const drawerAreaY0_in = fr_in
-  const drawerAreaH_in  = doors === 0 ? usableH_in : drawers * comboDrawerH_in
-
-  const tecRatios = drawers === 5 ? [6, 3.5, 3.5, 3.5, 3.5] : Array(drawers).fill(1)
-  const ratioSum = tecRatios.reduce((a: number, b: number) => a + b, 0)
-  const drawerHeights_in = tecRatios.map((r: number) => (r / ratioSum) * drawerAreaH_in)
-
-  // Doors start below the drawer area (or at the top if no drawers)
-  const doorY0_in = drawers > 0 ? drawerAreaY0_in + drawerAreaH_in + fr_in : fr_in
-  const doorY1_in = realH - fr_in
-  const doorH_in = doors > 0 ? doorY1_in - doorY0_in : 0
-
-  // Door outlines
-  if (doors === 1 && doorH_in > 0) {
-    const dW = realW - 2 * fr_in
-    elements.push(
-      <rect key="d0"
-        x={X(fr_in)} y={Y(doorY0_in)} width={dW * sc} height={doorH_in * sc}
-        fill="none" stroke={stroke} strokeWidth={strokeW} />
-    )
-    // Blade handle positioned per style (Y-down: doorY0 is top, doorY0+doorH is bottom)
-    const bladeLen_in = style === 'locker' ? 15 : 7
-    const actualBlade_in = Math.min(bladeLen_in, doorH_in - 2)
-    const handleInset_in = 1
-    const bladeTopY_in =
-      style === 'locker' ? doorY0_in + doorH_in / 2 - actualBlade_in / 2 :
-      style === 'upper'  ? doorY0_in + doorH_in - handleInset_in - actualBlade_in :
-      /* lower */          doorY0_in + handleInset_in
-    const hX_in = fr_in + dW - 2
-    elements.push(
-      <rect key="h0"
-        x={X(hX_in)} y={Y(bladeTopY_in)}
-        width={0.4 * sc} height={actualBlade_in * sc}
-        fill={handleStroke} stroke="none" rx={0.2} />
-    )
-  } else if (doors === 2 && doorH_in > 0) {
-    const d2W_in = (realW - 3 * fr_in) / 2
-    const lx_in = fr_in
-    const rx_in = fr_in + d2W_in + fr_in
-    elements.push(
-      <rect key="d0" x={X(lx_in)} y={Y(doorY0_in)} width={d2W_in * sc} height={doorH_in * sc}
-        fill="none" stroke={stroke} strokeWidth={strokeW} />,
-      <rect key="d1" x={X(rx_in)} y={Y(doorY0_in)} width={d2W_in * sc} height={doorH_in * sc}
-        fill="none" stroke={stroke} strokeWidth={strokeW} />
-    )
-    // Blade handles on inner edges — positioned per style
-    const bladeLen_in = style === 'locker' ? 15 : 7
-    const actualBlade_in = Math.min(bladeLen_in, doorH_in - 2)
-    const handleInset_in = 1
-    const bladeTopY_in =
-      style === 'locker' ? doorY0_in + doorH_in / 2 - actualBlade_in / 2 :
-      style === 'upper'  ? doorY0_in + doorH_in - handleInset_in - actualBlade_in :
-      /* lower */          doorY0_in + handleInset_in
-    const handleOffset_in = 1.2
-    elements.push(
-      <rect key="h0"
-        x={X(lx_in + d2W_in - handleOffset_in)} y={Y(bladeTopY_in)}
-        width={0.4 * sc} height={actualBlade_in * sc}
-        fill={handleStroke} stroke="none" rx={0.2} />,
-      <rect key="h1"
-        x={X(rx_in + handleOffset_in)} y={Y(bladeTopY_in)}
-        width={0.4 * sc} height={actualBlade_in * sc}
-        fill={handleStroke} stroke="none" rx={0.2} />
-    )
-  }
-
-  // Drawer outlines
-  let cumY_in = drawerAreaY0_in
-  const dFW_in = realW - 2 * fr_in
-  for (let i = 0; i < drawers; i++) {
-    const fH_in = drawerHeights_in[i] - 0.1
-    elements.push(
-      <rect key={`dr${i}`}
-        x={X(fr_in)} y={Y(cumY_in)} width={dFW_in * sc} height={fH_in * sc}
-        fill="none" stroke={stroke} strokeWidth={strokeW} />
-    )
-    // Horizontal blade handle
-    const bladeLen_in = Math.min(realW * 0.55, dFW_in - 1)
-    const bladeH_in = Math.max(0.35, fH_in * 0.12)
-    const drMidY_in = cumY_in + fH_in / 2
-    elements.push(
-      <rect key={`drh${i}`}
-        x={X(realW / 2 - bladeLen_in / 2)} y={Y(drMidY_in - bladeH_in / 2)}
-        width={bladeLen_in * sc} height={bladeH_in * sc}
-        fill={handleStroke} stroke="none" rx={0.15} />
-    )
-    cumY_in += drawerHeights_in[i]
-  }
-
-  return <>{elements}</>
-}

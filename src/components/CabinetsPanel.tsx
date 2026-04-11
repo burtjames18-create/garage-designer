@@ -49,6 +49,7 @@ const SIG_DOOR_COLORS: { id: string; name: string; hex: string }[] = [
 const CT_COLORS: { id: string; name: string; hex: string }[] = [
   { id: 'butcher-block',   name: 'Butcher Block',   hex: '#c4a070' },
   { id: 'stainless-steel', name: 'Stainless Steel', hex: '#b0b4b8' },
+  { id: 'black-stainless', name: 'Black Stainless', hex: '#484b50' },
 ]
 
 const STYLE_GROUPS: { label: string; style: string }[] = [
@@ -124,8 +125,8 @@ function CabinetEditor({ cab }: { cab: PlacedCabinet }) {
                   <button
                     key={c.id}
                     role="radio"
-                    aria-checked={(cab.shellColor ?? 'black') === c.id}
-                    className={`cab-color-swatch${(cab.shellColor ?? 'black') === c.id ? ' active' : ''}`}
+                    aria-checked={(cab.shellColor ?? 'granite') === c.id}
+                    className={`cab-color-swatch${(cab.shellColor ?? 'granite') === c.id ? ' active' : ''}`}
                     style={{ background: c.hex }}
                     aria-label={c.name}
                     title={c.name}
@@ -193,7 +194,47 @@ function CabinetEditor({ cab }: { cab: PlacedCabinet }) {
                 </button>
               )
             })()}
+            {cab.style === 'upper' && (() => {
+              const on = !!cab.underLight
+              return (
+                <button
+                  onClick={() => updateCabinet(cab.id, {
+                    underLight: !on,
+                    // Start at max cone angle (75°) when the light is first enabled
+                    ...(on ? {} : { underLightAngle: (75 * Math.PI) / 180 }),
+                  })}
+                  style={{ fontSize: 11, padding: '3px 8px', cursor: 'pointer',
+                    background: on ? 'rgba(255,200,100,0.18)' : 'rgba(255,255,255,0.08)',
+                    border: `1px solid ${on ? 'rgba(255,200,100,0.4)' : 'rgba(255,255,255,0.15)'}`,
+                    borderRadius: 4, color: on ? '#ffd28a' : '#ccc' }}
+                >
+                  Puck light: {on ? 'On' : 'Off'}
+                </button>
+              )
+            })()}
           </div>
+          {cab.style === 'upper' && cab.underLight && (() => {
+            const angle = cab.underLightAngle ?? (75 * Math.PI) / 180
+            const deg = Math.round((angle * 180) / Math.PI)
+            return (
+              <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#aaa' }}>
+                  <span>Cone angle</span>
+                  <span>{deg}°</span>
+                </div>
+                <input
+                  type="range"
+                  min={10}
+                  max={75}
+                  step={1}
+                  value={deg}
+                  onChange={e => updateCabinet(cab.id, { underLightAngle: (parseInt(e.target.value, 10) * Math.PI) / 180 })}
+                  style={{ width: '100%' }}
+                  aria-label="Puck light cone angle"
+                />
+              </div>
+            )
+          })()}
         </div>
       )}
 
