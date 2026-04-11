@@ -9,6 +9,22 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(version),
   },
   base: './',
+  server: {
+    // Project lives on Google Drive (G:\My Drive\...). Native file events from
+    // chokidar hit EINVAL on partially-synced files and crash the dev server.
+    // Use polling so the watcher never touches lstat on those bad paths.
+    watch: {
+      usePolling: true,
+      interval: 600,
+      ignored: [
+        '**/node_modules/**',
+        '**/.git/**',
+        '**/release/**',
+        '**/renderer/**',
+        '**/dist/**',
+      ],
+    },
+  },
   build: {
     outDir: 'renderer',
     // Split large dependencies into separate chunks for better caching

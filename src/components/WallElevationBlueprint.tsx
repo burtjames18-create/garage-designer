@@ -63,9 +63,22 @@ function getWallStubs(wall: GarageWall, allWalls: GarageWall[]) {
   return stubs
 }
 
-const CABINET_HEX: Record<string, string> = {
-  charcoal: '#3d3d3d', white: '#f2f2f0', driftwood: '#7a6a58', slate: '#5a6872', stone: '#7a7972',
+// Technica colors (cabinet body and doors share the same color)
+const TEC_COLORS: Record<string, string> = {
+  titanium: '#5a5650', 'ash-grey': '#d4cfc0', 'harbor-blue': '#283448',
+  evergreen: '#4d5e4c', sandstone: '#b09475', mica: '#6e6e6e',
+  graphite: '#3a3a3c', obsidian: '#1a1a1a', silver: '#b8bcc0',
+  'metallic-grey': '#989a9a', 'argento-blu': '#9aa8b0', ruby: '#b02020',
 }
+const SIG_SHELL: Record<string, string> = {
+  black: '#1a1a1c', granite: '#48484a',
+}
+const SIG_DOOR: Record<string, string> = {
+  black: '#1a1a1c', granite: '#48484a', 'harbor-blue': '#283448',
+  latte: '#b0a08a', 'midnight-blue': '#1e2d4d', red: '#b82020', silver: '#b0b4b8',
+}
+// Lighter color IDs (where dark line/handle accents look better)
+const LIGHT_COLORS = new Set(['ash-grey', 'sandstone', 'silver', 'metallic-grey', 'argento-blu', 'latte'])
 const COUNTERTOP_HEX: Record<string, string> = {
   'butcher-block': '#b5813a', white: '#e8e8e4', black: '#2a2a2a', concrete: '#8a8a80',
 }
@@ -354,8 +367,11 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, cabinets,
           const { along } = projectCabinet(cab, wall)
           const cx = toX(along - cab.w / 2)
           const cy = toY(cab.y + cab.h)
-          const bodyHex = CABINET_HEX[cab.color] ?? '#3d3d3d'
-          const isLight = ['white', 'driftwood', 'stone'].includes(cab.color)
+          const isSig = cab.line === 'signature'
+          const bodyHex = isSig
+            ? (SIG_SHELL[cab.shellColor ?? 'black'] ?? SIG_SHELL.black)
+            : (TEC_COLORS[cab.color] ?? TEC_COLORS.titanium)
+          const isLight = LIGHT_COLORS.has(cab.color)
           const lineColor = isLight ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.25)'
           const handleColor = isLight ? '#999' : '#aab'
           const hasToeKick = false

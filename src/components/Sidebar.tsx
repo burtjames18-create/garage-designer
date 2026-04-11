@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { useRef } from 'react'
+import { useScrollToSelected } from '../hooks/useScrollToSelected'
 import { useGarageStore } from '../store/garageStore'
 import { flooringColors, flooringTexturePath } from '../data/flooringColors'
 import WallPanel from './WallPanel'
@@ -115,6 +116,33 @@ const TABS: { id: SidebarTab; label: string }[] = [
   { id: 'info',     label: 'Project'  },
 ]
 
+function FloorStepItem({ step, isSel, onSelect, onDelete }: {
+  step: { id: string; label: string }; isSel: boolean
+  onSelect: () => void; onDelete: () => void
+}) {
+  const scrollRef = useScrollToSelected<HTMLDivElement>(isSel)
+  return (
+    <div
+      ref={scrollRef}
+      className={`list-item${isSel ? ' selected' : ''}`}
+      onClick={onSelect}
+      role="button"
+      tabIndex={0}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect() }}}
+      aria-selected={isSel}
+    >
+      <span className="list-item-label">{step.label}</span>
+      <button
+        className="delete-btn"
+        onClick={e => { e.stopPropagation(); onDelete() }}
+        aria-label={`Delete ${step.label}`}
+      >
+        <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>
+      </button>
+    </div>
+  )
+}
+
 export default function Sidebar() {
   const {
     activeTab: tab, setActiveTab: setTab,
@@ -183,29 +211,12 @@ export default function Sidebar() {
                 + Add Step-Up
               </button>
 
-              {floorSteps.map(step => {
-                const isSel = selectedFloorStepId === step.id
-                return (
-                  <div
-                    key={step.id}
-                    className={`list-item${isSel ? ' selected' : ''}`}
-                    onClick={() => selectFloorStep(isSel ? null : step.id)}
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectFloorStep(isSel ? null : step.id) }}}
-                    aria-selected={isSel}
-                  >
-                    <span className="list-item-label">{step.label}</span>
-                    <button
-                      className="delete-btn"
-                      onClick={e => { e.stopPropagation(); deleteFloorStep(step.id) }}
-                      aria-label={`Delete ${step.label}`}
-                    >
-                      <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>
-                    </button>
-                  </div>
-                )
-              })}
+              {floorSteps.map(step => (
+                <FloorStepItem key={step.id} step={step}
+                  isSel={selectedFloorStepId === step.id}
+                  onSelect={() => selectFloorStep(selectedFloorStepId === step.id ? null : step.id)}
+                  onDelete={() => deleteFloorStep(step.id)} />
+              ))}
 
               {selectedFloorStepId && (() => {
                 const step = floorSteps.find(s => s.id === selectedFloorStepId)

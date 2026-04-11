@@ -50,6 +50,7 @@
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 4px;
+  align-items: start;
 }
 
 .cab-preset-btn {
@@ -71,6 +72,16 @@
   overflow: hidden;
   word-break: break-word;
 }
+/* Fixed-height icon well — SVG is centred inside, so all tiles in a row align */
+.cab-preset-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.cab-preset-icon--lower  { height: 44px; }
+.cab-preset-icon--upper  { height: 40px; }
+.cab-preset-icon--locker { height: 62px; width: 52px; }
 .cab-preset-btn:hover {
   border-color: var(--accent);
   color: var(--accent-hover);
@@ -155,6 +166,15 @@
   color: var(--text-muted);
   opacity: 0.7;
   font-family: 'SF Mono', 'Cascadia Code', monospace;
+}
+
+.cab-color-label {
+  display: block;
+  font-size: 10px;
+  color: #999;
+  margin-top: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .cab-color-row {

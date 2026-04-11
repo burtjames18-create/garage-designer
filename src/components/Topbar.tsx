@@ -11,7 +11,7 @@ const VIEW_MODES: { mode: ViewMode; label: string; icon: string }[] = [
   { mode: 'perspective', label: '3D View',    icon: '◻' },
   { mode: 'wireframe',   label: 'Wireframe',  icon: '⬡' },
   { mode: 'top',         label: 'Floor Plan', icon: '⊟' },
-  { mode: 'elevation',   label: 'Wall Edit',  icon: '🧱' },
+  { mode: 'elevation',   label: 'Wall Edit',  icon: '▦' },
 ]
 
 const QUALITY_LEVELS: { key: QualityPreset; label: string; title: string }[] = [
@@ -26,6 +26,7 @@ export default function Topbar() {
   const [showExport, setShowExport] = useState(false)
   const [showImport, setShowImport] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const preExportQuality = useRef<typeof qualityPreset | null>(null)
 
   function handleLoadClick() {
     fileInputRef.current?.click()
@@ -107,7 +108,6 @@ export default function Topbar() {
             aria-label={v.label}
           >
             <span className="view-icon" aria-hidden="true">{v.icon}</span>
-            <span>{v.label}</span>
           </button>
         ))}
       </div>
@@ -119,7 +119,7 @@ export default function Topbar() {
           <polyline points="17 8 12 3 7 8"/>
           <line x1="12" y1="3" x2="12" y2="15"/>
         </svg>
-        Import
+        Import Model
       </button>
 
       {/* Quality preset */}
@@ -145,7 +145,7 @@ export default function Topbar() {
           <IconSave size={14} /> Save
         </button>
         <button className="load-btn" onClick={handleLoadClick} aria-label="Open saved project">
-          <IconOpen size={14} /> Open
+          <IconOpen size={14} /> Open Project
         </button>
         <input
           ref={fileInputRef}
@@ -155,12 +155,29 @@ export default function Topbar() {
           onChange={handleFileChange}
           aria-hidden="true"
         />
-        <button className="export-btn" onClick={() => setShowExport(true)} aria-label="Export as PDF">Export PDF</button>
+        <button className="export-btn" onClick={() => {
+          // Auto-switch to high quality before exporting so captures look their best.
+          // Remember the current preset so we can restore it when the modal closes.
+          preExportQuality.current = qualityPreset
+          if (qualityPreset !== 'high') {
+            setQualityPreset('high')
+            setTimeout(() => setShowExport(true), 400)
+          } else {
+            setShowExport(true)
+          }
+        }} aria-label="Export as PDF">Export PDF</button>
       </div>
 
       <span className="topbar-version">v{__APP_VERSION__}</span>
 
-      {showExport && <ExportModal onClose={() => setShowExport(false)} />}
+      {showExport && <ExportModal onClose={() => {
+        setShowExport(false)
+        // Restore the user's original quality preset (they didn't choose high manually)
+        if (preExportQuality.current && preExportQuality.current !== 'high') {
+          setQualityPreset(preExportQuality.current)
+        }
+        preExportQuality.current = null
+      }} />}
       {showImport && <ImportModelModal onClose={() => setShowImport(false)} />}
     </div>
   )

@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useGarageStore } from '../store/garageStore'
+import { useScrollToSelected } from '../hooks/useScrollToSelected'
 import type { GarageWall } from '../store/garageStore'
 import MeasureInput from './MeasureInput'
 import { wallLengthIn, inchesToDisplay } from '../utils/measurements'
@@ -16,10 +17,14 @@ import './WallPanel.css'
 
 
 /** Collapsible section with a clickable header */
-function Section({ title, defaultOpen = false, children }: { title: string; defaultOpen?: boolean; children: React.ReactNode }) {
+function Section({ title, defaultOpen = false, forceOpen = false, sectionRef, children }: {
+  title: string; defaultOpen?: boolean; forceOpen?: boolean
+  sectionRef?: React.Ref<HTMLDivElement>; children: React.ReactNode
+}) {
   const [open, setOpen] = useState(defaultOpen)
+  useEffect(() => { if (forceOpen) setOpen(true) }, [forceOpen])
   return (
-    <div className="wall-section">
+    <div className="wall-section" ref={sectionRef}>
       <button className="wall-section-header" onClick={() => setOpen(o => !o)}>
         <span className="wall-section-chevron" data-open={open}>&#9656;</span>
         <span>{title}</span>
@@ -30,9 +35,9 @@ function Section({ title, defaultOpen = false, children }: { title: string; defa
 }
 
 const WALL_COLORS = [
-  { name: 'Default White',  hex: '#e0dedd' },
+  { name: 'Off-White',      hex: '#f0ede4' },
   { name: 'Bright White',   hex: '#f5f5f5' },
-  { name: 'Warm White',     hex: '#f0ede8' },
+  { name: 'Cool White',     hex: '#e0dedd' },
   { name: 'Light Grey',     hex: '#d4d4d4' },
   { name: 'Medium Grey',    hex: '#aaaaaa' },
   { name: 'Beige',          hex: '#e8dcc8' },
@@ -74,6 +79,15 @@ function WallEditor({ wall }: { wall: GarageWall }) {
   const selected = selectedWallId === wall.id
   const len = wallLengthIn(wall.x1, wall.z1, wall.x2, wall.z2)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const wallScrollRef = useScrollToSelected<HTMLDivElement>(selected)
+  const slatwallRef = useRef<HTMLDivElement>(null)
+  const hasSlatwallSelected = wallPanels.some(p => p.id === selectedSlatwallPanelId)
+
+  useEffect(() => {
+    if (hasSlatwallSelected && slatwallRef.current) {
+      slatwallRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }, [hasSlatwallSelected, selectedSlatwallPanelId])
 
   const handleLengthChange = (newLen: number) => {
     if (newLen <= 0) return
@@ -93,6 +107,7 @@ function WallEditor({ wall }: { wall: GarageWall }) {
 
   return (
     <div
+      ref={wallScrollRef}
       className={`wall-item ${selected ? 'selected' : ''}`}
       onClick={() => selectWall(wall.id)}
     >
@@ -379,7 +394,7 @@ function WallEditor({ wall }: { wall: GarageWall }) {
           </Section>
 
           {/* Slatwall */}
-          <Section title={`Slatwall (${wallPanels.length})`}>
+          <Section title={`Slatwall (${wallPanels.length})`} forceOpen={hasSlatwallSelected} sectionRef={slatwallRef}>
             <div className="openings-header">
               <button className="opening-add-btn" onClick={() => addSlatwallPanel(wall.id)}>+ Add Panel</button>
             </div>

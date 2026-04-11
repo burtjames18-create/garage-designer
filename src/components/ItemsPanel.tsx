@@ -1,10 +1,10 @@
 import { useState, useMemo } from 'react'
 import { useGarageStore } from '../store/garageStore'
+import { useScrollToSelected } from '../hooks/useScrollToSelected'
 import { MODEL_CATALOG, CATEGORY_LABELS, CATEGORY_COLORS } from '../data/modelCatalog'
 import type { ModelCategory, ModelDef } from '../data/modelCatalog'
 import { getLibraryModels, removeLibraryModel } from '../utils/modelLibrary'
 import { removeCachedModel } from '../utils/importedModelCache'
-import { cameraFloorPos } from '../utils/measurements'
 import { IconDelete } from './Icons'
 import ConfirmDialog from './ConfirmDialog'
 import './ItemsPanel.css'
@@ -78,6 +78,33 @@ function CarSilhouette({ category }: { category: ModelCategory }) {
   )
 }
 
+function PlacedItemRow({ item, selected, onSelect, onRemove }: {
+  item: { id: string; label: string }; selected: boolean
+  onSelect: () => void; onRemove: () => void
+}) {
+  const scrollRef = useScrollToSelected<HTMLDivElement>(selected)
+  return (
+    <div
+      ref={scrollRef}
+      className={`placed-item ${selected ? 'selected' : ''}`}
+      onClick={onSelect}
+      role="button"
+      tabIndex={0}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect() }}}
+      aria-selected={selected}
+    >
+      <span className="placed-item-name">{item.label}</span>
+      <button
+        className="placed-item-del"
+        onClick={e => { e.stopPropagation(); onRemove() }}
+        aria-label={`Remove ${item.label}`}
+      >
+        <IconDelete size={10} />
+      </button>
+    </div>
+  )
+}
+
 export default function ItemsPanel() {
   const { items, addItem, removeItem, selectItem, selectedItemId } = useGarageStore()
   const [activeCategory, setActiveCategory] = useState<ModelCategory | 'all'>('car')
@@ -102,7 +129,7 @@ export default function ItemsPanel() {
       id,
       type: def.type,
       label: def.label,
-      position: [cameraFloorPos.x / 12, 0, cameraFloorPos.z / 12],
+      position: [0, 0, 0],
       rotation: [0, 0, 0],
       scale: [1, 1, 1],
     })
@@ -115,7 +142,7 @@ export default function ItemsPanel() {
       id,
       type: `imported:${model.id}`,
       label: model.label,
-      position: [cameraFloorPos.x / 12, 0, cameraFloorPos.z / 12],
+      position: [0, 0, 0],
       rotation: [0, 0, 0],
       scale: [1, 1, 1],
     })
@@ -195,24 +222,10 @@ export default function ItemsPanel() {
           <div className="section-label" style={{ marginTop: 16 }}>In Scene ({items.length})</div>
           <div className="placed-list">
             {items.map(item => (
-              <div
-                key={item.id}
-                className={`placed-item ${selectedItemId === item.id ? 'selected' : ''}`}
-                onClick={() => selectItem(item.id)}
-                role="button"
-                tabIndex={0}
-                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectItem(item.id) }}}
-                aria-selected={selectedItemId === item.id}
-              >
-                <span className="placed-item-name">{item.label}</span>
-                <button
-                  className="placed-item-del"
-                  onClick={e => { e.stopPropagation(); setConfirmRemove(item.id) }}
-                  aria-label={`Remove ${item.label}`}
-                >
-                  <IconDelete size={10} />
-                </button>
-              </div>
+              <PlacedItemRow key={item.id} item={item}
+                selected={selectedItemId === item.id}
+                onSelect={() => selectItem(item.id)}
+                onRemove={() => setConfirmRemove(item.id)} />
             ))}
           </div>
           <p className="field-hint" style={{ marginTop: 6 }}>

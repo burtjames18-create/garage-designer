@@ -32,3 +32,9 @@ build/*.exe
 # Environment
 .env
 .env.*
+
+# Large 3D model assets — copied manually between machines
+public/assets/models/*.glb
+!public/assets/models/door-*.glb
+!public/assets/models/doorway-*.glb
+!public/assets/models/window-*.glb

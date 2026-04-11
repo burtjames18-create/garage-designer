@@ -1,0 +1,66 @@
+.rack-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.rack-preset-btn {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 8px 8px 7px;
+  gap: 6px;
+  line-height: 1.2;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s, transform 0.15s;
+}
+.rack-preset-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent-hover);
+  background: var(--surface3);
+  transform: translateY(-1px);
+}
+.rack-preset-btn:hover .rack-preset-thumb rect:first-child {
+  stroke: var(--accent);
+}
+
+.rack-preset-thumb {
+  display: block;
+  width: 100%;
+  height: 36px;
+}
+.rack-preset-thumb rect:first-child {
+  fill: rgba(255, 255, 255, 0.04);
+  stroke: var(--border2);
+  stroke-width: 1.2;
+}
+.rack-preset-thumb line {
+  stroke: var(--border2);
+  stroke-width: 0.6;
+  opacity: 0.7;
+}
+
+.rack-preset-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 6px;
+}
+.rack-preset-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.2px;
+}
+.rack-preset-price {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--accent);
+  white-space: nowrap;
+}

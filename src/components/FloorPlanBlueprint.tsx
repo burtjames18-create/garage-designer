@@ -547,11 +547,6 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
           z: rack.z + lx * sin + lz * cos,
         }))
         const pts = corners.map(c => `${sx(c.x)},${sz(c.z)}`).join(' ')
-        const rcx = corners.reduce((s, c) => s + sx(c.x), 0) / 4
-        const rcz = corners.reduce((s, c) => s + sz(c.z), 0) / 4
-        const wLabel = inchesToDisplay(rack.rackWidth)
-        const lLabel = inchesToDisplay(rack.rackLength)
-        const angleDeg = -(rack.rotY * 180 / Math.PI)
         const isSel = selectedRackId === rack.id
 
         // Rotate handle position: midpoint of the "top" edge (first two corners)
@@ -560,24 +555,16 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
 
         return (
           <g key={rack.id} style={{ cursor: rack.locked ? 'default' : 'grab' }}>
-            {/* Hit area + visual */}
+            {/* Rack base — solid outline so it's clearly visible on the floor plan */}
             <polygon
               points={pts}
-              fill={isSel ? 'rgba(100,100,255,0.18)' : 'rgba(100,100,255,0.08)'}
-              stroke={isSel ? '#4444ff' : '#6666cc'}
-              strokeWidth={isSel ? 1.2 : 0.8}
-              strokeDasharray="3 2"
+              fill={isSel ? 'rgba(100,100,255,0.22)' : 'rgba(100,100,255,0.14)'}
+              stroke={isSel ? '#4444ff' : '#5555bb'}
+              strokeWidth={isSel ? 1.4 : 1.0}
               onPointerDown={(e) => onRackPointerDown(e, rack)}
               onPointerMove={onRackPointerMove}
               onPointerUp={onRackPointerUp}
             />
-            {/* Dimension label */}
-            <text x={rcx} y={rcz} textAnchor="middle" dominantBaseline="central"
-              fontSize={6} fill={isSel ? '#3333cc' : '#6666cc'} fontWeight="600"
-              pointerEvents="none"
-              transform={`rotate(${readableAngle(angleDeg)}, ${rcx}, ${rcz})`}>
-              {wLabel} × {lLabel}
-            </text>
             {/* Rotate handle — small circle at top edge */}
             {isSel && !rack.locked && (
               <circle

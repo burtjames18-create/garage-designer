@@ -120,6 +120,7 @@ interface SvgDrag {
   type: 'panel-body' | 'panel-corner' | 'cabinet' | 'countertop'
   id: string
   corner?: 0 | 1 | 2 | 3
+  moved: boolean  // becomes true once pointer moves past click threshold
   startSvgX: number
   startSvgY: number
   startAlongStart?: number
@@ -139,10 +140,6 @@ interface SvgDrag {
 }
 
 // ─── Display colors ───────────────────────────────────────────────────────────
-const CABINET_HEX: Record<string, string> = {
-  charcoal: '#3d3d3d', white: '#f2f2f0', driftwood: '#7a6a58',
-  slate: '#5a6872', stone: '#7a7972',
-}
 const COUNTERTOP_HEX: Record<string, string> = {
   'butcher-block': '#b5813a', 'stainless-steel': '#b0b4b8', white: '#e8e8e4', black: '#2a2a2a', concrete: '#8a8a80',
 }
@@ -418,11 +415,10 @@ export default function WallElevationView() {
       return
     }
 
-    selectSlatwallPanel(panel.id)
     const pt = getSvgPt(e)
     if (!pt) return
     dragRef.current = {
-      type: 'panel-body', id: panel.id,
+      type: 'panel-body', id: panel.id, moved: false,
       startSvgX: pt.x, startSvgY: pt.y,
       startAlongStart: panel.alongStart, startAlongEnd: panel.alongEnd,
       startYBottom: panel.yBottom, startYTop: panel.yTop,
@@ -431,11 +427,12 @@ export default function WallElevationView() {
 
   const onCornerDown = (e: React.MouseEvent, panel: SlatwallPanel, corner: 0 | 1 | 2 | 3) => {
     e.stopPropagation()
+    // Corner drag is always a resize — select the panel immediately so its handles stay active
     selectSlatwallPanel(panel.id)
     const pt = getSvgPt(e)
     if (!pt) return
     dragRef.current = {
-      type: 'panel-corner', id: panel.id, corner,
+      type: 'panel-corner', id: panel.id, corner, moved: false,
       startSvgX: pt.x, startSvgY: pt.y,
       startAlongStart: panel.alongStart, startAlongEnd: panel.alongEnd,
       startYBottom: panel.yBottom, startYTop: panel.yTop,
@@ -459,12 +456,11 @@ export default function WallElevationView() {
       return
     }
 
-    selectCabinet(cab.id)
     const pt = getSvgPt(e)
     if (!pt) return
     const { along } = projectCabinet(cab, wall)
     dragRef.current = {
-      type: 'cabinet', id: cab.id,
+      type: 'cabinet', id: cab.id, moved: false,
       startSvgX: pt.x, startSvgY: pt.y,
       startCabAlong: along, startCabX: cab.x, startCabZ: cab.z, startCabY: cab.y,
     }
@@ -483,13 +479,16 @@ export default function WallElevationView() {
       return
     }
 
-    selectCountertop(ct.id)
-    if (ct.locked) return
+    if (ct.locked) {
+      // Locked items can't be dragged, so treat a press as a pure click selection
+      selectCountertop(ct.id)
+      return
+    }
     const pt = getSvgPt(e)
     if (!pt) return
     const { along } = projectCountertop(ct, wall)
     dragRef.current = {
-      type: 'countertop', id: ct.id,
+      type: 'countertop', id: ct.id, moved: false,
       startSvgX: pt.x, startSvgY: pt.y,
       startCtAlong: along, startCtX: ct.x, startCtZ: ct.z, startCtY: ct.y,
       startCtWidth: ct.width, ctEdge: edge,
@@ -506,6 +505,12 @@ export default function WallElevationView() {
 
     const dAlong = pt.x - drag.startSvgX
     const dHeight = -(pt.y - drag.startSvgY)
+
+    // Mark as a drag once the pointer moves more than ~1 inch in any direction.
+    // Below this threshold we treat the press as a click (selection happens on mouseup).
+    if (!drag.moved && Math.hypot(dAlong, dHeight) > 1) {
+      drag.moved = true
+    }
 
     // ── Slatwall panel body drag ───────────────────────────────────────────
     if (drag.type === 'panel-body') {
@@ -621,7 +626,16 @@ export default function WallElevationView() {
     }
   }
 
-  const onMouseUp = () => { dragRef.current = null }
+  const onMouseUp = () => {
+    const drag = dragRef.current
+    if (drag && !drag.moved) {
+      // Pure click (no drag) — open the item's settings by selecting it
+      if (drag.type === 'panel-body' || drag.type === 'panel-corner') selectSlatwallPanel(drag.id)
+      else if (drag.type === 'cabinet') selectCabinet(drag.id)
+      else if (drag.type === 'countertop') selectCountertop(drag.id)
+    }
+    dragRef.current = null
+  }
 
   // Escape key deselects
   useEffect(() => {
@@ -676,6 +690,8 @@ export default function WallElevationView() {
   // ─── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="wall-elev-wrap">
+
+      <div className="view-label view-label--blueprint">Wall Edit</div>
 
       {/* Controls bar */}
       <div className="wall-elev-controls">
@@ -849,6 +865,7 @@ export default function WallElevationView() {
 
           {/* Baseboard — elevated on top of floor steps where they overlap */}
           {wall.baseboard && bbH > 0 && (() => {
+            const bbFill = wall.baseboardColor ?? '#cccccc'
             // Compute step overlaps for this wall
             const stepOverlaps: { u0: number; u1: number; stepHeight: number }[] = []
             for (const step of floorSteps) {
@@ -859,7 +876,8 @@ export default function WallElevationView() {
               // No steps — single baseboard rect at floor level
               return (
                 <rect x={PAD} y={toY(bbH)} width={wLen} height={bbH}
-                  fill={wall.baseboardColor ?? '#cccccc'} opacity={0.45} />
+                  fill={bbFill} opacity={0.95}
+                  stroke="#333" strokeWidth={0.6} />
               )
             }
             // Split baseboard into segments, each elevated by the step height underneath
@@ -884,7 +902,8 @@ export default function WallElevationView() {
               <rect key={`bb${i}`}
                 x={toX(seg.x0)} y={toY(seg.elevate + bbH)}
                 width={seg.x1 - seg.x0} height={bbH}
-                fill={wall.baseboardColor ?? '#cccccc'} opacity={0.45} />
+                fill={bbFill} opacity={0.95}
+                stroke="#333" strokeWidth={0.6} />
             ))
           })()}
 
@@ -967,7 +986,7 @@ export default function WallElevationView() {
                       w: cab.w, h: cab.h,
                       doors: cab.doors, drawers: cab.drawers,
                       style: cab.style, line: cab.line ?? 'technica',
-                      color: cab.color, handleSide: cab.handleSide,
+                      color: cab.color, shellColor: cab.shellColor, handleColor: cab.handleColor, handleSide: cab.handleSide,
                     })}
                   </g>
                 </g>

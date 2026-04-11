@@ -33,14 +33,16 @@ function CeilingLightEditor({ light }: { light: CeilingLight }) {
         </button>
       </div>
       <div className="light-body">
-        <div className="light-row">
-          <label>Rotate</label>
-          <button className="light-type-btn" style={{ flex: 'none', padding: '3px 10px' }}
-            onClick={() => u({ rotY: (light.rotY + Math.PI / 2) % Math.PI })}
-            aria-label="Rotate 90 degrees">
-            <IconRotate size={10} /> 90°
-          </button>
-        </div>
+        {(light.kind ?? 'bar') === 'bar' && (
+          <div className="light-row">
+            <label>Rotate</label>
+            <button className="light-type-btn" style={{ flex: 'none', padding: '3px 10px' }}
+              onClick={() => u({ rotY: (light.rotY + Math.PI / 2) % Math.PI })}
+              aria-label="Rotate 90 degrees">
+              <IconRotate size={10} /> 90°
+            </button>
+          </div>
+        )}
         <div className="light-row">
           <label>Color</label>
           <div style={{ display: 'flex', gap: 4 }}>
@@ -170,6 +172,15 @@ function LightEditor({ light }: { light: SceneLight }) {
   )
 }
 
+const IconWand = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M2 14L10 6"/>
+    <path d="M10 6L12.5 3.5C13 3 13.5 3 14 3.5C14.5 4 14.5 4.5 14 5L11.5 7.5Z"/>
+    <path d="M7 2V0.5"/><path d="M4.5 3.5L3.5 2.5"/><path d="M3 6H1.5"/>
+    <path d="M12 10V11.5"/><path d="M14 8L15 7"/>
+  </svg>
+)
+
 export default function LightingPanel() {
   const {
     ambientIntensity, setAmbientIntensity,
@@ -180,11 +191,21 @@ export default function LightingPanel() {
     lightMultiplier, setLightMultiplier,
     sceneLights, addSceneLight,
     ceilingLights, addCeilingLight,
+    autoLighting,
   } = useGarageStore()
 
   return (
     <div className="lighting-panel">
-      <div className="section-label">Scene Lighting</div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+        <div className="section-label" style={{ margin: 0 }}>Scene Lighting</div>
+        <button
+          className="auto-light-btn"
+          onClick={autoLighting}
+          title="Auto-configure lights based on room size"
+        >
+          <IconWand size={13} /> Auto Light
+        </button>
+      </div>
       <div className="light-row">
         <label id="ambient-brightness">Ambient Fill</label>
         <input type="range" min={0} max={0.5} step={0.005}
@@ -251,11 +272,14 @@ export default function LightingPanel() {
       </div>
 
       <div className="light-add-row" style={{ marginTop: 4 }}>
-        <div className="section-label" style={{ margin: 0 }}>LED Bar Fixtures</div>
-        <button className="light-add-btn" onClick={() => addCeilingLight()}>+ Add</button>
+        <div className="section-label" style={{ margin: 0 }}>Ceiling Fixtures</div>
+        <div className="light-add-btns">
+          <button className="light-add-btn" onClick={() => addCeilingLight('bar')}>+ LED Bar</button>
+          <button className="light-add-btn" onClick={() => addCeilingLight('puck')}>+ Puck</button>
+        </div>
       </div>
       <p className="light-empty" style={{ marginTop: 2 }}>
-        1ft × 4ft × 2" — drag to position on ceiling
+        Drag fixtures to position them on the ceiling
       </p>
       <div className="light-list">
         {ceilingLights.map(l => <CeilingLightEditor key={l.id} light={l} />)}

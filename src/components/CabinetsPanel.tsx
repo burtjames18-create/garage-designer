@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useGarageStore } from '../store/garageStore'
+import { useScrollToSelected } from '../hooks/useScrollToSelected'
 import { CABINET_PRESETS } from '../store/garageStore'
 import type { PlacedCabinet, Countertop, CabinetPreset, CabinetLine } from '../store/garageStore'
 import { inchesToDisplay, cameraFloorPos } from '../utils/measurements'
@@ -10,12 +11,39 @@ import { showToast } from './Toast'
 import CabinetFrontSVG from './CabinetFrontSVG'
 import './CabinetsPanel.css'
 
-const CABINET_COLORS: { id: string; name: string; hex: string }[] = [
-  { id: 'charcoal',  name: 'Charcoal',  hex: '#3d3d3d' },
-  { id: 'white',     name: 'White',     hex: '#f2f2f0' },
-  { id: 'driftwood', name: 'Driftwood', hex: '#7a6a58' },
-  { id: 'slate',     name: 'Slate',     hex: '#5a6872' },
-  { id: 'stone',     name: 'Stone',     hex: '#7a7972' },
+const TECHNICA_COLORS: { id: string; name: string; hex: string }[] = [
+  { id: 'titanium',      name: 'Titanium',      hex: '#5a5650' },
+  { id: 'ash-grey',      name: 'Ash Grey',      hex: '#d4cfc0' },
+  { id: 'harbor-blue',   name: 'Harbor Blue',   hex: '#283448' },
+  { id: 'evergreen',     name: 'Evergreen',     hex: '#4d5e4c' },
+  { id: 'sandstone',     name: 'Sandstone',     hex: '#b09475' },
+  { id: 'mica',          name: 'Mica',          hex: '#6e6e6e' },
+  { id: 'graphite',      name: 'Graphite',      hex: '#3a3a3c' },
+  { id: 'obsidian',      name: 'Obsidian',      hex: '#1a1a1a' },
+  { id: 'silver',        name: 'Silver',        hex: '#b8bcc0' },
+  { id: 'metallic-grey', name: 'Metallic Grey', hex: '#989a9a' },
+  { id: 'argento-blu',   name: 'Argento Blu',   hex: '#9aa8b0' },
+  { id: 'ruby',          name: 'Ruby',          hex: '#b02020' },
+]
+
+const HANDLE_COLORS: { id: string; name: string; hex: string }[] = [
+  { id: 'brushed', name: 'Brushed Steel', hex: '#c0c4c8' },
+  { id: 'black',   name: 'Black',         hex: '#1a1a1c' },
+]
+
+const SIG_SHELL_COLORS: { id: string; name: string; hex: string }[] = [
+  { id: 'black',   name: 'Black',   hex: '#1a1a1c' },
+  { id: 'granite', name: 'Granite', hex: '#48484a' },
+]
+
+const SIG_DOOR_COLORS: { id: string; name: string; hex: string }[] = [
+  { id: 'black',         name: 'Black',         hex: '#1a1a1c' },
+  { id: 'granite',       name: 'Granite',       hex: '#48484a' },
+  { id: 'harbor-blue',   name: 'Harbor Blue',   hex: '#3a4e5c' },
+  { id: 'latte',         name: 'Latte',         hex: '#b0a08a' },
+  { id: 'midnight-blue', name: 'Midnight Blue', hex: '#1e2d4d' },
+  { id: 'red',           name: 'Red',           hex: '#b82020' },
+  { id: 'silver',        name: 'Silver',        hex: '#b0b4b8' },
 ]
 
 const CT_COLORS: { id: string; name: string; hex: string }[] = [
@@ -24,8 +52,8 @@ const CT_COLORS: { id: string; name: string; hex: string }[] = [
 ]
 
 const STYLE_GROUPS: { label: string; style: string }[] = [
-  { label: 'Lower Cabinets', style: 'lower' },
   { label: 'Lockers',        style: 'locker' },
+  { label: 'Lower Cabinets', style: 'lower' },
   { label: 'Upper Cabinets', style: 'upper' },
 ]
 
@@ -33,6 +61,7 @@ function CabinetEditor({ cab }: { cab: PlacedCabinet }) {
   const { selectedCabinetId, selectCabinet, updateCabinet, deleteCabinet } = useGarageStore()
   const selected = selectedCabinetId === cab.id
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const scrollRef = useScrollToSelected<HTMLDivElement>(selected)
 
   const handleDelete = () => {
     deleteCabinet(cab.id)
@@ -42,6 +71,7 @@ function CabinetEditor({ cab }: { cab: PlacedCabinet }) {
 
   return (
     <div
+      ref={scrollRef}
       className={`cab-item${selected ? ' selected' : ''}`}
       onClick={() => selectCabinet(cab.id)}
       role="button"
@@ -86,8 +116,28 @@ function CabinetEditor({ cab }: { cab: PlacedCabinet }) {
             min={0}
             max={120}
           />
-          <div className="cab-color-row" role="radiogroup" aria-label="Cabinet color" style={{ marginTop: 8 }}>
-            {CABINET_COLORS.map(c => (
+          {cab.line === 'signature' && (
+            <>
+              <span className="cab-color-label">Shell</span>
+              <div className="cab-color-row" role="radiogroup" aria-label="Shell color" style={{ marginTop: 4 }}>
+                {SIG_SHELL_COLORS.map(c => (
+                  <button
+                    key={c.id}
+                    role="radio"
+                    aria-checked={(cab.shellColor ?? 'black') === c.id}
+                    className={`cab-color-swatch${(cab.shellColor ?? 'black') === c.id ? ' active' : ''}`}
+                    style={{ background: c.hex }}
+                    aria-label={c.name}
+                    title={c.name}
+                    onClick={() => updateCabinet(cab.id, { shellColor: c.id })}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+          <span className="cab-color-label">{cab.line === 'signature' ? 'Door' : 'Color'}</span>
+          <div className="cab-color-row" role="radiogroup" aria-label="Cabinet color" style={{ marginTop: 4 }}>
+            {(cab.line === 'signature' ? SIG_DOOR_COLORS : TECHNICA_COLORS).map(c => (
               <button
                 key={c.id}
                 role="radio"
@@ -95,21 +145,55 @@ function CabinetEditor({ cab }: { cab: PlacedCabinet }) {
                 className={`cab-color-swatch${cab.color === c.id ? ' active' : ''}`}
                 style={{ background: c.hex }}
                 aria-label={c.name}
+                title={c.name}
                 onClick={() => updateCabinet(cab.id, { color: c.id })}
               />
             ))}
           </div>
-          {cab.doors === 1 && (
-            <button
-              className="cab-handle-toggle"
-              onClick={() => updateCabinet(cab.id, { handleSide: (cab.handleSide ?? 'right') === 'right' ? 'left' : 'right' })}
-              style={{ marginTop: 6, fontSize: 11, padding: '3px 8px', cursor: 'pointer',
-                background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)',
-                borderRadius: 4, color: '#ccc' }}
-            >
-              Handle: {(cab.handleSide ?? 'right') === 'right' ? 'Right' : 'Left'}
-            </button>
-          )}
+          <span className="cab-color-label">Handle</span>
+          <div className="cab-color-row" role="radiogroup" aria-label="Handle color" style={{ marginTop: 4 }}>
+            {HANDLE_COLORS.map(c => (
+              <button
+                key={c.id}
+                role="radio"
+                aria-checked={(cab.handleColor ?? 'brushed') === c.id}
+                className={`cab-color-swatch${(cab.handleColor ?? 'brushed') === c.id ? ' active' : ''}`}
+                style={{ background: c.hex }}
+                aria-label={c.name}
+                title={c.name}
+                onClick={() => updateCabinet(cab.id, { handleColor: c.id })}
+              />
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+            {cab.doors === 1 && (
+              <button
+                className="cab-handle-toggle"
+                onClick={() => updateCabinet(cab.id, { handleSide: (cab.handleSide ?? 'right') === 'right' ? 'left' : 'right' })}
+                style={{ fontSize: 11, padding: '3px 8px', cursor: 'pointer',
+                  background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)',
+                  borderRadius: 4, color: '#ccc' }}
+              >
+                Handle: {(cab.handleSide ?? 'right') === 'right' ? 'Right' : 'Left'}
+              </button>
+            )}
+            {cab.doors > 0 && (() => {
+              const s = cab.doorOpenState ?? 0
+              const next = ((s + 1) % 3) as 0 | 1 | 2
+              const label = s === 0 ? 'Closed' : s === 1 ? '45°' : '90°'
+              return (
+                <button
+                  onClick={() => updateCabinet(cab.id, { doorOpenState: next })}
+                  style={{ fontSize: 11, padding: '3px 8px', cursor: 'pointer',
+                    background: s > 0 ? 'rgba(100,160,255,0.15)' : 'rgba(255,255,255,0.08)',
+                    border: `1px solid ${s > 0 ? 'rgba(100,160,255,0.35)' : 'rgba(255,255,255,0.15)'}`,
+                    borderRadius: 4, color: s > 0 ? '#8cb4ff' : '#ccc' }}
+                >
+                  Doors: {label}
+                </button>
+              )
+            })()}
+          </div>
         </div>
       )}
 
@@ -129,9 +213,11 @@ function CountertopEditor({ ct }: { ct: Countertop }) {
   const { selectedCountertopId, selectCountertop, updateCountertop, deleteCountertop } = useGarageStore()
   const selected = selectedCountertopId === ct.id
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const scrollRef = useScrollToSelected<HTMLDivElement>(selected)
 
   return (
     <div
+      ref={scrollRef}
       className={`cab-item${selected ? ' selected' : ''}`}
       onClick={() => selectCountertop(ct.id)}
       role="button"
@@ -249,7 +335,9 @@ export default function CabinetsPanel() {
                   aria-label={`Add ${preset.label}${preset.price ? ` — $${preset.price}` : ''}`}
                   title={`${preset.label}\n${inchesToDisplay(preset.w)}W × ${inchesToDisplay(preset.d)}D × ${inchesToDisplay(preset.h)}H`}
                 >
-                  <CabinetFrontSVG preset={preset} />
+                  <div className={`cab-preset-icon cab-preset-icon--${preset.style}`}>
+                    <CabinetFrontSVG preset={preset} />
+                  </div>
                   <span className="cab-preset-name">{preset.label}</span>
                   {preset.price != null && <span className="cab-preset-price">${preset.price}</span>}
                 </button>

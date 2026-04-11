@@ -12,12 +12,14 @@ export const CEILING_LIGHT_W  = 1      // feet
 export const CEILING_LIGHT_L  = 4      // feet
 export const CEILING_LIGHT_TH = 2 / 12 // feet (2 inches)
 
+export type CeilingLightKind = 'bar' | 'puck'
 export interface CeilingLight {
   id: string
   label: string
+  kind?: CeilingLightKind  // default 'bar' for backwards compatibility
   x: number     // feet from center
   z: number     // feet from center
-  rotY: number  // 0 = long axis along Z, Math.PI/2 = long axis along X
+  rotY: number  // bar: 0 = long axis along Z, Math.PI/2 = long axis along X (puck: ignored)
   color: string // emitted light color hex (warm white default)
   intensity: number // 0–3
   enabled: boolean
@@ -72,33 +74,33 @@ export interface CabinetPreset {
 
 export const CABINET_PRESETS: CabinetPreset[] = [
   // ── Technica ──────────────────────────────────────────────────────────
-  { key: 't-lower-20-1',    label: '20" 1-Door Lower',          line: 'technica', style: 'lower',  doors: 1, w: 20, d: 24, h: 31.25, sku: 'GL-TEC-BASE-20',      price: 249 },
-  { key: 't-lower-28-2',    label: '28" 2-Door Lower',          line: 'technica', style: 'lower',  doors: 2, w: 28, d: 24, h: 31.25, sku: 'GL-TEC-BASE-28',      price: 319 },
-  { key: 't-lower-36-2',    label: '36" 2-Door Lower',          line: 'technica', style: 'lower',  doors: 2, w: 36, d: 24, h: 31.25, sku: 'GL-TEC-BASE-36',      price: 429 },
-  { key: 't-lower-36-1d2d', label: '36" 1-Drawer 2-Door Lower', line: 'technica', style: 'lower',  doors: 2, drawers: 1, w: 36, d: 24, h: 31.25, sku: 'GL-TEC-BASE-36-1D',  price: 469 },
-  { key: 't-lower-36-5dr',  label: '36" 5-Drawer Lower',        line: 'technica', style: 'lower',  doors: 0, drawers: 5, w: 36, d: 24, h: 31.25, sku: 'GL-TEC-BASE-36-5DR', price: 549 },
-  { key: 't-lower-28-5dr',  label: '28" 5-Drawer Lower',        line: 'technica', style: 'lower',  doors: 0, drawers: 5, w: 28, d: 24, h: 31.25, sku: 'GL-TEC-BASE-28-5DR', price: 499 },
-  { key: 't-lower-20-5dr',  label: '20" 5-Drawer Lower',        line: 'technica', style: 'lower',  doors: 0, drawers: 5, w: 20, d: 24, h: 31.25, sku: 'GL-TEC-BASE-20-5DR', price: 449 },
-  { key: 't-locker-36-2',   label: '36" 2-Door Locker',         line: 'technica', style: 'locker', doors: 2, w: 36, d: 24, h: 80, sku: 'GL-TEC-TALL-36', price: 699 },
-  { key: 't-locker-28-2',   label: '28" 2-Door Locker',         line: 'technica', style: 'locker', doors: 2, w: 28, d: 24, h: 80, sku: 'GL-TEC-TALL-28', price: 649 },
-  { key: 't-locker-20-1',   label: '20" 1-Door Locker',         line: 'technica', style: 'locker', doors: 1, w: 20, d: 24, h: 80, sku: 'GL-TEC-TALL-20', price: 599 },
-  { key: 't-upper-36-2',    label: '36" 2-Door Upper',          line: 'technica', style: 'upper',  doors: 2, w: 36, d: 18, h: 28, sku: 'GL-TEC-WALL-36', price: 299 },
-  { key: 't-upper-28-2',    label: '28" 2-Door Upper',          line: 'technica', style: 'upper',  doors: 2, w: 28, d: 18, h: 28, sku: 'GL-TEC-WALL-28', price: 259 },
-  { key: 't-upper-20-1',    label: '20" 1-Door Upper',          line: 'technica', style: 'upper',  doors: 1, w: 20, d: 18, h: 28, sku: 'GL-TEC-WALL-20', price: 229 },
+  { key: 't-lower-20-1',    label: '20" 1-Door Lower',          line: 'technica', style: 'lower',  doors: 1, w: 20, d: 24, h: 30.5, sku: 'GL-TEC-BASE-20',      price: 249 },
+  { key: 't-lower-28-2',    label: '28" 2-Door Lower',          line: 'technica', style: 'lower',  doors: 2, w: 28, d: 24, h: 30.5, sku: 'GL-TEC-BASE-28',      price: 319 },
+  { key: 't-lower-36-2',    label: '36" 2-Door Lower',          line: 'technica', style: 'lower',  doors: 2, w: 36, d: 24, h: 30.5, sku: 'GL-TEC-BASE-36',      price: 429 },
+  { key: 't-lower-36-1d2d', label: '36" 1-Drawer 2-Door Lower', line: 'technica', style: 'lower',  doors: 2, drawers: 1, w: 36, d: 24, h: 30.5, sku: 'GL-TEC-BASE-36-1D',  price: 469 },
+  { key: 't-lower-36-5dr',  label: '36" 5-Drawer Lower',        line: 'technica', style: 'lower',  doors: 0, drawers: 5, w: 36, d: 24, h: 30.5, sku: 'GL-TEC-BASE-36-5DR', price: 549 },
+  { key: 't-lower-28-5dr',  label: '28" 5-Drawer Lower',        line: 'technica', style: 'lower',  doors: 0, drawers: 5, w: 28, d: 24, h: 30.5, sku: 'GL-TEC-BASE-28-5DR', price: 499 },
+  { key: 't-lower-20-5dr',  label: '20" 5-Drawer Lower',        line: 'technica', style: 'lower',  doors: 0, drawers: 5, w: 20, d: 24, h: 30.5, sku: 'GL-TEC-BASE-20-5DR', price: 449 },
+  { key: 't-locker-36-2',   label: '36" 2-Door Locker',         line: 'technica', style: 'locker', doors: 2, w: 36, d: 24, h: 84, sku: 'GL-TEC-TALL-36', price: 699 },
+  { key: 't-locker-28-2',   label: '28" 2-Door Locker',         line: 'technica', style: 'locker', doors: 2, w: 28, d: 24, h: 84, sku: 'GL-TEC-TALL-28', price: 649 },
+  { key: 't-locker-20-1',   label: '20" 1-Door Locker',         line: 'technica', style: 'locker', doors: 1, w: 20, d: 24, h: 84, sku: 'GL-TEC-TALL-20', price: 599 },
+  { key: 't-upper-36-2',    label: '36" 2-Door Upper',          line: 'technica', style: 'upper',  doors: 2, w: 36, d: 18, h: 30.5, sku: 'GL-TEC-WALL-36', price: 299 },
+  { key: 't-upper-28-2',    label: '28" 2-Door Upper',          line: 'technica', style: 'upper',  doors: 2, w: 28, d: 18, h: 30.5, sku: 'GL-TEC-WALL-28', price: 259 },
+  { key: 't-upper-20-1',    label: '20" 1-Door Upper',          line: 'technica', style: 'upper',  doors: 1, w: 20, d: 18, h: 30.5, sku: 'GL-TEC-WALL-20', price: 229 },
   // ── Signature ─────────────────────────────────────────────────────────
-  { key: 's-lower-20-1',    label: '20" 1-Door Lower',          line: 'signature', style: 'lower',  doors: 1, w: 20, d: 24, h: 31.25, sku: 'GL-SIG-BASE-20',      price: 299 },
-  { key: 's-lower-28-2',    label: '28" 2-Door Lower',          line: 'signature', style: 'lower',  doors: 2, w: 28, d: 24, h: 31.25, sku: 'GL-SIG-BASE-28',      price: 379 },
-  { key: 's-lower-36-2',    label: '36" 2-Door Lower',          line: 'signature', style: 'lower',  doors: 2, w: 36, d: 24, h: 31.25, sku: 'GL-SIG-BASE-36',      price: 499 },
-  { key: 's-lower-36-1d2d', label: '36" 1-Drawer 2-Door Lower', line: 'signature', style: 'lower',  doors: 2, drawers: 1, w: 36, d: 24, h: 31.25, sku: 'GL-SIG-BASE-36-1D',  price: 539 },
-  { key: 's-lower-36-5dr',  label: '36" 5-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 5, w: 36, d: 24, h: 31.25, sku: 'GL-SIG-BASE-36-5DR', price: 619 },
-  { key: 's-lower-28-5dr',  label: '28" 5-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 5, w: 28, d: 24, h: 31.25, sku: 'GL-SIG-BASE-28-5DR', price: 569 },
-  { key: 's-lower-20-5dr',  label: '20" 5-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 5, w: 20, d: 24, h: 31.25, sku: 'GL-SIG-BASE-20-5DR', price: 519 },
-  { key: 's-locker-36-2',   label: '36" 2-Door Locker',         line: 'signature', style: 'locker', doors: 2, w: 36, d: 24, h: 80, sku: 'GL-SIG-TALL-36', price: 799 },
-  { key: 's-locker-28-2',   label: '28" 2-Door Locker',         line: 'signature', style: 'locker', doors: 2, w: 28, d: 24, h: 80, sku: 'GL-SIG-TALL-28', price: 749 },
-  { key: 's-locker-20-1',   label: '20" 1-Door Locker',         line: 'signature', style: 'locker', doors: 1, w: 20, d: 24, h: 80, sku: 'GL-SIG-TALL-20', price: 699 },
-  { key: 's-upper-36-2',    label: '36" 2-Door Upper',          line: 'signature', style: 'upper',  doors: 2, w: 36, d: 18, h: 28, sku: 'GL-SIG-WALL-36', price: 359 },
-  { key: 's-upper-28-2',    label: '28" 2-Door Upper',          line: 'signature', style: 'upper',  doors: 2, w: 28, d: 18, h: 28, sku: 'GL-SIG-WALL-28', price: 319 },
-  { key: 's-upper-20-1',    label: '20" 1-Door Upper',          line: 'signature', style: 'upper',  doors: 1, w: 20, d: 18, h: 28, sku: 'GL-SIG-WALL-20', price: 279 },
+  { key: 's-lower-20-1',    label: '20" 1-Door Lower',          line: 'signature', style: 'lower',  doors: 1, w: 20, d: 24, h: 30.5, sku: 'GL-SIG-BASE-20',      price: 299 },
+  { key: 's-lower-28-2',    label: '28" 2-Door Lower',          line: 'signature', style: 'lower',  doors: 2, w: 28, d: 24, h: 30.5, sku: 'GL-SIG-BASE-28',      price: 379 },
+  { key: 's-lower-36-2',    label: '36" 2-Door Lower',          line: 'signature', style: 'lower',  doors: 2, w: 36, d: 24, h: 30.5, sku: 'GL-SIG-BASE-36',      price: 499 },
+  { key: 's-lower-36-1d2d', label: '36" 1-Drawer 2-Door Lower', line: 'signature', style: 'lower',  doors: 2, drawers: 1, w: 36, d: 24, h: 30.5, sku: 'GL-SIG-BASE-36-1D',  price: 539 },
+  { key: 's-lower-36-5dr',  label: '36" 5-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 5, w: 36, d: 24, h: 30.5, sku: 'GL-SIG-BASE-36-5DR', price: 619 },
+  { key: 's-lower-28-5dr',  label: '28" 5-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 5, w: 28, d: 24, h: 30.5, sku: 'GL-SIG-BASE-28-5DR', price: 569 },
+  { key: 's-lower-20-5dr',  label: '20" 5-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 5, w: 20, d: 24, h: 30.5, sku: 'GL-SIG-BASE-20-5DR', price: 519 },
+  { key: 's-locker-36-2',   label: '36" 2-Door Locker',         line: 'signature', style: 'locker', doors: 2, w: 36, d: 24, h: 84, sku: 'GL-SIG-TALL-36', price: 799 },
+  { key: 's-locker-28-2',   label: '28" 2-Door Locker',         line: 'signature', style: 'locker', doors: 2, w: 28, d: 24, h: 84, sku: 'GL-SIG-TALL-28', price: 749 },
+  { key: 's-locker-20-1',   label: '20" 1-Door Locker',         line: 'signature', style: 'locker', doors: 1, w: 20, d: 24, h: 84, sku: 'GL-SIG-TALL-20', price: 699 },
+  { key: 's-upper-36-2',    label: '36" 2-Door Upper',          line: 'signature', style: 'upper',  doors: 2, w: 36, d: 18, h: 30.5, sku: 'GL-SIG-WALL-36', price: 359 },
+  { key: 's-upper-28-2',    label: '28" 2-Door Upper',          line: 'signature', style: 'upper',  doors: 2, w: 28, d: 18, h: 30.5, sku: 'GL-SIG-WALL-28', price: 319 },
+  { key: 's-upper-20-1',    label: '20" 1-Door Upper',          line: 'signature', style: 'upper',  doors: 1, w: 20, d: 18, h: 30.5, sku: 'GL-SIG-WALL-20', price: 279 },
 ]
 
 export interface PlacedCabinet {
@@ -117,7 +119,10 @@ export interface PlacedCabinet {
   z: number
   rotY: number  // radians
   color: string // 'charcoal' | 'white' | 'driftwood' | 'slate' | 'stone'
+  shellColor?: string // Signature shell: 'black' | 'granite' (Technica uses door color for body)
+  handleColor?: string // 'brushed' | 'black' (default brushed)
   handleSide?: 'left' | 'right' // single-door handle position (default 'right')
+  doorOpenState?: 0 | 1 | 2  // 0=closed, 1=45°, 2=90°
   locked?: boolean
   sku?: string
   price?: number
@@ -309,7 +314,7 @@ function makeDefaultWalls(widthIn: number, depthIn: number, heightIn: number): G
   const hd = depthIn / 2
   const base: Omit<GarageWall, 'id' | 'label' | 'x1' | 'z1' | 'x2' | 'z2'> = {
     height: heightIn, yOffset: 0, thickness: 3.5, locked: false,
-    wallColor: '#e0dedd', openings: [], baseboard: true, baseboardHeight: 4, baseboardColor: '#cccccc', baseboardTexture: false,
+    wallColor: '#f0ede4', openings: [], baseboard: true, baseboardHeight: 4, baseboardColor: '#cccccc', baseboardTexture: false,
     stemWall: false, stemWallHeight: 4, stemWallTexture: 'concrete' as const, visible: true,
   }
   return [
@@ -481,10 +486,11 @@ interface GarageStore {
   // Ceiling light fixtures
   ceilingLights: CeilingLight[]
   selectedCeilingLightId: string | null
-  addCeilingLight: () => void
+  addCeilingLight: (kind?: CeilingLightKind) => void
   updateCeilingLight: (id: string, changes: Partial<CeilingLight>) => void
   deleteCeilingLight: (id: string) => void
   selectCeilingLight: (id: string | null) => void
+  autoLighting: () => void
 
   // Lighting
   ambientIntensity: number
@@ -517,6 +523,37 @@ interface GarageStore {
   // Save / Load
   saveProject: () => Promise<void>
   loadProject: (data: unknown) => void
+}
+
+/** Generate a sensible grid of recessed puck lights for a given room size. */
+function buildPuckGrid(wFt: number, dFt: number): CeilingLight[] {
+  const max = Math.max(wFt, dFt)
+  let cols: number, rows: number
+  if (max >= 28) {           // large garage
+    cols = wFt > dFt ? 4 : 3
+    rows = wFt > dFt ? 3 : 4
+  } else if (max >= 18) {    // medium garage (default 2-car)
+    cols = wFt > dFt ? 3 : 2
+    rows = wFt > dFt ? 2 : 3
+  } else {                   // small / single-car
+    cols = 2
+    rows = 2
+  }
+  const lights: CeilingLight[] = []
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const x = (c - (cols - 1) / 2) * (wFt / cols)
+      const z = (r - (rows - 1) / 2) * (dFt / rows)
+      lights.push({
+        id: uid(),
+        label: `Puck ${lights.length + 1}`,
+        kind: 'puck',
+        x, z, rotY: 0,
+        color: '#f0f4ff', intensity: 5.0, enabled: true,
+      })
+    }
+  }
+  return lights
 }
 
 export const useGarageStore = create<GarageStore>((set, get) => ({
@@ -595,14 +632,8 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       yOffset: 0,
     }]
 
-    // 4 LED bar ceiling lights distributed evenly
-    const wFt = widthFt, dFt = depthFt
-    const defaultLights: CeilingLight[] = [
-      { id: uid(), label: 'LED Bar 1', x: -wFt * 0.15, z: -dFt * 0.25, rotY: 0, color: '#fff8f0', intensity: 1.5, enabled: true },
-      { id: uid(), label: 'LED Bar 2', x:  wFt * 0.15, z: -dFt * 0.25, rotY: 0, color: '#fff8f0', intensity: 1.5, enabled: true },
-      { id: uid(), label: 'LED Bar 3', x: -wFt * 0.15, z:  dFt * 0.25, rotY: 0, color: '#fff8f0', intensity: 1.5, enabled: true },
-      { id: uid(), label: 'LED Bar 4', x:  wFt * 0.15, z:  dFt * 0.25, rotY: 0, color: '#fff8f0', intensity: 1.5, enabled: true },
-    ]
+    // Recessed puck lights in a grid sized to the room
+    const defaultLights = buildPuckGrid(widthFt, depthFt)
 
     set({
       garageWidth: widthIn,
@@ -654,7 +685,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       x1: 0, z1: 0, x2: 60, z2: 0,
       height: ch, yOffset: 0, thickness: 3.5,
       locked: false,
-      wallColor: '#e0dedd', openings: [], baseboard: true, baseboardHeight: 4, baseboardColor: '#cccccc', baseboardTexture: false,
+      wallColor: '#f0ede4', openings: [], baseboard: true, baseboardHeight: 4, baseboardColor: '#cccccc', baseboardTexture: false,
       stemWall: false, stemWallHeight: 4, stemWallTexture: 'concrete' as const, visible: true,
       ...overrides,
     }
@@ -732,9 +763,9 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       id: uid(), wallId,
       side,
       alongStart: trim,
-      alongEnd: trim + 96,                          // 8ft wide
+      alongEnd: trim + 12,                          // 1ft wide
       yBottom,
-      yTop: yBottom + 12,                           // 12" tall
+      yTop: yBottom + 12,                           // 1ft tall
       color: 'grey',
     }
     set(s => ({ slatwallPanels: [...s.slatwallPanels, panel], selectedSlatwallPanelId: panel.id }))
@@ -790,13 +821,12 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
   }),
 
   addShape: (type) => {
-    const ch = get().ceilingHeight
     const h = 12
     const shape: GarageShape = {
       id: uid(), type,
       label: type === 'box' ? 'Soffit' : type === 'cylinder' ? 'Column' : 'Beam',
       x: 0,
-      y: type === 'cylinder' ? h / 2 : ch - h / 2, // cylinder: floor-standing; soffit/beam: ceiling-mounted
+      y: h / 2,  // center of garage, sitting on the floor
       z: 0,
       w: 24, d: 24, h,
       r: 3,
@@ -823,17 +853,23 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
   setFloorTextureScale: (scale) => set({ floorTextureScale: scale }),
 
   setFloorSelected: (v) => set(v ? { floorSelected: true, activeTab: 'flooring' as SidebarTab } : { floorSelected: false }),
-  setViewMode: (mode) => set({ viewMode: mode }),
+  setViewMode: (mode) => set(
+    mode === 'elevation' ? { viewMode: mode, activeTab: 'cabinets' as SidebarTab } :
+    mode === 'top'       ? { viewMode: mode, activeTab: 'overhead' as SidebarTab } :
+    { viewMode: mode }
+  ),
   setCameraAngle: (angle) => set({ cameraAngle: angle }),
   setElevationWallIndex: (i) => set({ elevationWallIndex: i }),
-  setQualityPreset: (preset) => set({ qualityPreset: preset }),
+  setQualityPreset: (preset) => set(preset === 'high'
+    ? { qualityPreset: preset, floorReflection: 0.9, envReflection: 0.25, bounceDistance: 48 }
+    : { qualityPreset: preset }),
   setIsExporting: (v) => set({ isExporting: v }),
   setIsDraggingWall: (v) => set({ isDraggingWall: v }),
   beginDrag: () => set(s => { const n = s.dragCount + 1; return { dragCount: n, isDraggingWall: n > 0 } }),
   endDrag: () => set(s => { const n = Math.max(0, s.dragCount - 1); return { dragCount: n, isDraggingWall: n > 0 } }),
 
   addCabinet: (preset, spawnX = 0, spawnZ = 0, spawnRotY = 0) => {
-    const defaultY = preset.style === 'upper' ? 31.25 : 0
+    const defaultY = preset.style === 'upper' ? 30.5 : 0
     const cabinet: PlacedCabinet = {
       id: uid(),
       presetKey: preset.key,
@@ -845,11 +881,12 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       w: preset.w, d: preset.d, h: preset.h,
       x: spawnX, y: defaultY, z: spawnZ,
       rotY: spawnRotY,
-      color: 'charcoal',
+      color: preset.line === 'signature' ? 'black' : 'mica',
+      shellColor: preset.line === 'signature' ? 'black' : undefined,
       sku: preset.sku,
       price: preset.price,
     }
-    set(s => ({ cabinets: [...s.cabinets, cabinet], selectedCabinetId: cabinet.id }))
+    set(s => ({ cabinets: [...s.cabinets, cabinet] }))
   },
 
   updateCabinet: (id, changes) =>
@@ -872,7 +909,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
     const ct: Countertop = {
       id: uid(), label: 'Countertop',
       x: 0, z: defaultZ, rotY: 0,
-      width: 36, y: 31.25, color: 'butcher-block',
+      width: 36, y: 30.5, color: 'butcher-block',
     }
     set(s => ({ countertops: [...s.countertops, ct], selectedCountertopId: ct.id }))
   },
@@ -943,12 +980,17 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
   updateItem: (id, changes) => set(s => ({ items: s.items.map(i => i.id === id ? { ...i, ...changes } : i) })),
   selectItem: (id) => set({ selectedItemId: id, selectedRackId: null, selectedCeilingLightId: null, selectedWallId: null, selectedShapeId: null, selectedCabinetId: null, selectedCountertopId: null, selectedFloorStepId: null, ...(id !== null ? { floorSelected: false, activeTab: 'vehicles' as SidebarTab } : {}) }),
 
-  ceilingLights: [],
+  ceilingLights: buildPuckGrid(240 / 12, 264 / 12),  // matches default 20×22 ft garage
   selectedCeilingLightId: null,
-  addCeilingLight: () => {
+  addCeilingLight: (kind = 'bar') => {
     const light: CeilingLight = {
-      id: uid(), label: 'LED Bar', x: 0, z: 0, rotY: 0,
-      color: '#fff8f0', intensity: 1.5, enabled: true,
+      id: uid(),
+      label: kind === 'puck' ? 'Puck Light' : 'LED Bar',
+      kind,
+      x: 0, z: 0, rotY: 0,
+      color: kind === 'puck' ? '#f0f4ff' : '#fff8f0',
+      intensity: kind === 'puck' ? 5.0 : 1.5,
+      enabled: true,
     }
     set(s => ({ ceilingLights: [...s.ceilingLights, light], selectedCeilingLightId: light.id }))
   },
@@ -960,6 +1002,31 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       selectedCeilingLightId: s.selectedCeilingLightId === id ? null : s.selectedCeilingLightId,
     })),
   selectCeilingLight: (id) => set({ selectedCeilingLightId: id, selectedWallId: null, selectedShapeId: null, selectedSlatwallPanelId: null, selectedCabinetId: null, selectedCountertopId: null, selectedFloorStepId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'lighting' as SidebarTab } : {}) }),
+
+  autoLighting: () => {
+    const { garageWidth, garageDepth, ceilingHeight } = get()
+    const wFt = garageWidth / 12
+    const dFt = garageDepth / 12
+    const area = wFt * dFt
+    const lights = buildPuckGrid(wFt, dFt)
+    // Scale ambient and bounce based on room size
+    const ambient = area > 600 ? 0.20 : area > 300 ? 0.18 : 0.15
+    const bounce = area > 600 ? 5.0 : area > 300 ? 4.0 : 3.5
+    const bounceD = Math.max(20, Math.min(45, Math.max(wFt, dFt) * 1.5))
+    const chFt = ceilingHeight / 12
+    const lightPower = chFt > 10 ? 18 : chFt > 9 ? 15 : 12
+    set({
+      ceilingLights: lights,
+      sceneLights: [],
+      selectedCeilingLightId: null,
+      ambientIntensity: ambient,
+      bounceIntensity: bounce,
+      bounceDistance: bounceD,
+      lightMultiplier: lightPower,
+      envReflection: 0.08,
+      floorReflection: 0.12,
+    })
+  },
 
   ambientIntensity: 0.15,
   setAmbientIntensity: (v) => set({ ambientIntensity: v }),

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useGarageStore } from '../store/garageStore'
+import { useScrollToSelected } from '../hooks/useScrollToSelected'
 import type { GarageShape, ShapeType } from '../store/garageStore'
 import MeasureInput from './MeasureInput'
 import { IconDelete } from './Icons'
@@ -41,9 +42,11 @@ function ShapeEditor({ shape }: { shape: GarageShape }) {
   const { updateShape, deleteShape, selectShape, selectedShapeId } = useGarageStore()
   const selected = selectedShapeId === shape.id
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const scrollRef = useScrollToSelected<HTMLDivElement>(selected)
 
   return (
     <div
+      ref={scrollRef}
       className={`shape-item ${selected ? 'selected' : ''}`}
       onClick={() => selectShape(shape.id)}
       role="button"

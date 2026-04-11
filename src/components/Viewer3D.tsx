@@ -309,7 +309,20 @@ function computeExportLighting(
 // ── Export capture (runs inside Canvas so it can access gl/scene/camera) ──────
 function ExportCapture({ orbitRef }: { orbitRef: React.RefObject<any> }) {
   const { gl, scene, camera } = useThree()
-  const { garageWidth, garageDepth, ceilingHeight } = useGarageStore()
+  const { ceilingHeight } = useGarageStore()
+
+  // Frame-counting helper: waitFrames(n) resolves after n R3F render ticks.
+  // Default (priority=0) useFrame — R3F handles automatic rendering.
+  const frameResolvers = useRef<Array<{ remaining: number; resolve: () => void }>>([])
+  useFrame(() => {
+    if (frameResolvers.current.length === 0) return
+    for (const r of frameResolvers.current) r.remaining--
+    const done = frameResolvers.current.filter(r => r.remaining <= 0)
+    frameResolvers.current = frameResolvers.current.filter(r => r.remaining > 0)
+    for (const r of done) r.resolve()
+  })
+  const waitFrames = (n: number) =>
+    new Promise<void>(resolve => frameResolvers.current.push({ remaining: n, resolve }))
 
   useEffect(() => {
     const chFt = FT(ceilingHeight)
@@ -319,192 +332,76 @@ function ExportCapture({ orbitRef }: { orbitRef: React.RefObject<any> }) {
       if (!camera || !orbitRef.current) return null
       const pos = camera.position.clone()
       const tgt = orbitRef.current.target?.clone() ?? new THREE.Vector3(0, chFt * 0.35, 0)
-
-      // Render a small thumbnail
-      const origRatio = gl.getPixelRatio()
-      gl.setPixelRatio(1)
       gl.render(scene, camera)
       const thumbnail = gl.domElement.toDataURL('image/jpeg', 0.6)
-      gl.setPixelRatio(origRatio)
-      gl.render(scene, camera)
-
       return {
-        id: '',  // caller assigns id
-        label: '',
+        id: '', label: '',
         camX: pos.x, camY: pos.y, camZ: pos.z,
         targetX: tgt.x, targetY: tgt.y, targetZ: tgt.z,
         thumbnail,
       }
     }
 
-    // High-res capture with full visual quality: reflections, smart lighting,
-    // tone mapping. Each shot gets automatic lighting adjustments based on
-    // camera angle relative to ceiling lights and garage geometry.
+    // Export capture — captures exactly what the viewport shows, just at higher DPR.
+    // No quality changes, no isExporting toggle — if you want high-quality exports,
+    // set the viewport to high quality first.
     exportCaptureRef.capture = async (shots: ExportShot[], onProgress?: (step: number) => void) => {
       const results: string[] = []
-      const store = useGarageStore.getState()
 
-      // ── Force high quality for export — components read isExporting to override qualityPreset ──
-      useGarageStore.getState().setIsExporting(true)
-      // Wait a frame so React re-renders with isExporting=true (swaps floor to reflector, enables shadows)
-      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+      if (orbitRef.current) orbitRef.current.enabled = false
 
-      // ── Save ALL original renderer state ──
-      const originalPixelRatio = gl.getPixelRatio()
-      const originalToneMapping = gl.toneMapping
-      const originalToneMappingExposure = gl.toneMappingExposure
-      const originalShadowMapEnabled = gl.shadowMap.enabled
-
-      // ── Save original scene lighting state ──
-      const origLightStates: { obj: any; intensity: number }[] = []
-      const origAmbientStates: { obj: any; intensity: number }[] = []
-      const origEnvMapMaterials: { mat: any; envMapIntensity: number }[] = []
-      scene.traverse((obj: any) => {
-        if (obj.isAmbientLight) {
-          origAmbientStates.push({ obj, intensity: obj.intensity })
-        } else if (obj.isRectAreaLight || obj.isPointLight || obj.isSpotLight) {
-          origLightStates.push({ obj, intensity: obj.intensity })
-        }
-        if (obj.isMesh && obj.material) {
-          const mats = Array.isArray(obj.material) ? obj.material : [obj.material]
-          for (const mat of mats) {
-            if (mat.envMapIntensity !== undefined) {
-              origEnvMapMaterials.push({ mat, envMapIntensity: mat.envMapIntensity })
-            }
-          }
-        }
-      })
-
-      // ── Configure renderer for maximum export quality ──
-      gl.toneMapping = THREE.AgXToneMapping
-      gl.toneMappingExposure = 1.0
-      gl.shadowMap.enabled = true
-      gl.setPixelRatio(Math.min(window.devicePixelRatio * 2, 4))
-
-      // ── Keep MeshReflectorMaterial — floor reflections are a key visual feature.
-      // We render extra warm-up frames so the reflector's internal render-to-texture
-      // pass updates for each new camera position. ──
-
-      // Save original camera and canvas state
+      // Save camera state
       const origCamPos = camera.position.clone()
       const origTarget = orbitRef.current?.target?.clone() ?? new THREE.Vector3(0, chFt * 0.35, 0)
-      const origCanvasWidth = gl.domElement.width
-      const origCanvasHeight = gl.domElement.height
-      const origCanvasStyleW = gl.domElement.style.width
-      const origCanvasStyleH = gl.domElement.style.height
+      const origPR = gl.getPixelRatio()
+      const origWidth = gl.domElement.width
+      const origHeight = gl.domElement.height
 
-      // Resize canvas to 4K for high-res capture
-      const exportW = 3840, exportH = 2160
-      gl.setPixelRatio(1)
-      gl.setSize(exportW, exportH, false)
-      if ((camera as THREE.PerspectiveCamera).aspect !== undefined) {
-        ;(camera as THREE.PerspectiveCamera).aspect = exportW / exportH
-        ;(camera as THREE.PerspectiveCamera).updateProjectionMatrix()
-      }
-
-      const waitFrames = (n: number) => new Promise<void>(resolve => {
-        let count = 0
-        const tick = () => { if (++count >= n) resolve(); else requestAnimationFrame(tick) }
-        requestAnimationFrame(tick)
-      })
+      // Bump pixel ratio for high-res capture — backing store density increases
+      // but canvas CSS size stays the same, so no visible layout changes.
+      gl.setPixelRatio(3)
 
       for (let i = 0; i < shots.length; i++) {
         if (onProgress) onProgress(i)
         const shot = shots[i]
 
-        // Position camera for this shot
+        // Move camera to shot position
         camera.position.set(shot.camX, shot.camY, shot.camZ)
-        if (orbitRef.current?.target) {
-          orbitRef.current.target.set(shot.targetX, shot.targetY, shot.targetZ)
-          orbitRef.current.update()
-        }
         camera.lookAt(shot.targetX, shot.targetY, shot.targetZ)
         ;(camera as THREE.PerspectiveCamera).updateProjectionMatrix?.()
+        camera.updateMatrixWorld(true)
 
-        // ── Smart lighting: compute optimal settings for this camera angle ──
-        const overrides = computeExportLighting(
-          camera.position,
-          new THREE.Vector3(shot.targetX, shot.targetY, shot.targetZ),
-          store.ceilingLights,
-          garageWidth, garageDepth, ceilingHeight,
-          store.ambientIntensity,
-          store.envReflection,
-        )
-
-        // Apply per-shot lighting overrides
-        gl.toneMappingExposure = overrides.exposure
-
-        for (const s of origAmbientStates) {
-          s.obj.intensity = overrides.ambientIntensity
-        }
-
-        // Scale all scene lights (rect-area, point, spot)
-        // Separate bounce point lights (positioned below ceiling fixtures) get bounceScale
-        for (const s of origLightStates) {
-          if (s.obj.isPointLight && s.obj.parent?.isGroup) {
-            // Bounce light inside a ceiling fixture group — use bounceScale
-            s.obj.intensity = s.intensity * overrides.bounceScale
-          } else {
-            s.obj.intensity = s.intensity * overrides.lightScale
-          }
-        }
-
-        // Boost env map on all materials for richer reflections
-        for (const s of origEnvMapMaterials) {
-          s.mat.envMapIntensity = overrides.envMapIntensity
-        }
-
-        // ── Warm-up frames: let reflector material, shadows, and lighting stabilize.
-        // MeshReflectorMaterial needs its internal mirror render pass to execute
-        // with the new camera position — each gl.render() triggers onBeforeRender
-        // which updates the reflection texture. We do multiple passes so the
-        // reflection converges (reflections of reflections, light bounces). ──
-        for (let f = 0; f < 6; f++) {
-          gl.setRenderTarget(null)
-          gl.clear()
-          gl.render(scene, camera)
-        }
-        // Then let the R3F loop also run a few frames for any async updates
-        await waitFrames(8)
-
-        // Final render at 4K
-        gl.setRenderTarget(null)
-        gl.clear()
-        gl.render(scene, camera)
-        results.push(gl.domElement.toDataURL('image/jpeg', 0.95))
-
-        // Restore original light intensities before next shot (re-computed per shot)
-        for (const s of origAmbientStates) s.obj.intensity = s.intensity
-        for (const s of origLightStates) s.obj.intensity = s.intensity
-        for (const s of origEnvMapMaterials) s.mat.envMapIntensity = s.envMapIntensity
+        // Let R3F's render loop run frames so reflector / shadows converge for the
+        // new camera angle. The reflector updates its FBO inside its own useFrame,
+        // so we MUST let R3F's loop render (not call gl.render imperatively, which
+        // would bypass the reflector's update and use a stale reflection texture).
+        await waitFrames(6)
+        // Yield once more via rAF so the final render flushes to the backing store
+        // before toDataURL reads it.
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+        // PNG is lossless — no JPEG banding on smooth gradient surfaces like walls
+        results.push(gl.domElement.toDataURL('image/png'))
       }
 
-      // ── Restore everything ──
-      useGarageStore.getState().setIsExporting(false)
-      gl.setPixelRatio(originalPixelRatio)
-      gl.setSize(origCanvasWidth / originalPixelRatio, origCanvasHeight / originalPixelRatio, false)
-      gl.domElement.style.width = origCanvasStyleW
-      gl.domElement.style.height = origCanvasStyleH
-      if ((camera as THREE.PerspectiveCamera).aspect !== undefined) {
-        ;(camera as THREE.PerspectiveCamera).aspect = origCanvasWidth / origCanvasHeight
-        ;(camera as THREE.PerspectiveCamera).updateProjectionMatrix()
-      }
-      gl.toneMapping = originalToneMapping
-      gl.toneMappingExposure = originalToneMappingExposure
-      gl.shadowMap.enabled = originalShadowMapEnabled
+      // Restore pixel ratio and canvas size. setPixelRatio alone doesn't resize the
+      // backing store — we need to explicitly setSize to the pre-export dimensions
+      // at the original DPR, otherwise the WebGL context stays at the inflated size
+      // and performance tanks.
+      gl.setPixelRatio(origPR)
+      gl.setSize(origWidth / origPR, origHeight / origPR, false)
       camera.position.copy(origCamPos)
       if (orbitRef.current?.target) {
         orbitRef.current.target.copy(origTarget)
         orbitRef.current.update()
       }
       camera.lookAt(origTarget)
-      gl.render(scene, camera)
+      if (orbitRef.current) orbitRef.current.enabled = true
 
       return results
     }
 
     return () => { exportCaptureRef.capture = null; exportCaptureRef.saveShot = null }
-  }, [gl, scene, camera, garageWidth, garageDepth, ceilingHeight, orbitRef])
+  }, [gl, scene, camera, ceilingHeight, orbitRef])
 
   return null
 }
@@ -633,7 +530,7 @@ export default function Viewer3D() {
   return (
     <div className="viewer-wrap">
       <Canvas
-        shadows={qualityPreset !== 'low'}
+        shadows={qualityPreset === 'low' ? false : 'soft'}
         dpr={[1, 2]}
         gl={{
           preserveDrawingBuffer: true,
@@ -781,6 +678,7 @@ export default function Viewer3D() {
       <div className="view-label">
         {viewMode === 'perspective' && '3D Perspective'}
         {viewMode === 'wireframe'   && 'Wireframe'}
+        {viewMode === 'elevation'   && 'Wall Edit'}
       </div>
     </div>
   )

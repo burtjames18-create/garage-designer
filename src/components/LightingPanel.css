@@ -1,5 +1,26 @@
 .lighting-panel { display: flex; flex-direction: column; gap: 14px; }
 
+.auto-light-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: linear-gradient(135deg, rgba(100,140,255,0.15), rgba(180,120,255,0.15));
+  border: 1px solid rgba(140,160,255,0.3);
+  color: #b0c4ff;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  letter-spacing: 0.3px;
+  transition: all 0.15s;
+}
+.auto-light-btn:hover {
+  background: linear-gradient(135deg, rgba(100,140,255,0.25), rgba(180,120,255,0.25));
+  border-color: rgba(140,160,255,0.5);
+  color: #d0daff;
+}
+
 .light-add-row {
   display: flex;
   align-items: center;
