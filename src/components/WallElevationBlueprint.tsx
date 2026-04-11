@@ -203,8 +203,26 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
   })
   const vSorted = [...vBreaks].sort((a, b) => a - b)
   const hasVSegs = vSorted.length > 2
-  const dimX1 = PAD - 14
-  const dimX2 = PAD - (hasVSegs ? 26 : 14)
+
+  // Slatwall vertical breaks — each panel's bottom/top as a distinct segment.
+  // Rendered on its own tier so the heights are called out separately from
+  // the cabinet segment dimensions.
+  const slatVSegs: Array<{ bottom: number; top: number }> = wallPanels
+    .map(p => ({ bottom: p.yBottom, top: p.yTop }))
+    .filter(s => s.top - s.bottom > 0.5)
+    .sort((a, b) => a.bottom - b.bottom)
+  const hasSlatVSegs = slatVSegs.length > 0
+
+  // Vertical dimension tiers (inside → outside):
+  //   dimX1     = cabinet/item segments (nearest to wall)
+  //   dimXSlat  = slatwall panel heights (middle tier, only when panels exist)
+  //   dimX2     = wall full height (outermost, bold)
+  let nextDimX = PAD - 14
+  const dimX1 = nextDimX
+  if (hasVSegs) nextDimX -= 12
+  const dimXSlat = nextDimX
+  if (hasSlatVSegs) nextDimX -= 12
+  const dimX2 = nextDimX
 
   const clipId = `bp-clip-${wall.id.replace(/-/g, '')}`
 
@@ -458,6 +476,28 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
             {(y2 - y1) > 14 && (
               <text x={dimX1 - 4} y={mid} textAnchor="middle" fill={textColor} fontSize={fs}
                 transform={`rotate(-90 ${dimX1 - 4} ${mid})`}>{inchesToDisplay(top - bot)}</text>
+            )}
+          </g>
+        )
+      })}
+
+      {/* Slatwall vertical segments (own tier — between item segments and total) */}
+      {hasSlatVSegs && slatVSegs.map((seg, i) => {
+        const y1 = toY(seg.top), y2 = toY(seg.bottom), mid = (y1 + y2) / 2
+        return (
+          <g key={`svs${i}`}>
+            {/* Witness lines from panel top/bottom out to the slatwall tier */}
+            <line x1={toX(0)} y1={y1} x2={dimXSlat - tk} y2={y1}
+              stroke={dimColor} strokeWidth={0.35} strokeDasharray="3 2" />
+            <line x1={toX(0)} y1={y2} x2={dimXSlat - tk} y2={y2}
+              stroke={dimColor} strokeWidth={0.35} strokeDasharray="3 2" />
+            {/* Dimension line */}
+            <line x1={dimXSlat} y1={y1} x2={dimXSlat} y2={y2} stroke={dimColor} strokeWidth={0.45} />
+            <line x1={dimXSlat - tk} y1={y1} x2={dimXSlat + tk} y2={y1} stroke={dimColor} strokeWidth={0.45} />
+            <line x1={dimXSlat - tk} y1={y2} x2={dimXSlat + tk} y2={y2} stroke={dimColor} strokeWidth={0.45} />
+            {(y2 - y1) > 14 && (
+              <text x={dimXSlat - 4} y={mid} textAnchor="middle" fill={textColor} fontSize={fs}
+                transform={`rotate(-90 ${dimXSlat - 4} ${mid})`}>{inchesToDisplay(seg.top - seg.bottom)}</text>
             )}
           </g>
         )

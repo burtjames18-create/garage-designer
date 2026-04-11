@@ -859,18 +859,46 @@ function convexHullFromWalls(walls: GarageWall[]): FloorPoint[] {
   return [...lower, ...upper]
 }
 
-function buildFloorGeometry(pts: FloorPoint[]): THREE.ShapeGeometry {
+// Build floor ShapeGeometry in NORMALIZED object-space coordinates, plus the
+// uniform scale factor needed to restore world size. The normalized vertices
+// keep drei's MeshReflectorMaterial shader math well-conditioned on large
+// floors — its vertex shader uses raw object-space `position` to project
+// into the reflection FBO, which goes degenerate once position values exceed
+// ~14. By keeping position in a small range and putting the real size on
+// mesh.scale, reflections work at any garage size.
+function buildFloorGeometry(pts: FloorPoint[]): { geometry: THREE.ShapeGeometry; scale: number } {
+  // Default box for the <3 points fallback
   if (pts.length < 3) {
-    return new THREE.ShapeGeometry(new THREE.Shape([
+    const g = new THREE.ShapeGeometry(new THREE.Shape([
       new THREE.Vector2(-10, -11), new THREE.Vector2(10, -11),
       new THREE.Vector2(10, 11),   new THREE.Vector2(-10, 11),
     ]))
+    return { geometry: g, scale: 1 }
   }
+  // Find the max absolute extent (in feet) so we can normalize to ~unit range
+  let maxAbs = 0
+  for (const p of pts) {
+    const xFt = FT(p.x), zFt = FT(p.z)
+    if (Math.abs(xFt) > maxAbs) maxAbs = Math.abs(xFt)
+    if (Math.abs(zFt) > maxAbs) maxAbs = Math.abs(zFt)
+  }
+  // Fallback for degenerate input
+  if (maxAbs < 0.001) maxAbs = 1
+  // Build the Shape in normalized coordinates (~[-1, 1])
   const shape = new THREE.Shape()
-  shape.moveTo(FT(pts[0].x), -FT(pts[0].z))
-  for (let i = 1; i < pts.length; i++) shape.lineTo(FT(pts[i].x), -FT(pts[i].z))
+  shape.moveTo(FT(pts[0].x) / maxAbs, -FT(pts[0].z) / maxAbs)
+  for (let i = 1; i < pts.length; i++) shape.lineTo(FT(pts[i].x) / maxAbs, -FT(pts[i].z) / maxAbs)
   shape.closePath()
-  return new THREE.ShapeGeometry(shape)
+  const geometry = new THREE.ShapeGeometry(shape)
+  // ShapeGeometry sets UV = position. Rewrite the UVs to be in feet (pre-normalization)
+  // so the floor texture still tiles at the correct chips-per-foot density.
+  const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute
+  const uvAttr  = geometry.getAttribute('uv')       as THREE.BufferAttribute
+  for (let i = 0; i < posAttr.count; i++) {
+    uvAttr.setXY(i, posAttr.getX(i) * maxAbs, posAttr.getY(i) * maxAbs)
+  }
+  uvAttr.needsUpdate = true
+  return { geometry, scale: maxAbs }
 }
 
 // ─── Cabinet mesh (procedural Tecnica-style) ──────────────────────────────────
@@ -1665,9 +1693,38 @@ function OverheadRackMesh({ rack, chFt, selected, wireframe, onClick, onPointerD
   const frameColor = wireframe ? (selected ? '#ffcc00' : '#ff6644') : rack.color
   const deckColor = wireframe ? frameColor : '#555555'
   const highlight = selected ? 0.3 : 0
-  // Shared powder-coat texture — same one Technica cabinets use. Gives the
-  // rack frame rails / legs / brackets the fine painted-metal surface finish.
-  const rackPowder = wireframe ? null : getPowderCoatTextures()
+
+  // Dark brushed-stainless PBR texture set — same AmbientCG Metal009 source
+  // the black-stainless countertop uses. Rendered with color='#3d4045' so
+  // the brushed streaks stay visible but the surface reads as dark metal.
+  // useTexture is a drei hook and must run unconditionally.
+  const stainlessSrc = useTexture({
+    map:          `${import.meta.env.BASE_URL}assets/textures/metal/brushed-stainless/color.jpg`,
+    normalMap:    `${import.meta.env.BASE_URL}assets/textures/metal/brushed-stainless/normal.jpg`,
+    roughnessMap: `${import.meta.env.BASE_URL}assets/textures/metal/brushed-stainless/roughness.jpg`,
+    metalnessMap: `${import.meta.env.BASE_URL}assets/textures/metal/brushed-stainless/metalness.jpg`,
+  })
+  const stainlessMaps = useMemo(() => {
+    if (wireframe) return null
+    const map          = stainlessSrc.map.clone()
+    const normalMap    = stainlessSrc.normalMap.clone()
+    const roughnessMap = stainlessSrc.roughnessMap.clone()
+    const metalnessMap = stainlessSrc.metalnessMap.clone()
+    // Tile along both axes so brushed streaks stay at realistic scale
+    // regardless of rack dimensions.
+    const repX = Math.max(1, wFt / 2)
+    const repY = Math.max(1, lFt / 2)
+    for (const t of [map, normalMap, roughnessMap, metalnessMap]) {
+      t.wrapS = t.wrapT = THREE.RepeatWrapping
+      t.repeat.set(repX, repY)
+      t.needsUpdate = true
+    }
+    map.colorSpace = THREE.SRGBColorSpace
+    normalMap.colorSpace = THREE.NoColorSpace
+    roughnessMap.colorSpace = THREE.NoColorSpace
+    metalnessMap.colorSpace = THREE.NoColorSpace
+    return { map, normalMap, roughnessMap, metalnessMap }
+  }, [wireframe, wFt, lFt, stainlessSrc])
 
   return (
     <group
@@ -1680,13 +1737,18 @@ function OverheadRackMesh({ rack, chFt, selected, wireframe, onClick, onPointerD
       {(() => {
         const barTh = 0.02  // wire bar thickness in feet (~1/4")
         const frameBarW = 0.04 // frame rail width (~1/2")
+        // Dark brushed-stainless — matches the black-stainless countertop.
+        // metalness=0 + envMapIntensity=0 keeps the finish lookup driven by
+        // the texture maps rather than env reflections.
         const matProps = {
-          color: frameColor,
-          metalness: 0.03 as number,
-          roughness: 0.50 as number,
-          normalMap: rackPowder?.normalMap ?? null,
-          normalScale: [0.4, 0.4] as unknown as THREE.Vector2,
-          roughnessMap: rackPowder?.roughnessMap ?? null,
+          color: wireframe ? frameColor : '#3d4045',
+          map: stainlessMaps?.map ?? null,
+          normalMap: stainlessMaps?.normalMap ?? null,
+          normalScale: [0.8, 0.8] as unknown as THREE.Vector2,
+          roughnessMap: stainlessMaps?.roughnessMap ?? null,
+          metalness: 0 as number,
+          roughness: 0.65 as number,
+          envMapIntensity: 0,
           emissive: selected ? '#ffcc00' : '#000000',
           emissiveIntensity: highlight,
         }
@@ -1747,13 +1809,16 @@ function OverheadRackMesh({ rack, chFt, selected, wireframe, onClick, onPointerD
       {legPositions.map((pos, i) => {
         const bTh = 0.008          // plate thickness ~1/8"
         const bFlange = 2           // 2 feet bracket bar on ceiling
+        // Dark brushed-stainless material shared by legs + brackets.
         const bMat = {
-          color: frameColor,
-          metalness: 0.03 as number,
-          roughness: 0.50 as number,
-          normalMap: rackPowder?.normalMap ?? null,
-          normalScale: [0.4, 0.4] as unknown as THREE.Vector2,
-          roughnessMap: rackPowder?.roughnessMap ?? null,
+          color: wireframe ? frameColor : '#3d4045',
+          map: stainlessMaps?.map ?? null,
+          normalMap: stainlessMaps?.normalMap ?? null,
+          normalScale: [0.8, 0.8] as unknown as THREE.Vector2,
+          roughnessMap: stainlessMaps?.roughnessMap ?? null,
+          metalness: 0 as number,
+          roughness: 0.65 as number,
+          envMapIntensity: 0,
           emissive: selected ? '#ffcc00' : '#000000',
           emissiveIntensity: highlight,
         }
@@ -1763,17 +1828,7 @@ function OverheadRackMesh({ rack, chFt, selected, wireframe, onClick, onPointerD
             {/* Leg tube */}
             <mesh position={pos} castShadow>
               <boxGeometry args={[legSz, legLen, legSz]} />
-              <meshPhysicalMaterial
-                wireframe={wireframe}
-                color={frameColor}
-                metalness={0.03}
-                roughness={0.50}
-                normalMap={rackPowder?.normalMap}
-                normalScale={[0.4, 0.4] as unknown as THREE.Vector2}
-                roughnessMap={rackPowder?.roughnessMap}
-                emissive={selected ? '#ffcc00' : '#000000'}
-                emissiveIntensity={highlight}
-              />
+              <meshPhysicalMaterial wireframe={wireframe} {...bMat} />
             </mesh>
 
             {/* Single straight bar bracket per leg — runs along the rack's length direction, flush to ceiling */}
@@ -1822,6 +1877,13 @@ function PuckSpotlight({ bottomY, light, lightMultiplier, bounceDistance, effect
          Shadow camera FOV must match (or exceed) the spot angle, otherwise the
          shadow map's frustum is narrower than the lit cone and you get visible
          band/stripe artifacts where shadows abruptly cut off on the walls. */}
+      {/* Puck lights are fill illumination — no shadows. Each shadow-casting
+         spotlight eats one fragment texture unit (MAX_TEXTURE_IMAGE_UNITS=16
+         on many GPUs), and with 12+ pucks in large garages the shader fails
+         to link (FRAGMENT shader texture image units count exceeds MAX), so
+         materials that hit the limit render fully transparent — the floor
+         and cabinet handles would disappear. Ambient/fill shadows from 12
+         overlapping pucks cancel out visually anyway. */}
       <spotLight
         ref={spotRef}
         position={[0, bottomY - 0.01, 0]}
@@ -1831,15 +1893,7 @@ function PuckSpotlight({ bottomY, light, lightMultiplier, bounceDistance, effect
         color={light.color}
         decay={1.5}
         distance={Math.max(bounceDistance, 25)}
-        castShadow={effectiveQuality !== 'low'}
-        shadow-mapSize-width={effectiveQuality === 'high' ? 2048 : 1024}
-        shadow-mapSize-height={effectiveQuality === 'high' ? 2048 : 1024}
-        shadow-bias={-0.0008}
-        shadow-normalBias={0.04}
-        shadow-radius={effectiveQuality === 'high' ? 12 : 6}
-        shadow-camera-near={0.5}
-        shadow-camera-far={40}
-        shadow-camera-fov={170}
+        castShadow={false}
       />
     </>
   )
@@ -4684,6 +4738,7 @@ export default function GarageShell() {
 
   // ── Floor / ceiling geometry from polygon ────────────────────────────────
   const floorTex = useTexture(`${import.meta.env.BASE_URL}${flooringTexturePathById(flooringColor)}`)
+  const maxAnisotropy = useMemo(() => gl.capabilities.getMaxAnisotropy?.() ?? 1, [gl])
 
   // Build a de-tiled composite canvas to break the obvious repeating grid pattern.
   // Each cell of the composite is rotated 0/90/180/270° using a deterministic pattern
@@ -4716,14 +4771,23 @@ export default function GarageShell() {
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping
     // Set color space for correct color rendering
     tex.colorSpace = THREE.SRGBColorSpace
-    // ShapeGeometry UVs are in feet; scale so the composite canvas maps at same chip density
+    // Max anisotropy — without this, wide garages hit extreme UV repeats
+    // (ShapeGeometry UVs are in feet) and mipmapping collapses the texture
+    // to a flat average gray at oblique/distant angles. Anisotropic filtering
+    // keeps chip detail visible across the whole floor regardless of size.
+    tex.anisotropy = maxAnisotropy
+    tex.minFilter = THREE.LinearMipmapLinearFilter
+    tex.magFilter = THREE.LinearFilter
+    tex.generateMipmaps = true
+    // floorGeo's UVs are now rewritten to feet-scale (see buildFloorGeometry)
+    // so this repeat math stays as it always was: chips per foot.
     const tilesPerFoot = 12 / floorTextureScale
     tex.repeat.set(tilesPerFoot * tileW / SIZE, tilesPerFoot * tileH / SIZE)
     tex.needsUpdate = true
     return tex
-  }, [floorTex, floorTextureScale])
+  }, [floorTex, floorTextureScale, maxAnisotropy])
 
-  const floorGeo = useMemo(() => buildFloorGeometry(effectiveFloorPts), [effectiveFloorPts])
+  const { geometry: floorGeo, scale: floorScale } = useMemo(() => buildFloorGeometry(effectiveFloorPts), [effectiveFloorPts])
   const chFt = FT(ceilingHeight)
 
   // Precompute corner adjustments for all walls — avoids O(n²) per frame
@@ -4742,8 +4806,12 @@ export default function GarageShell() {
 
   return (
     <group>
-      {/* Floor — polygon shape, fills entire interior area */}
-      <mesh geometry={floorGeo} rotation={[-Math.PI/2, 0, 0]} position={[0, 0, 0]} receiveShadow>
+      {/* Floor — polygon shape, fills entire interior area. Geometry is in
+          normalized object-space (~[-1,1]) with mesh.scale restoring world
+          size; this keeps drei's MeshReflectorMaterial shader stable on any
+          garage size (it samples the reflection FBO using object-space
+          position, which breaks on large raw-feet vertex values). */}
+      <mesh geometry={floorGeo} scale={[floorScale, floorScale, 1]} rotation={[-Math.PI/2, 0, 0]} position={[0, 0, 0]} receiveShadow>
         {wireframe ? (
           <meshStandardMaterial side={THREE.DoubleSide}
             color='#1a2a3a' wireframe
@@ -4796,7 +4864,7 @@ export default function GarageShell() {
 
       {/* Ceiling — hidden in blueprint top-down view */}
       {!blueprint && (
-        <mesh geometry={floorGeo} rotation={[-Math.PI/2, 0, 0]} position={[0, chFt, 0]}>
+        <mesh geometry={floorGeo} scale={[floorScale, floorScale, 1]} rotation={[-Math.PI/2, 0, 0]} position={[0, chFt, 0]}>
           <meshLambertMaterial side={THREE.BackSide}
             color={wireframe ? '#1a2a3a' : '#f0ede4'} wireframe={wireframe} />
         </mesh>

@@ -599,6 +599,20 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
               onPointerMove={onRackPointerMove}
               onPointerUp={onRackPointerUp}
             />
+            {/* Size label — centered on the rack, aligned with its rotation */}
+            <text
+              x={sx(rack.x)}
+              y={sz(rack.z)}
+              textAnchor="middle"
+              dominantBaseline="middle"
+              fontSize={5}
+              fontWeight={600}
+              fill="#2a2a66"
+              transform={`rotate(${(rack.rotY * 180) / Math.PI} ${sx(rack.x)} ${sz(rack.z)})`}
+              style={{ pointerEvents: 'none', userSelect: 'none' }}
+            >
+              {rack.rackWidth / 12}&#39; × {rack.rackLength / 12}&#39;
+            </text>
             {/* Rotate handle — small circle at top edge */}
             {isSel && !rack.locked && (
               <circle
