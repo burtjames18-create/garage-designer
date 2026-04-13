@@ -549,8 +549,8 @@ function snapToTargets(
     }
   }
 
-  // Wall endpoints get a generous threshold so corners feel magnetic
-  const wallThresh = Math.max(threshold, 18)
+  // Wall endpoints get a slightly generous threshold so corners feel magnetic
+  const wallThresh = Math.max(threshold, 8)
   let bestDist = wallThresh
   let bx = x, bz = z
   let snappedToWall = false
@@ -679,26 +679,20 @@ function computeCornerAdj(wall: GarageWall, allWalls: GarageWall[], threshold = 
     }
 
     // ── T-junction: our endpoint meets the BODY of another wall ──
-    // If our start/end touches the middle of other wall (not at other's endpoints),
-    // trim this wall so it stops at the other wall's face instead of clipping through.
     const oux = ox / olen, ouz = oz / olen
     for (const [epx, epz, isStart] of [
       [wall.x1, wall.z1, true],
       [wall.x2, wall.z2, false],
     ] as [number, number, boolean][]) {
-      // Already handled as L-corner?
       if (isStart && nearStart) continue
       if (!isStart && nearEnd) continue
-      // Project our endpoint onto other wall's centerline
       const vx = epx - other.x1, vz = epz - other.z1
       const along = vx * oux + vz * ouz
       const perp = Math.abs(vx * (-ouz) + vz * oux)
-      // Endpoint must be ON the other wall's body (not near its endpoints)
-      if (along < threshold && along > -threshold) continue       // near other's start → L-corner
-      if (along > olen - threshold && along < olen + threshold) continue  // near other's end → L-corner
-      if (along < -threshold || along > olen + threshold) continue // too far off
-      if (perp > other.thickness / 2 + threshold) continue // too far perpendicular
-      // T-junction: trim our wall at this end by other wall's half-thickness
+      if (along < threshold && along > -threshold) continue
+      if (along > olen - threshold && along < olen + threshold) continue
+      if (along < -threshold || along > olen + threshold) continue
+      if (perp > other.thickness / 2 + threshold) continue
       if (isStart) startTrim = Math.max(startTrim, other.thickness / 2)
       else         endTrim   = Math.max(endTrim,   other.thickness / 2)
     }
@@ -2407,11 +2401,95 @@ function StemWallMaterial({ useFlake, baseTex, segWidthIn, heightIn, rptPerFoot,
   )
 }
 
+// ─── Per-wall mitered outlines ───────────────────────────────────────────────
+// Precomputes mitered outline points for each wall.  The outline of wall[i]
+// in the chain runs from pPts[i]→pPts[i+1] on the +side and
+// nPts[i]→nPts[i+1] on the −side.  Adjacent walls share the mitered corner
+// point so their geometries meet exactly — no gap, no overlap.
+// Returns a Map from wallId → { p0, p1, n0, n1 } (in inches, world XZ).
+function computeMiteredOutlines(walls: GarageWall[]): Map<string, {
+  p0x: number; p0z: number; p1x: number; p1z: number   // +side start/end
+  n0x: number; n0z: number; n1x: number; n1z: number   // −side start/end
+}> {
+  const result = new Map<string, { p0x: number; p0z: number; p1x: number; p1z: number; n0x: number; n0z: number; n1x: number; n1z: number }>()
+  const chains = findWallChains(walls)
+
+  for (const chain of chains) {
+    const N = chain.length
+    if (N === 0) continue
+    const isClosed = N > 1 && Math.hypot(
+      chain[N - 1].x2 - chain[0].x1, chain[N - 1].z2 - chain[0].z1) < 6
+
+    const wd = chain.map(e => {
+      const dx = e.x2 - e.x1, dz = e.z2 - e.z1
+      const len = Math.hypot(dx, dz)
+      const ux = len > 0 ? dx / len : 1, uz = len > 0 ? dz / len : 0
+      const nx = -uz, nz = ux
+      const hT = e.wall.thickness / 2
+      return { ux, uz, len, psx: e.x1 + nx * hT, psz: e.z1 + nz * hT, nsx: e.x1 - nx * hT, nsz: e.z1 - nz * hT }
+    })
+
+    const pPts: { x: number; z: number }[] = new Array(N + 1)
+    const nPts: { x: number; z: number }[] = new Array(N + 1)
+
+    for (let i = 0; i <= N; i++) {
+      if ((i === 0 && !isClosed) || (i === N && !isClosed)) {
+        const w = wd[i === 0 ? 0 : N - 1]
+        if (i === 0) {
+          pPts[0] = { x: w.psx, z: w.psz }
+          nPts[0] = { x: w.nsx, z: w.nsz }
+        } else {
+          pPts[N] = { x: w.psx + w.len * w.ux, z: w.psz + w.len * w.uz }
+          nPts[N] = { x: w.nsx + w.len * w.ux, z: w.nsz + w.len * w.uz }
+        }
+        continue
+      }
+      const pi = (i === 0) ? N - 1 : i - 1
+      const ci = i % N
+      const prev = wd[pi], curr = wd[ci]
+      const tP = lineIntersectT(prev.psx, prev.psz, prev.ux, prev.uz, curr.psx, curr.psz, curr.ux, curr.uz)
+      pPts[i] = isNaN(tP) ? { x: curr.psx, z: curr.psz } : { x: prev.psx + tP * prev.ux, z: prev.psz + tP * prev.uz }
+      const tN = lineIntersectT(prev.nsx, prev.nsz, prev.ux, prev.uz, curr.nsx, curr.nsz, curr.ux, curr.uz)
+      nPts[i] = isNaN(tN) ? { x: curr.nsx, z: curr.nsz } : { x: prev.nsx + tN * prev.ux, z: prev.nsz + tN * prev.uz }
+    }
+    if (isClosed) { pPts[N] = pPts[0]; nPts[N] = nPts[0] }
+
+    for (let i = 0; i < N; i++) {
+      const w = wd[i]
+      const hT = chain[i].wall.thickness / 2
+      // Perpendicular (un-mitered) face endpoints for this wall
+      const perpP0 = { x: w.psx, z: w.psz }
+      const perpP1 = { x: w.psx + w.len * w.ux, z: w.psz + w.len * w.uz }
+      const perpN0 = { x: w.nsx, z: w.nsz }
+      const perpN1 = { x: w.nsx + w.len * w.ux, z: w.nsz + w.len * w.uz }
+
+      // For each mitered point, only use it if it EXTENDS past the perpendicular
+      // endpoint (along the wall direction). If it retracts, clamp to perpendicular.
+      const extendOnly = (miter: {x:number,z:number}, perp: {x:number,z:number}, epx: number, epz: number, sign: number) => {
+        const miterAlong = ((miter.x - epx) * w.ux + (miter.z - epz) * w.uz) * sign
+        return miterAlong > 0.1 ? miter : perp
+      }
+
+      const p0 = extendOnly(pPts[i], perpP0, chain[i].x1, chain[i].z1, -1)
+      const n0 = extendOnly(nPts[i], perpN0, chain[i].x1, chain[i].z1, -1)
+      const p1 = extendOnly(pPts[i+1], perpP1, chain[i].x2, chain[i].z2, 1)
+      const n1 = extendOnly(nPts[i+1], perpN1, chain[i].x2, chain[i].z2, 1)
+
+      result.set(chain[i].wall.id, {
+        p0x: p0.x, p0z: p0.z, p1x: p1.x, p1z: p1.z,
+        n0x: n0.x, n0z: n0.z, n1x: n1.x, n1z: n1.z,
+      })
+    }
+  }
+  return result
+}
+
 // ─── Individual wall mesh ─────────────────────────────────────────────────────
-const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, onClick, onPointerDown, startExt, endExt, startTrim, endTrim, baseTex }: {
+const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, onClick, onPointerDown, startTrim, endTrim, outline, baseTex }: {
   wall: GarageWall; wireframe: boolean; blueprint?: boolean; selected: boolean; onClick: () => void
   onPointerDown: (e: ThreeEvent<PointerEvent>) => void
-  startExt: number; endExt: number; startTrim: number; endTrim: number
+  startTrim: number; endTrim: number
+  outline: { p0x: number; p0z: number; p1x: number; p1z: number; n0x: number; n0z: number; n1x: number; n1z: number } | null
   baseTex: THREE.Texture | null
 }) {
   const dx = wall.x2 - wall.x1, dz = wall.z2 - wall.z1
@@ -2425,20 +2503,10 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
   const hasWallTexture = !blueprint && !wireframe && !!wall.wallTextureId && (isImportedWallTex || !!getTextureById(wall.wallTextureId!))
   const color = blueprint ? (selected ? '#555555' : '#333333') : wireframe ? (selected ? '#ffcc00' : '#4ab4ff') : selected ? '#d0e8ff' : (wall.wallColor ?? '#e0dedd')
 
-  // Build segments then clip at trimmed ends so they don't overlap adjacent walls
+  // Build segments around openings
   const segs = useMemo(() => {
-    let s = buildWallSegments(wall, lengthIn)
-    if (startTrim > 0 && s.length > 0) {
-      s[0] = { ...s[0], x0: Math.max(s[0].x0, startTrim) }
-      s = s.filter(seg => seg.x1 > seg.x0)
-    }
-    if (endTrim > 0 && s.length > 0) {
-      const last = s.length - 1
-      s[last] = { ...s[last], x1: Math.min(s[last].x1, lengthIn - endTrim) }
-      s = s.filter(seg => seg.x1 > seg.x0)
-    }
-    return s
-  }, [wall, lengthIn, startTrim, endTrim])
+    return buildWallSegments(wall, lengthIn)
+  }, [wall, lengthIn])
   const hFt         = FT(wall.height)
 
   // Render 3D meshes for 'door' and 'window' openings
@@ -2501,9 +2569,83 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
     )
   }) || [];
 
+  // Build per-segment mitered extrusions. Each segment uses the mitered outline
+  // points interpolated to its local X range, so corners are clean and openings
+  // are preserved (each segment is its own extruded shape).
+  const segGeos = useMemo(() => {
+    if (!outline) return null
+    const dx = wall.x2 - wall.x1, dz = wall.z2 - wall.z1
+    const len = Math.hypot(dx, dz)
+    if (len < 1) return null
+    const ux = dx / len, uz = dz / len
+    const nx = -uz, nz = ux
+    const hT = wall.thickness / 2
+
+    // Compute face points for a segment by position along the wall.
+    // Only the wall's very start (x0=0) and very end (x1=lengthIn) use mitered
+    // points; all other edges use the standard perpendicular face.
+    const faceAt = (along: number, side: 'p' | 'n') => {
+      const hT = wall.thickness / 2
+      const sn = side === 'p' ? 1 : -1
+      // Standard perpendicular point at this along-wall position
+      const std = {
+        x: wall.x1 + ux * along + nx * hT * sn,
+        z: wall.z1 + uz * along + nz * hT * sn,
+      }
+      // Use mitered point only at the very start/end of the wall
+      if (along <= 0.01) {
+        return side === 'p'
+          ? { x: outline.p0x, z: outline.p0z }
+          : { x: outline.n0x, z: outline.n0z }
+      }
+      if (along >= lengthIn - 0.01) {
+        return side === 'p'
+          ? { x: outline.p1x, z: outline.p1z }
+          : { x: outline.n1x, z: outline.n1z }
+      }
+      return std
+    }
+
+    return segs.map(seg => {
+      const p0 = faceAt(seg.x0, 'p'), p1 = faceAt(seg.x1, 'p')
+      const n0 = faceAt(seg.x0, 'n'), n1 = faceAt(seg.x1, 'n')
+      const segH = FT(seg.y1 - seg.y0)
+      const segY = FT(seg.y0)
+
+      // Shape is in XY plane, extruded along +Z.
+      // After rotateX(-PI/2): shapeY becomes -worldZ.
+      // So negate Z in the shape coordinates.
+      const shape = new THREE.Shape()
+      shape.moveTo(FT(p0.x), -FT(p0.z))
+      shape.lineTo(FT(p1.x), -FT(p1.z))
+      shape.lineTo(FT(n1.x), -FT(n1.z))
+      shape.lineTo(FT(n0.x), -FT(n0.z))
+      shape.closePath()
+
+      const geo = new THREE.ExtrudeGeometry(shape, { depth: segH, bevelEnabled: false })
+      geo.rotateX(-Math.PI / 2)
+      geo.translate(0, segY, 0)
+      return geo
+    })
+  }, [outline, blueprint, segs, lengthIn, wall.x1, wall.z1, wall.x2, wall.z2, wall.thickness])
+
   return (
+    <>
+    {/* Mitered segment bodies — world-space extruded shapes (no transform group) */}
+    {segGeos && segGeos.map((geo, i) => (
+      <mesh key={`ms-${i}`} geometry={geo} receiveShadow
+        onClick={(e) => { e.stopPropagation(); onClick() }}
+        onPointerDown={onPointerDown}
+      >
+        {blueprint
+          ? <meshBasicMaterial color={color} />
+          : <meshLambertMaterial wireframe={wireframe} color={color} />
+        }
+      </mesh>
+    ))}
     <group position={[midX, 0, midZ]} rotation={[0, rotY, 0]}>
-      {segs.map((seg, i) => {
+      {/* Fallback box segments when no mitered outline */}
+      {!segGeos && segs.map((seg, i) => {
         const segW   = FT(seg.x1 - seg.x0)
         const segH   = FT(seg.y1 - seg.y0)
         const localX = FT(-lengthIn / 2 + seg.x0 + (seg.x1 - seg.x0) / 2)
@@ -2541,27 +2683,6 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
       {/* 3D Door & window meshes */}
       {!blueprint && openingMeshes}
 
-      {/* Corner fill boxes */}
-      {startExt > 0 && (
-        <mesh position={[FT(-lengthIn / 2 - startTrim - startExt / 2), hFt / 2, 0]}
-          onClick={(e) => { e.stopPropagation(); onClick() }} onPointerDown={onPointerDown}>
-          <boxGeometry args={[FT(startExt), hFt, thickFt]} />
-          {blueprint
-            ? <meshBasicMaterial color={color} />
-            : <meshLambertMaterial wireframe={wireframe} color={color} />
-          }
-        </mesh>
-      )}
-      {endExt > 0 && (
-        <mesh position={[FT(lengthIn / 2 - endTrim + endExt / 2), hFt / 2, 0]}
-          onClick={(e) => { e.stopPropagation(); onClick() }} onPointerDown={onPointerDown}>
-          <boxGeometry args={[FT(endExt), hFt, thickFt]} />
-          {blueprint
-            ? <meshBasicMaterial color={color} />
-            : <meshLambertMaterial wireframe={wireframe} color={color} />
-          }
-        </mesh>
-      )}
 
       {/* Garage-door thresholds — floor-textured patch across the wall thickness */}
       {baseTex && wall.openings.filter(op => op.type === 'garage-door').map(op => (
@@ -2575,6 +2696,7 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
         />
       ))}
     </group>
+    </>
   )
 })
 
@@ -2615,26 +2737,28 @@ const SlatwallPanelMesh = memo(function SlatwallPanelMesh({ panel, wall, wirefra
   const panelH = panel.yTop - panel.yBottom
   const localX = FT(-lengthIn / 2 + panel.alongStart + panelW / 2)
   const localY = FT((panel.yBottom + panel.yTop) / 2)
-  // Offset slatwall center past wall face to prevent Z-fighting
-  // Exterior panels go on the opposite side of the wall
+  // Slatwall total thickness = 1.25". Sits flush against the wall face.
+  // Exterior panels go on the opposite side of the wall.
   const sideSign = panel.side === 'exterior' ? -1 : 1
-  const localZ = sideSign * FT(wall.thickness / 2 + 0.6)
+  const PANEL_THICK = 1.25  // total slatwall thickness in inches
+  const localZ = sideSign * FT(wall.thickness / 2 + PANEL_THICK / 2)
 
   const hex       = slatwallColors.find(c => c.id === panel.color)?.hex ?? '#f2f2f0'
   const grooveHex = darkenHex(hex, 0.28)
   const roughness = slatRoughness(hex)   // dark colors get frosted/matte finish
 
-  // Geometry layout (panel total = 1" thick):
-  //   back plate:  3/4" thick, center at localZ - 1/8"  (front face = groove bottom)
-  //   board strips: 1/4" thick, center at localZ + 3/8" (front face = panel face)
-  // sideSign flips depth offsets so exterior panels face outward
-  const backPlateZ = localZ - sideSign * FT(0.125)
-  const boardFaceZ = localZ + sideSign * FT(0.375)
+  // Geometry layout (panel total = 1.25" thick):
+  //   back plate:  1" thick, back face flush with wall
+  //   board strips: 1/4" thick, front face = panel face (1.25" from wall)
+  const backPlateThick = 1.0
+  const boardThick = 0.25
+  const backPlateZ = localZ - sideSign * FT((PANEL_THICK - backPlateThick) / 2)
+  const boardFaceZ = localZ + sideSign * FT((PANEL_THICK - boardThick) / 2)
 
-  // Trim: 1.5" wide, 0.5" proud of panel front face
+  // Trim: 1.5" wide, covers full panel depth
   const trimW     = FT(1.5)
-  const trimThick = FT(0.5)
-  const trimZ     = localZ + sideSign * (FT(0.5) + trimThick / 2)
+  const trimThick = FT(PANEL_THICK)
+  const trimZ     = localZ
 
   const wFt = FT(panelW), hFt = FT(panelH)
   const halfW = wFt / 2, halfH = hFt / 2
@@ -2658,7 +2782,7 @@ const SlatwallPanelMesh = memo(function SlatwallPanelMesh({ panel, wall, wirefra
     dividers.push(FT(-panelW / 2 + offset))
   }
 
-  const trimMat = <meshLambertMaterial color={hex} />
+  const trimMat = <meshLambertMaterial color={hex} polygonOffset polygonOffsetFactor={-1} polygonOffsetUnits={-1} />
 
   return (
     <group position={[midX, 0, midZ]} rotation={[0, rotY, 0]}>
@@ -2666,7 +2790,7 @@ const SlatwallPanelMesh = memo(function SlatwallPanelMesh({ panel, wall, wirefra
       <group onClick={(e) => { e.stopPropagation(); onClick() }} onPointerDown={onPointerDown}>
       {/* Back plate — visible inside grooves, slightly darker */}
       <mesh position={[localX, localY, backPlateZ]}>
-        <boxGeometry args={[wFt, hFt, FT(0.75)]} />
+        <boxGeometry args={[wFt, hFt, FT(backPlateThick)]} />
         <meshStandardMaterial wireframe={wireframe}
           color={grooveHex}
           emissive={selected ? '#4488bb' : '#000000'}
@@ -3070,7 +3194,9 @@ function DimensionLines({ walls, cabinets }: { walls: GarageWall[]; cabinets: Pl
     const nz = dot < 0 ? n1z : -n1z
 
     // Interior face endpoints: shift inward along wall direction by corner adj
-    const { startExt: startAdj, endExt: endAdj } = computeCornerAdj(wall, walls)
+    const cadj = computeCornerAdj(wall, walls)
+    const startAdj = cadj.startExt
+    const endAdj = cadj.endExt
     const ix1 = FT(wall.x1) + FT(startAdj) * ux
     const iz1 = FT(wall.z1) + FT(startAdj) * uz
     const ix2 = FT(wall.x2) - FT(endAdj) * ux
@@ -4431,9 +4557,21 @@ export default function GarageShell() {
           if (skipSnap) {
             updateWallRef.current(wd.wallId, { x1: rawX1, z1: rawZ1, x2: rawX2, z2: rawZ2 })
           } else {
+            // Try snapping both endpoints; use whichever snapped closer to a target
             const [sx1, sz1] = snapToTargets(rawX1, rawZ1, wallsRef.current, shapesRef.current, floorPtsRef.current, wd.wallId)
-            const sdx = sx1 - rawX1, sdz = sz1 - rawZ1
-            updateWallRef.current(wd.wallId, { x1: sx1, z1: sz1, x2: rawX2 + sdx, z2: rawZ2 + sdz })
+            const [sx2, sz2] = snapToTargets(rawX2, rawZ2, wallsRef.current, shapesRef.current, floorPtsRef.current, wd.wallId)
+            const d1 = Math.hypot(sx1 - rawX1, sz1 - rawZ1)
+            const d2 = Math.hypot(sx2 - rawX2, sz2 - rawZ2)
+            if (d1 < 0.1 && d2 < 0.1) {
+              // Neither endpoint snapped — just use grid-snapped positions
+              updateWallRef.current(wd.wallId, { x1: rawX1, z1: rawZ1, x2: rawX2, z2: rawZ2 })
+            } else if (d2 < d1) {
+              const sdx = sx2 - rawX2, sdz = sz2 - rawZ2
+              updateWallRef.current(wd.wallId, { x1: rawX1 + sdx, z1: rawZ1 + sdz, x2: sx2, z2: sz2 })
+            } else {
+              const sdx = sx1 - rawX1, sdz = sz1 - rawZ1
+              updateWallRef.current(wd.wallId, { x1: sx1, z1: sz1, x2: rawX2 + sdx, z2: rawZ2 + sdz })
+            }
           }
         }
         return
@@ -4508,14 +4646,24 @@ export default function GarageShell() {
               // Must be within wall span (with half-width margin)
               if (along < -cab.w / 2 || along > len + cab.w / 2) continue
 
-              // Distance from cabinet center to wall interior face position
+              // Distance from cabinet center to wall face position (interior or exterior)
               const slatwallOnWall = slatwallPanelsRef.current.some(p => p.wallId === wall.id)
               const slatwallExtra = slatwallOnWall ? 1 : 0
-              const targetPerp = wall.thickness / 2 + cab.d / 2 + slatwallExtra
-              const perpDist = Math.abs(perp - targetPerp)
+              const intTargetPerp = wall.thickness / 2 + cab.d / 2 + slatwallExtra
+              const extTargetPerp = -(wall.thickness / 2 + cab.d / 2)
+              const intDist = Math.abs(perp - intTargetPerp)
+              const extDist = Math.abs(perp - extTargetPerp)
 
-              // Only snap if on interior side and close enough
-              if (perp <= 0 || perpDist > WALL_SNAP_DIST) continue
+              // Snap to whichever face (interior or exterior) is closer
+              let targetPerp: number
+              if (intDist <= extDist && intDist <= WALL_SNAP_DIST) {
+                targetPerp = intTargetPerp
+              } else if (extDist <= WALL_SNAP_DIST) {
+                targetPerp = extTargetPerp
+              } else {
+                continue
+              }
+              const perpDist = Math.abs(perp - targetPerp)
 
               let snappedAlong = snapToGrid(Math.max(0, Math.min(along, len)))
               // Corner snap: lock cabinet edge flush with adjacent wall interior face
@@ -4524,7 +4672,6 @@ export default function GarageShell() {
               if (cAdj1 > 0 && Math.abs(snappedAlong + cab.w / 2 - (len - cAdj1)) < 2) snappedAlong = len - cAdj1 - cab.w / 2
               const cabCx = wall.x1 + snappedAlong * ux + nx * targetPerp
               const cabCz = wall.z1 + snappedAlong * uz + nz * targetPerp
-              if (!pointInPolygon(cabCx, cabCz, floorPtsRef.current)) continue
 
               // Get Y from wall-face plane intersection so cabinet slides up/down the wall
               _tmpVec3.set(FT(cabCx), 0, FT(cabCz))
@@ -4558,7 +4705,9 @@ export default function GarageShell() {
               }
 
               if (!wallSnap || perpDist < wallSnap.dist) {
-                wallSnap = { x: cabCx, z: cabCz, y: cabY, rotY: -Math.atan2(wdz, wdx), dist: perpDist }
+                const isExterior = targetPerp < 0
+                const baseRotY = -Math.atan2(wdz, wdx)
+                wallSnap = { x: cabCx, z: cabCz, y: cabY, rotY: isExterior ? baseRotY + Math.PI : baseRotY, dist: perpDist }
               }
             }
 
@@ -4799,6 +4948,9 @@ export default function GarageShell() {
     return map
   }, [walls])
 
+  // Precompute mitered outlines for all walls in chains
+  const outlineMap = useMemo(() => computeMiteredOutlines(walls), [walls])
+
   // Deselect everything when clicking empty space (floor, walls, ceiling)
   const handleDeselect = () => {
     selectWall(null); selectShape(null); selectSlatwallPanel(null); selectCabinet(null); selectCountertop(null); selectFloorStep(null); setFloorSelected(false); selectItem(null); selectCeilingLight(null); selectRack(null)
@@ -4872,11 +5024,12 @@ export default function GarageShell() {
 
       {/* Walls */}
       {walls.map(wall => {
-        const { startExt, endExt, startTrim, endTrim } = cornerAdjMap.get(wall.id) ?? { startExt: 0, endExt: 0, startTrim: 0, endTrim: 0 }
+        const { startTrim, endTrim } = cornerAdjMap.get(wall.id) ?? { startExt: 0, endExt: 0, startTrim: 0, endTrim: 0 }
         const isSel = selectedWallId === wall.id
         const wallLen = Math.hypot(wall.x2 - wall.x1, wall.z2 - wall.z1)
         // Always allow selection and drag in one click
         const handleWallDown = (e: ThreeEvent<PointerEvent>) => {
+          if (e.nativeEvent.button !== 0) return  // ignore right-click (orbit) and middle-click
           selectWall(wall.id);
           const hit = floorHit(e.nativeEvent.clientX, e.nativeEvent.clientY)
           if (hit) {
@@ -4895,7 +5048,8 @@ export default function GarageShell() {
               selected={isSel && !selectedSlatwallPanelId && !selectedStainlessBacksplashPanelId}
               onClick={() => { if (suppressNextClick.current) { suppressNextClick.current = false; return } selectWall(wall.id) }}
               onPointerDown={handleWallDown}
-              startExt={startExt} endExt={endExt} startTrim={startTrim} endTrim={endTrim}
+              startTrim={startTrim} endTrim={endTrim}
+              outline={outlineMap.get(wall.id) ?? null}
               baseTex={detileFloorTex} />
             {isSel && !selectedSlatwallPanelId && !selectedStainlessBacksplashPanelId && <>
               <DragHandle
@@ -4912,6 +5066,54 @@ export default function GarageShell() {
           </group>
         )
       })}
+
+      {/* Blueprint corner fills — single polygon per junction, no overlap */}
+      {blueprint && walls.length > 1 && (() => {
+        const chains = findWallChains(walls)
+        const meshes: React.ReactNode[] = []
+        for (const chain of chains) {
+          const N = chain.length
+          if (N < 2) continue
+          for (let i = 0; i < N - 1; i++) {
+            const curr = chain[i], next = chain[i + 1]
+            const cDx = curr.x2 - curr.x1, cDz = curr.z2 - curr.z1
+            const cLen = Math.hypot(cDx, cDz)
+            if (cLen < 1) continue
+            const cUx = cDx / cLen, cUz = cDz / cLen
+            const cNx = -cUz, cNz = cUx, cHT = curr.wall.thickness / 2
+            const nDx = next.x2 - next.x1, nDz = next.z2 - next.z1
+            const nLen = Math.hypot(nDx, nDz)
+            if (nLen < 1) continue
+            const nUx = nDx / nLen, nUz = nDz / nLen
+            const nNx = -nUz, nNz = nUx, nHT = next.wall.thickness / 2
+            const cross = Math.abs(cUx * nUz - cUz * nUx)
+            if (cross < 0.17) continue
+            const cpx = curr.x2, cpz = curr.z2
+            // 4 face endpoints at the corner from both walls
+            const cP = { x: cpx + cNx * cHT, z: cpz + cNz * cHT }
+            const cN = { x: cpx - cNx * cHT, z: cpz - cNz * cHT }
+            const nP = { x: cpx + nNx * nHT, z: cpz + nNz * nHT }
+            const nN = { x: cpx - nNx * nHT, z: cpz - nNz * nHT }
+            // Build convex hull of these 4 points + corner point as a filled shape
+            const pts = [cP, nP, cN, nN]
+            // Sort by angle around the corner point for convex polygon
+            pts.sort((a, b) => Math.atan2(a.z - cpz, a.x - cpx) - Math.atan2(b.z - cpz, b.x - cpx))
+            const shape = new THREE.Shape()
+            shape.moveTo(FT(pts[0].x), -FT(pts[0].z))
+            for (let j = 1; j < pts.length; j++) shape.lineTo(FT(pts[j].x), -FT(pts[j].z))
+            shape.closePath()
+            const h = FT(Math.min(curr.wall.height, next.wall.height))
+            const geo = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false })
+            geo.rotateX(-Math.PI / 2)
+            meshes.push(
+              <mesh key={`bp-corner-${i}-${curr.wall.id}`} geometry={geo}>
+                <meshBasicMaterial color='#333333' />
+              </mesh>
+            )
+          }
+        }
+        return meshes
+      })()}
 
       {/* Seamless baseboards — hidden in blueprint view */}
       {!blueprint && <GarageBaseboards walls={walls} floorSteps={floorSteps}

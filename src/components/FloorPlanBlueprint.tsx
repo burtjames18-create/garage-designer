@@ -148,14 +148,71 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
     return null
   }
 
-  /** Interior face length of a wall (subtracting connected corner thicknesses) */
+  /** Interior face length of a wall — measures where the inside edges meet.
+   *  At connected corners, computes the actual intersection of the interior
+   *  face lines so the measurement is accurate at any angle. */
   function interiorLen(w: GarageWall) {
     const len = wallLen(w)
+    if (len < 0.5) return { len, trim1: 0, trim2: 0, interior: len, ifx1: w.x1, ifz1: w.z1, ifx2: w.x2, ifz2: w.z2 }
+    const [dx, dz] = wallDir(w)
+    const px = -dz, pz = dx  // perpendicular
+    const halfT = w.thickness / 2
+
+    // Determine interior side (toward garage center)
+    const wmx = (w.x1 + w.x2) / 2, wmz = (w.z1 + w.z2) / 2
+    const dot = px * (cx - wmx) + pz * (cz - wmz)
+    const inSign = dot >= 0 ? 1 : -1  // +1 if +side is interior, -1 if -side
+
+    // Interior face line origin (at wall start)
+    const ifOx = w.x1 + px * halfT * inSign
+    const ifOz = w.z1 + pz * halfT * inSign
+
+    // Default interior face start/end (along wall direction from face origin)
+    let trim1 = 0, trim2 = 0
+
     const conn1 = endpointConnected(w.x1, w.z1, w.id)
     const conn2 = endpointConnected(w.x2, w.z2, w.id)
-    const trim1 = conn1 ? conn1.thickness / 2 : 0
-    const trim2 = conn2 ? conn2.thickness / 2 : 0
-    return { len, trim1, trim2, interior: len - trim1 - trim2 }
+
+    if (conn1) {
+      const cLen = wallLen(conn1)
+      if (cLen > 0.5) {
+        const [cdx, cdz] = wallDir(conn1)
+        const cpx = -cdz, cpz = cdx
+        const cHT = conn1.thickness / 2
+        // Connected wall's interior face line (same interior side)
+        const cIfOx = conn1.x1 + cpx * cHT * inSign
+        const cIfOz = conn1.z1 + cpz * cHT * inSign
+        const det = dx * (-cdz) - dz * (-cdx)
+        if (Math.abs(det) > 1e-6) {
+          const t = ((cIfOx - ifOx) * (-cdz) - (cIfOz - ifOz) * (-cdx)) / det
+          if (t > 0 && t < len) trim1 = t
+        }
+        // Fallback for near-perpendicular
+        if (trim1 < 0.1) trim1 = conn1.thickness / 2
+      }
+    }
+
+    if (conn2) {
+      const cLen = wallLen(conn2)
+      if (cLen > 0.5) {
+        const [cdx, cdz] = wallDir(conn2)
+        const cpx = -cdz, cpz = cdx
+        const cHT = conn2.thickness / 2
+        const cIfOx = conn2.x1 + cpx * cHT * inSign
+        const cIfOz = conn2.z1 + cpz * cHT * inSign
+        const det = dx * (-cdz) - dz * (-cdx)
+        if (Math.abs(det) > 1e-6) {
+          const t = ((cIfOx - ifOx) * (-cdz) - (cIfOz - ifOz) * (-cdx)) / det
+          if (t > 0 && t < len) trim2 = len - t
+        }
+        if (trim2 < 0.1) trim2 = conn2.thickness / 2
+      }
+    }
+
+    const interior = len - trim1 - trim2
+    const ifx1 = w.x1 + dx * trim1, ifz1 = w.z1 + dz * trim1
+    const ifx2 = w.x2 - dx * trim2, ifz2 = w.z2 - dz * trim2
+    return { len, trim1, trim2, interior, ifx1, ifz1, ifx2, ifz2 }
   }
 
   // ── Group cabinets by nearest wall (must face the wall) ──
@@ -283,33 +340,73 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
 
       {/* Walls — drawn as filled rectangles with proper corner joints */}
       {(() => {
+        // 2D line intersection: ray from (ax,az) dir (adx,adz) with ray from (bx,bz) dir (bdx,bdz).
+        // Returns t along the first ray, or NaN if parallel.
+        const intersectT = (ax: number, az: number, adx: number, adz: number,
+                            bx: number, bz: number, bdx: number, bdz: number) => {
+          const det = adx * (-bdz) - adz * (-bdx)
+          if (Math.abs(det) < 1e-6) return NaN
+          return ((bx - ax) * (-bdz) - (bz - az) * (-bdx)) / det
+        }
+
+        // Compute mitered face point at a connected corner.
+        // Given this wall's face line and the connected wall, find where they intersect.
+        const miterFace = (
+          faceX: number, faceZ: number, dirX: number, dirZ: number,  // this wall's face line
+          conn: GarageWall, epx: number, epz: number,                // connected wall + corner point
+          side: number,                                                // +1 or -1 for face side
+        ): { x: number; z: number } | null => {
+          const cLen = wallLen(conn)
+          if (cLen < 0.5) return null
+          const [cdx, cdz] = wallDir(conn)
+          const cpx = -cdz, cpz = cdx  // conn perpendicular
+          const cHT = conn.thickness / 2
+          // Connected wall's same-side face line
+          const cFaceX = conn.x1 + cpx * cHT * side
+          const cFaceZ = conn.z1 + cpz * cHT * side
+          const t = intersectT(faceX, faceZ, dirX, dirZ, cFaceX, cFaceZ, cdx, cdz)
+          if (isNaN(t)) return null
+          return { x: faceX + t * dirX, z: faceZ + t * dirZ }
+        }
 
         return walls.map(w => {
           const len = wallLen(w)
           if (len < 0.5) return null
           const [dx, dz] = wallDir(w)
           const halfT = w.thickness / 2
-          // Perpendicular offset (left side of wall direction)
-          const px = -dz, pz = dx
+          const px = -dz, pz = dx  // perpendicular
 
-          // Check if each endpoint connects to another wall
           const conn1 = endpointConnected(w.x1, w.z1, w.id)
           const conn2 = endpointConnected(w.x2, w.z2, w.id)
 
-          // At connected corners, extend the wall by the other wall's half-thickness
-          // so this wall wraps around the corner of the perpendicular wall
-          const ext1 = conn1 ? conn1.thickness / 2 : 0
-          const ext2 = conn2 ? conn2.thickness / 2 : 0
+          // Default perpendicular face corners
+          let p0 = { x: w.x1 + px * halfT, z: w.z1 + pz * halfT }  // +side start
+          let n0 = { x: w.x1 - px * halfT, z: w.z1 - pz * halfT }  // -side start
+          let p1 = { x: w.x2 + px * halfT, z: w.z2 + pz * halfT }  // +side end
+          let n1 = { x: w.x2 - px * halfT, z: w.z2 - pz * halfT }  // -side end
 
-          // Four corners of the wall rectangle (extended at connected ends)
-          const x1 = w.x1 - dx * ext1, z1 = w.z1 - dz * ext1
-          const x2 = w.x2 + dx * ext2, z2 = w.z2 + dz * ext2
+          // At connected corners, compute mitered intersection points.
+          // Only extend (use miter) on the face that goes outward; keep perpendicular
+          // on the face that retracts inward, to avoid overlap with adjacent wall.
+          if (conn1) {
+            const mP = miterFace(p0.x, p0.z, dx, dz, conn1, w.x1, w.z1, +1)
+            const mN = miterFace(n0.x, n0.z, dx, dz, conn1, w.x1, w.z1, -1)
+            // Only use miter if it extends past the endpoint (along = negative for start end)
+            if (mP) { const along = (mP.x - w.x1) * dx + (mP.z - w.z1) * dz; if (along < -0.1) p0 = mP }
+            if (mN) { const along = (mN.x - w.x1) * dx + (mN.z - w.z1) * dz; if (along < -0.1) n0 = mN }
+          }
+          if (conn2) {
+            const mP = miterFace(p1.x, p1.z, dx, dz, conn2, w.x2, w.z2, +1)
+            const mN = miterFace(n1.x, n1.z, dx, dz, conn2, w.x2, w.z2, -1)
+            if (mP) { const along = (mP.x - w.x2) * dx + (mP.z - w.z2) * dz; if (along > 0.1) p1 = mP }
+            if (mN) { const along = (mN.x - w.x2) * dx + (mN.z - w.z2) * dz; if (along > 0.1) n1 = mN }
+          }
 
           const points = [
-            `${sx(x1 + px * halfT)},${sz(z1 + pz * halfT)}`,
-            `${sx(x2 + px * halfT)},${sz(z2 + pz * halfT)}`,
-            `${sx(x2 - px * halfT)},${sz(z2 - pz * halfT)}`,
-            `${sx(x1 - px * halfT)},${sz(z1 - pz * halfT)}`,
+            `${sx(p0.x)},${sz(p0.z)}`,
+            `${sx(p1.x)},${sz(p1.z)}`,
+            `${sx(n1.x)},${sz(n1.z)}`,
+            `${sx(n0.x)},${sz(n0.z)}`,
           ].join(' ')
 
           return (
@@ -431,12 +528,8 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
           const [outX, outZ] = outwardDir(w)
           const [wdx, wdz] = wallDir(w)
 
-          // Interior face: trim at connected corners
-          const { trim1, trim2, interior } = interiorLen(w)
-
-          // Interior face start/end points (world coords)
-          const ifx1 = w.x1 + wdx * trim1, ifz1 = w.z1 + wdz * trim1
-          const ifx2 = w.x2 - wdx * trim2, ifz2 = w.z2 - wdz * trim2
+          // Interior face: trim at connected corners (angle-aware)
+          const { trim1, trim2, interior, ifx1, ifz1, ifx2, ifz2 } = interiorLen(w)
 
           // SVG endpoints of the interior face
           const ix1s = sx(ifx1), iz1s = sz(ifz1)

@@ -156,11 +156,13 @@ export default function WallElevationView() {
     addStainlessBacksplashPanel, deleteStainlessBacksplashPanel,
     updateCabinet, selectCabinet, selectedCabinetId, addCabinet, deleteCabinet,
     updateCountertop, selectCountertop, selectedCountertopId, addCountertop, deleteCountertop,
+    elevationSide, setElevationSide,
   } = useGarageStore()
 
   const svgRef = useRef<SVGSVGElement>(null)
   const dragRef = useRef<SvgDrag | null>(null)
-  const [wallSide, setWallSide] = useState<'interior' | 'exterior'>('interior')
+  const wallSide = elevationSide
+  const setWallSide = setElevationSide
 
   // ── Pan/zoom state (refs for atomic updates) ──
   const weZoomRef = useRef(1)
@@ -839,7 +841,7 @@ export default function WallElevationView() {
           <button
             className="wall-elev-btn"
             style={{ marginLeft: 8, fontSize: 11 }}
-            onClick={() => setWallSide(s => s === 'interior' ? 'exterior' : 'interior')}
+            onClick={() => setWallSide(wallSide === 'interior' ? 'exterior' : 'interior')}
             title="Toggle interior / exterior side"
           >
             {wallSide === 'interior' ? 'Interior' : 'Exterior'}

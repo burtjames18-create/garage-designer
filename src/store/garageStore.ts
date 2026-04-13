@@ -406,6 +406,8 @@ interface GarageStore {
   cameraAngle: number
   elevationWallIndex: number
   setElevationWallIndex: (i: number) => void
+  elevationSide: 'interior' | 'exterior'
+  setElevationSide: (side: 'interior' | 'exterior') => void
 
   // Performance quality preset (only affects live viewport — exports always use high)
   qualityPreset: QualityPreset
@@ -631,6 +633,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
   viewMode: 'perspective',
   cameraAngle: 0,
   elevationWallIndex: 0,
+  elevationSide: 'interior' as 'interior' | 'exterior',
   qualityPreset: 'low' as QualityPreset,
   isExporting: false,
 
@@ -925,6 +928,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
   ),
   setCameraAngle: (angle) => set({ cameraAngle: angle }),
   setElevationWallIndex: (i) => set({ elevationWallIndex: i }),
+  setElevationSide: (side) => set({ elevationSide: side }),
   setQualityPreset: (preset) => set(
     preset === 'high'   ? { qualityPreset: preset, floorReflection: 0.9, envReflection: 0.15, bounceDistance: 48 } :
     preset === 'medium' ? { qualityPreset: preset, floorReflection: 0.4, envReflection: 0.12, bounceDistance: 36 } :

@@ -320,7 +320,7 @@ function CountertopEditor({ ct }: { ct: Countertop }) {
 }
 
 export default function CabinetsPanel() {
-  const { cabinets, addCabinet, updateCabinet, countertops, addCountertop, getQuote, viewMode, walls, elevationWallIndex } = useGarageStore()
+  const { cabinets, addCabinet, updateCabinet, countertops, addCountertop, getQuote, viewMode, walls, elevationWallIndex, elevationSide } = useGarageStore()
   const [activeLine, setActiveLine] = useState<CabinetLine>('technica')
   const quote = cabinets.length > 0 ? getQuote() : null
 
@@ -334,7 +334,9 @@ export default function CabinetsPanel() {
       const dz = wLen > 0.01 ? (wall.z2 - wall.z1) / wLen : 0
       const along = wLen / 2
       const offset = wall.thickness / 2 + preset.d / 2
-      const faceNx = -dz, faceNz = dx
+      // Interior normal is left perpendicular; exterior is opposite
+      const sideSign = elevationSide === 'exterior' ? -1 : 1
+      const faceNx = -dz * sideSign, faceNz = dx * sideSign
       const spawnX = wall.x1 + dx * along + faceNx * offset
       const spawnZ = wall.z1 + dz * along + faceNz * offset
       const rotY = Math.atan2(faceNx, faceNz)
