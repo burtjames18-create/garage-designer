@@ -27,7 +27,7 @@ interface Props {
   overheadRacks?: OverheadRack[]
 }
 
-const PAD = 80  // compact padding for stacked dim tiers
+const PAD = 40  // compact padding to keep dim tiers close to wall edges
 const SLATWALL_DEPTH = 3  // visual depth of slatwall on floor plan (inches)
 
 export default function FloorPlanBlueprint({ walls, cabinets, countertops, floorPoints, floorSteps = [], slatwallPanels = [], stainlessBacksplashPanels = [], overheadRacks = [] }: Props) {
@@ -413,7 +413,7 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
     const mx = (x1 + x2) / 2, my = (y1 + y2) / 2
     const angle = readableAngle(Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI)
     // Place text on the outward side of the dim line
-    const textOff = 4
+    const textOff = 2
     const tx = mx + outX * textOff, ty = my + outZ * textOff
 
     return (
@@ -664,8 +664,8 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
       {(() => {
         const dims: JSX.Element[] = []
         // Tier offsets tightened to compact the drawing; label sits right on line.
-        const TIER_STEP = 14
-        const TIER_BASE = 10
+        const TIER_STEP = 8
+        const TIER_BASE = 6
         // Unified dim font — matches wall elevation view.
         const fsDim = 5
         const fsSeg = 5

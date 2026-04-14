@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { useGarageStore } from '../store/garageStore'
 import type { ViewMode, QualityPreset } from '../store/garageStore'
@@ -24,11 +24,12 @@ const QUALITY_LEVELS: { key: QualityPreset; label: string; title: string }[] = [
 
 export default function Topbar() {
   const { customerName, siteAddress, viewMode, setViewMode, saveProject, loadProject,
-    qualityPreset, setQualityPreset, projectName } = useGarageStore()
+    qualityPreset, setQualityPreset, projectName, newProject } = useGarageStore()
   const [showExport, setShowExport] = useState(false)
   const [showImport, setShowImport] = useState(false)
   const [showTextures, setShowTextures] = useState(false)
   const [showSaveMenu, setShowSaveMenu] = useState(false)
+  const [showOpenMenu, setShowOpenMenu] = useState(false)
   const [showNamePrompt, setShowNamePrompt] = useState<null | 'save' | 'saveAs'>(null)
   const [promptName, setPromptName] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -61,6 +62,24 @@ export default function Topbar() {
     setPromptName(suggested)
     setShowNamePrompt(mode)
   }
+
+  // Stable callbacks for ExportModal — using useCallback with empty deps
+  // prevents the modal's capture useEffect from re-firing when Topbar
+  // re-renders (which would re-capture screenshots at the new — lower —
+  // quality preset right after we drop it back).
+  const handleExportClose = useCallback(() => {
+    setShowExport(false)
+    if (preExportQuality.current && preExportQuality.current !== 'high') {
+      setQualityPreset(preExportQuality.current)
+    }
+    preExportQuality.current = null
+  }, [setQualityPreset])
+  const handleCapturesReady = useCallback(() => {
+    if (preExportQuality.current && preExportQuality.current !== 'high') {
+      setQualityPreset(preExportQuality.current)
+      preExportQuality.current = null
+    }
+  }, [setQualityPreset])
 
   function handleNamePromptConfirm() {
     const clean = promptName.trim().replace(/\.garage$/i, '').replace(/[^a-z0-9_\- ]/gi, '_').trim()
@@ -261,9 +280,46 @@ export default function Topbar() {
           </div>,
           document.body
         )}
-        <button className="load-btn" onClick={handleLoadClick} aria-label="Open saved project">
-          <IconOpen size={14} /> Open Project
-        </button>
+        <div className="open-btn-wrap" style={{ position: 'relative' }}>
+          <button className="load-btn" onClick={() => setShowOpenMenu(s => !s)} aria-label="Open project menu">
+            <IconOpen size={14} /> Project ▾
+          </button>
+          {showOpenMenu && (
+            <div style={{
+              position: 'absolute', top: '100%', left: 0, marginTop: 2, zIndex: 100,
+              background: '#2a2a2a', border: '1px solid rgba(255,255,255,0.15)',
+              borderRadius: 4, boxShadow: '0 4px 12px rgba(0,0,0,0.4)', minWidth: 160,
+            }}>
+              <button
+                onClick={() => { setShowOpenMenu(false); handleLoadClick() }}
+                style={{ display: 'block', width: '100%', padding: '8px 12px', textAlign: 'left',
+                  background: 'transparent', border: 'none', color: '#eee', cursor: 'pointer', fontSize: 12 }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.08)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              >
+                Open Project…
+              </button>
+              <button
+                onClick={() => {
+                  setShowOpenMenu(false)
+                  if (confirm('Start a new project? Any unsaved changes will be lost.')) {
+                    newProject()
+                  }
+                }}
+                style={{ display: 'block', width: '100%', padding: '8px 12px', textAlign: 'left',
+                  background: 'transparent', border: 'none', color: '#eee', cursor: 'pointer', fontSize: 12 }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.08)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              >
+                New Project
+              </button>
+            </div>
+          )}
+        </div>
+        {showOpenMenu && (
+          <div onClick={() => setShowOpenMenu(false)}
+            style={{ position: 'fixed', inset: 0, zIndex: 99 }} />
+        )}
         <input
           ref={fileInputRef}
           type="file"
@@ -287,14 +343,10 @@ export default function Topbar() {
 
       <span className="topbar-version">v{__APP_VERSION__}</span>
 
-      {showExport && <ExportModal onClose={() => {
-        setShowExport(false)
-        // Restore the user's original quality preset (they didn't choose high manually)
-        if (preExportQuality.current && preExportQuality.current !== 'high') {
-          setQualityPreset(preExportQuality.current)
-        }
-        preExportQuality.current = null
-      }} />}
+      {showExport && <ExportModal
+        onClose={handleExportClose}
+        onCapturesReady={handleCapturesReady}
+      />}
       {showImport && <ImportModelModal onClose={() => setShowImport(false)} />}
       {showTextures && <TextureLibraryModal onClose={() => setShowTextures(false)} />}
     </div>

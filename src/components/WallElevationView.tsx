@@ -1307,6 +1307,8 @@ export default function WallElevationView() {
               overall: '#333',
               cab:     '#333',
               slat:    '#1d6f3d',
+              ct:      '#8a6a3a',
+              bb:      '#555',
               gap:     '#888',
             }
 
@@ -1338,7 +1340,7 @@ export default function WallElevationView() {
             //   dimY1     = cabinet/gap strip
             //   dimYSlat  = slatwall/gap strip (with 8' breaks for long panels)
             //   dimYTotal = full wall width (outermost, bold)
-            let nextDimY = toY(0) + 6
+            let nextDimY = toY(0) + 4
             const dimY1 = nextDimY
             if (hasHSegs) nextDimY += 6
             const dimYSlat = nextDimY
@@ -1346,9 +1348,13 @@ export default function WallElevationView() {
             const dimYTotal = nextDimY
 
             // ── Vertical breakpoints (height) ────────────────────────────────
-            // Cabinet vertical tier: cabinets + gaps, no slatwall mixed in.
+            // Cabinet vertical tier: cabinets + gaps, plus a countertop "slab"
+            // segment directly above any cabinet that has a countertop on top,
+            // and a baseboard segment at floor level if the wall has a baseboard.
             const vBreaks = new Set<number>()
             vBreaks.add(0); vBreaks.add(wH)
+            // Add baseboard top as a breakpoint so it gets its own labeled segment.
+            if (bbH > 0) vBreaks.add(bbH)
             const cabVRanges: Array<{ bottom: number; top: number }> = []
             wallCabinets.forEach(cab => {
               const b = Math.max(0, cab.y)
@@ -1356,13 +1362,27 @@ export default function WallElevationView() {
               vBreaks.add(b); vBreaks.add(t)
               cabVRanges.push({ bottom: b, top: t })
             })
+            // Countertop slab ranges — drawn as a 'ct' segment in the cabinet tier.
+            // Use ct.y (slab bottom from floor) + COUNTERTOP_THICKNESS as the top.
+            const ctVRanges: Array<{ bottom: number; top: number }> = []
+            wallCountertops.forEach(ct => {
+              const b = Math.max(0, ct.y)
+              const t = Math.min(wH, ct.y + COUNTERTOP_THICKNESS)
+              if (t - b < 0.1) return
+              vBreaks.add(b); vBreaks.add(t)
+              ctVRanges.push({ bottom: b, top: t })
+            })
             const vSorted = [...vBreaks].sort((a, b) => a - b)
             const hasVSegs = vSorted.length > 2
-            // 'cab' only if both endpoints match the SAME cabinet's edges.
-            const classifyVSeg = (bot: number, top: number): 'cab' | 'gap' => {
+            // Classify in priority: cab > ct > bb > gap.
+            const classifyVSeg = (bot: number, top: number): 'cab' | 'ct' | 'bb' | 'gap' => {
               for (const r of cabVRanges) {
                 if (Math.abs(bot - r.bottom) < 0.1 && Math.abs(top - r.top) < 0.1) return 'cab'
               }
+              for (const r of ctVRanges) {
+                if (Math.abs(bot - r.bottom) < 0.1 && Math.abs(top - r.top) < 0.1) return 'ct'
+              }
+              if (bbH > 0 && Math.abs(bot) < 0.1 && Math.abs(top - bbH) < 0.1) return 'bb'
               return 'gap'
             }
 
@@ -1385,7 +1405,7 @@ export default function WallElevationView() {
             // Offset all vertical dim tiers past any left-side corner stub so
             // they don't land inside the extended wall face.
             const leftStubT = Math.max(0, ...wallStubs.filter(s => s.along <= 2).map(s => s.thickness))
-            const dimStart = PAD - leftStubT - 6
+            const dimStart = PAD - leftStubT - 4
             const dimX1 = dimStart
             const dimXSlat = dimStart - (hasVSegs ? 6 : 0)
             const dimX2 = dimXSlat - (hasSlatVTier ? 6 : 0)
@@ -1404,25 +1424,49 @@ export default function WallElevationView() {
                   stroke={dimColor} strokeWidth={0.35} strokeDasharray="3 2" />
               ))}
 
-              {/* Vertical segment dims — color + prefix by kind */}
+              {/* Vertical segment dims — color + prefix by kind. Tiny
+                 segments (e.g. 1.75" countertop slab) get their label moved
+                 OUTSIDE the segment with a leader so it doesn't collide
+                 with the tick marks. */}
               {hasVSegs && vSorted.slice(0, -1).map((bot, i) => {
                 const top = vSorted[i + 1]
                 const y1 = toY(top), y2 = toY(bot)
                 const mid = (y1 + y2) / 2
                 const segPx = y2 - y1
-                const fitSize = Math.max(2, Math.min(fontSize, segPx * 0.55))
                 const kind = classifyVSeg(bot, top)
                 const color = TIER_COLOR[kind]
-                const prefix = kind === 'cab' ? 'CAB ' : ''
+                const prefix = kind === 'cab' ? 'CAB ' : kind === 'ct' ? 'CT ' : kind === 'bb' ? 'BB ' : ''
+                const labelText = `${prefix}${inchesToDisplay(top - bot)}`
+                // Skip labels on plain gap segments — baseboards and other
+                // recognized parts (cab/ct/bb) still get labels.
+                const showLabel = kind !== 'gap'
+                const needed = labelText.length * fontSize * 0.55
+                const inline = segPx > needed + 2
+                const fitSize = inline ? Math.min(fontSize, segPx * 0.55) : fontSize
                 return (
                   <g key={`vs${i}`}>
                     <line x1={dimX1} y1={y1} x2={dimX1} y2={y2} stroke={color} strokeWidth={0.5} />
                     <line x1={dimX1 - tickSz} y1={y1} x2={dimX1 + tickSz} y2={y1} stroke={color} strokeWidth={0.5} />
                     <line x1={dimX1 - tickSz} y1={y2} x2={dimX1 + tickSz} y2={y2} stroke={color} strokeWidth={0.5} />
-                    <text x={dimX1 - 1} y={mid} textAnchor="middle" fill={color} fontSize={fitSize}
-                      transform={`rotate(-90 ${dimX1 - 1} ${mid})`}>
-                      {prefix}{inchesToDisplay(top - bot)}
-                    </text>
+                    {showLabel && inline && (
+                      <text x={dimX1 - 1.5} y={mid} textAnchor="middle" dominantBaseline="text-after-edge"
+                        fill={color} fontSize={fitSize}
+                        transform={`rotate(-90 ${dimX1 - 1.5} ${mid})`}>
+                        {labelText}
+                      </text>
+                    )}
+                    {showLabel && !inline && (
+                      <>
+                        {/* Leader line + label set well outside the dim line so
+                           tick marks and adjacent segments don't obscure it. */}
+                        <line x1={dimX1 - tickSz - 1} y1={mid} x2={dimX1 - 14} y2={mid}
+                          stroke={color} strokeWidth={0.4} />
+                        <text x={dimX1 - 15} y={mid} textAnchor="end" dominantBaseline="middle"
+                          fill={color} fontSize={fitSize}>
+                          {labelText}
+                        </text>
+                      </>
+                    )}
                   </g>
                 )
               })}
@@ -1434,15 +1478,19 @@ export default function WallElevationView() {
                 const fitSize = Math.max(2, Math.min(fontSize, segPx * 0.55))
                 const color = TIER_COLOR[seg.kind]
                 const prefix = seg.kind === 'slat' ? 'SW ' : ''
+                const showLabel = seg.kind !== 'gap'
                 return (
                   <g key={`svt${i}`}>
                     <line x1={dimXSlat} y1={y1} x2={dimXSlat} y2={y2} stroke={color} strokeWidth={0.5} />
                     <line x1={dimXSlat - tickSz} y1={y1} x2={dimXSlat + tickSz} y2={y1} stroke={color} strokeWidth={0.5} />
                     <line x1={dimXSlat - tickSz} y1={y2} x2={dimXSlat + tickSz} y2={y2} stroke={color} strokeWidth={0.5} />
-                    <text x={dimXSlat - 1} y={mid} textAnchor="middle" fill={color} fontSize={fitSize}
-                      transform={`rotate(-90 ${dimXSlat - 1} ${mid})`}>
-                      {prefix}{inchesToDisplay(seg.top - seg.bottom)}
-                    </text>
+                    {showLabel && (
+                      <text x={dimXSlat - 1.5} y={mid} textAnchor="middle" dominantBaseline="text-after-edge"
+                        fill={color} fontSize={fitSize}
+                        transform={`rotate(-90 ${dimXSlat - 1.5} ${mid})`}>
+                        {prefix}{inchesToDisplay(seg.top - seg.bottom)}
+                      </text>
+                    )}
                   </g>
                 )
               })}
@@ -1455,8 +1503,9 @@ export default function WallElevationView() {
                     <line x1={dimX2} y1={y1} x2={dimX2} y2={y2} stroke={TIER_COLOR.overall} strokeWidth={0.6} />
                     <line x1={dimX2 - tickSz} y1={y1} x2={dimX2 + tickSz} y2={y1} stroke={TIER_COLOR.overall} strokeWidth={0.5} />
                     <line x1={dimX2 - tickSz} y1={y2} x2={dimX2 + tickSz} y2={y2} stroke={TIER_COLOR.overall} strokeWidth={0.5} />
-                    <text x={dimX2 - 1} y={mid} textAnchor="middle" fill={TIER_COLOR.overall} fontSize={fontSize} fontWeight="600"
-                      transform={`rotate(-90 ${dimX2 - 1} ${mid})`}>
+                    <text x={dimX2 - 1.5} y={mid} textAnchor="middle" dominantBaseline="text-after-edge"
+                      fill={TIER_COLOR.overall} fontSize={fontSize} fontWeight="600"
+                      transform={`rotate(-90 ${dimX2 - 1.5} ${mid})`}>
                       WALL {inchesToDisplay(wH)}
                     </text>
                   </g>
@@ -1484,14 +1533,18 @@ export default function WallElevationView() {
                 const kind = classifySeg(start, end)
                 const color = TIER_COLOR[kind]
                 const prefix = kind === 'cab' ? 'CAB ' : ''
+                const showLabel = kind === 'cab'
                 return (
                   <g key={`hs${i}`}>
                     <line x1={x1} y1={dimY1} x2={x2} y2={dimY1} stroke={color} strokeWidth={0.5} />
                     <line x1={x1} y1={dimY1 - tickSz} x2={x1} y2={dimY1 + tickSz} stroke={color} strokeWidth={0.5} />
                     <line x1={x2} y1={dimY1 - tickSz} x2={x2} y2={dimY1 + tickSz} stroke={color} strokeWidth={0.5} />
-                    <text x={mid} y={dimY1 - 1} textAnchor="middle" fill={color} fontSize={fitSize}>
-                      {prefix}{inchesToDisplay(end - start)}
-                    </text>
+                    {showLabel && (
+                      <text x={mid} y={dimY1 - 0.5} textAnchor="middle" dominantBaseline="text-after-edge"
+                        fill={color} fontSize={fitSize}>
+                        {prefix}{inchesToDisplay(end - start)}
+                      </text>
+                    )}
                   </g>
                 )
               })}
@@ -1509,12 +1562,14 @@ export default function WallElevationView() {
                     <line x1={x1} y1={dimYSlat - tickSz} x2={x1} y2={dimYSlat + tickSz} stroke={color} strokeWidth={0.5} />
                     <line x1={x2} y1={dimYSlat - tickSz} x2={x2} y2={dimYSlat + tickSz} stroke={color} strokeWidth={0.5} />
                     {segPx > 14 ? (
-                      <text x={mid} y={dimYSlat - 1} textAnchor="middle" fill={color} fontSize={fitSize}>
+                      <text x={mid} y={dimYSlat - 0.5} textAnchor="middle" dominantBaseline="text-after-edge"
+                        fill={color} fontSize={fitSize}>
                         {prefix}{inchesToDisplay(seg.end - seg.start)}
                       </text>
                     ) : (
-                      <text x={mid} y={dimYSlat - 1} textAnchor="middle" fill={color} fontSize={2}
-                        transform={`rotate(-90 ${mid} ${dimYSlat - 1})`}>
+                      <text x={mid} y={dimYSlat - 0.5} textAnchor="middle" dominantBaseline="text-after-edge"
+                        fill={color} fontSize={2}
+                        transform={`rotate(-90 ${mid} ${dimYSlat - 0.5})`}>
                         {prefix}{inchesToDisplay(seg.end - seg.start)}
                       </text>
                     )}
@@ -1531,7 +1586,8 @@ export default function WallElevationView() {
                     <line x1={x1} y1={dimYTotal} x2={x2} y2={dimYTotal} stroke={TIER_COLOR.overall} strokeWidth={0.6} />
                     <line x1={x1} y1={dimYTotal - tickSz} x2={x1} y2={dimYTotal + tickSz} stroke={TIER_COLOR.overall} strokeWidth={0.5} />
                     <line x1={x2} y1={dimYTotal - tickSz} x2={x2} y2={dimYTotal + tickSz} stroke={TIER_COLOR.overall} strokeWidth={0.5} />
-                    <text x={mid} y={dimYTotal - 1} textAnchor="middle" fill={TIER_COLOR.overall} fontSize={fontSize} fontWeight="600">
+                    <text x={mid} y={dimYTotal - 0.5} textAnchor="middle" dominantBaseline="text-after-edge"
+                      fill={TIER_COLOR.overall} fontSize={fontSize} fontWeight="600">
                       WALL {inchesToDisplay(re - le)}
                     </text>
                   </g>

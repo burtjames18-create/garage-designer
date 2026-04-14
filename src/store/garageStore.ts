@@ -576,6 +576,7 @@ interface GarageStore {
   setProjectName: (v: string | null) => void
   saveProject: (overrideName?: string) => Promise<void>
   loadProject: (data: unknown, filename?: string) => void
+  newProject: () => void
 }
 
 /** Generate a sensible grid of recessed puck lights for a given room size. */
@@ -1212,6 +1213,26 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
 
   projectName: null,
   setProjectName: (v) => set({ projectName: v }),
+  newProject: () => {
+    // Return to the setup screen with a clean slate. Clears the project name
+    // so the next save prompts for one. The user re-enters customer/dimensions
+    // through GarageSetup, which calls completeSetup() to re-enter the app.
+    set({
+      setupDone: false,
+      projectName: null,
+      // Selection state — clear so nothing references about-to-be-stale ids.
+      selectedWallId: null,
+      selectedShapeId: null,
+      selectedCabinetId: null,
+      selectedCountertopId: null,
+      selectedItemId: null,
+      selectedSlatwallPanelId: null,
+      selectedStainlessBacksplashPanelId: null,
+      selectedFloorStepId: null,
+      selectedCeilingLightId: null,
+      selectedRackId: null,
+    })
+  },
   saveProject: async (overrideName?: string) => {
     const s = get()
 

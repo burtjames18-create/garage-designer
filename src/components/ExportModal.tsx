@@ -95,6 +95,7 @@ function imageSize(dataUrl: string): Promise<{ w: number; h: number }> {
 
 interface ExportModalProps {
   onClose: () => void
+  onCapturesReady?: () => void
 }
 
 // ── Geometry helpers (to detect which walls have content) ────────────────────
@@ -126,7 +127,7 @@ function countertopOnWall(ct: Countertop, w: GarageWall) {
   return perp <= 25 / 2 + w.thickness / 2 + 10 && along > -ct.width / 2 && along < len + ct.width / 2
 }
 
-export default function ExportModal({ onClose }: ExportModalProps) {
+export default function ExportModal({ onClose, onCapturesReady }: ExportModalProps) {
   const { customerName, siteAddress, consultantName,
     walls, slatwallPanels, stainlessBacksplashPanels, cabinets, countertops, floorPoints, floorSteps,
     overheadRacks, exportShots } = useGarageStore()
@@ -191,6 +192,7 @@ export default function ExportModal({ onClose }: ExportModalProps) {
     async function run() {
       if (!exportCaptureRef.capture) {
         setStatus('ready')
+        onCapturesReady?.()
         return
       }
       try {
@@ -201,14 +203,29 @@ export default function ExportModal({ onClose }: ExportModalProps) {
         if (!cancelled) {
           setCaptures(result)
           setStatus('ready')
+          // Wait one frame for the <img> elements to start decoding the data
+          // URLs into the DOM — then drop quality back so the live scene
+          // behind the modal renders cheaply (PDF preview scrolls smoothly).
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              if (!cancelled) onCapturesReady?.()
+            })
+          })
         }
       } catch (e) {
         console.error('Export capture failed:', e)
-        if (!cancelled) setStatus('ready')
+        if (!cancelled) {
+          setStatus('ready')
+          onCapturesReady?.()
+        }
       }
     }
     run()
     return () => { cancelled = true }
+    // Intentionally omit onCapturesReady from deps — re-running the capture
+    // loop on every parent re-render would overwrite already-captured shots
+    // at whatever the current (possibly low) quality preset is.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [exportShots])
 
   // Build a PDF entirely in-memory with jsPDF. 3D renders are embedded as
