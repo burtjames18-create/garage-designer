@@ -122,7 +122,7 @@ function LightEditor({ light }: { light: SceneLight }) {
 
         <div className="light-row">
           <label id={`int-${light.id}`}>Intensity</label>
-          <input type="range" min={0.05} max={5} step={0.05}
+          <input type="range" min={5} max={400} step={5}
             value={light.intensity}
             onChange={e => u({ intensity: +e.target.value })}
             aria-labelledby={`int-${light.id}`} />
@@ -189,6 +189,7 @@ export default function LightingPanel() {
     floorReflection, setFloorReflection,
     envReflection, setEnvReflection,
     lightMultiplier, setLightMultiplier,
+    exposure, setExposure,
     sceneLights, addSceneLight,
     ceilingLights, addCeilingLight,
     autoLighting,
@@ -207,6 +208,14 @@ export default function LightingPanel() {
         </button>
       </div>
       <div className="light-row">
+        <label id="exposure">Exposure</label>
+        <input type="range" min={0.3} max={2.0} step={0.05}
+          value={exposure}
+          onChange={e => setExposure(+e.target.value)}
+          aria-labelledby="exposure" />
+        <span className="light-val" aria-live="polite">{exposure.toFixed(2)}</span>
+      </div>
+      <div className="light-row">
         <label id="ambient-brightness">Ambient Fill</label>
         <input type="range" min={0} max={0.5} step={0.005}
           value={ambientIntensity}
@@ -215,7 +224,7 @@ export default function LightingPanel() {
         <span className="light-val" aria-live="polite">{ambientIntensity.toFixed(3)}</span>
       </div>
       <div className="light-row">
-        <label id="light-multiplier">Light Power</label>
+        <label id="light-multiplier">Ceiling Light Power</label>
         <input type="range" min={1} max={40} step={0.5}
           value={lightMultiplier}
           onChange={e => setLightMultiplier(+e.target.value)}
@@ -278,6 +287,12 @@ export default function LightingPanel() {
           <button className="light-add-btn" onClick={() => addCeilingLight('puck')}>+ Puck</button>
         </div>
       </div>
+      <div className="light-add-row" style={{ marginTop: 4 }}>
+        <div className="section-label" style={{ margin: 0 }}>Under-Cabinet Lighting</div>
+        <div className="light-add-btns">
+          <UnderCabinetAddButton />
+        </div>
+      </div>
       <p className="light-empty" style={{ marginTop: 2 }}>
         Drag fixtures to position them on the ceiling
       </p>
@@ -285,5 +300,23 @@ export default function LightingPanel() {
         {ceilingLights.map(l => <CeilingLightEditor key={l.id} light={l} />)}
       </div>
     </div>
+  )
+}
+
+function UnderCabinetAddButton() {
+  const selectedCabinetId = useGarageStore(s => s.selectedCabinetId)
+  const cabinets = useGarageStore(s => s.cabinets)
+  const addCeilingLight = useGarageStore(s => s.addCeilingLight)
+  const selectedCab = selectedCabinetId ? cabinets.find(c => c.id === selectedCabinetId) : null
+  const canAdd = !!selectedCab && selectedCab.style === 'upper'
+  return (
+    <button
+      className="light-add-btn"
+      onClick={() => addCeilingLight('ledbar')}
+      disabled={!canAdd}
+      title={canAdd ? 'Add LED bar under selected upper cabinet' : 'Select an upper cabinet first'}
+    >
+      + Under-Cab LED Bar
+    </button>
   )
 }

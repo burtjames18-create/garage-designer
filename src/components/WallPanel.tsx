@@ -75,7 +75,10 @@ function WallEditor({ wall }: { wall: GarageWall }) {
     stainlessBacksplashPanels, addStainlessBacksplashPanel, updateStainlessBacksplashPanel, deleteStainlessBacksplashPanel, selectStainlessBacksplashPanel, selectedStainlessBacksplashPanelId,
     importedAssets,
   } = useGarageStore()
-  const importedWallTextures = importedAssets.filter((a: ImportedAsset) => a.assetType === 'wall-texture')
+  // All imported textures are available across every surface; the legacy
+  // wall-texture / floor-texture / texture types are all treated as equivalent.
+  const importedWallTextures = importedAssets.filter((a: ImportedAsset) =>
+    a.assetType === 'wall-texture' || a.assetType === 'floor-texture' || a.assetType === 'texture')
   const wallPanels = slatwallPanels.filter(p => p.wallId === wall.id)
   const wallBacksplashes = stainlessBacksplashPanels.filter(p => p.wallId === wall.id)
   const selected = selectedWallId === wall.id

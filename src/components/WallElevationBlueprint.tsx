@@ -109,7 +109,7 @@ interface Props {
   floorSteps?: FloorStep[]
 }
 
-const PAD = 44
+const PAD = 28
 
 export default function WallElevationBlueprint({ wall, slatwallPanels, stainlessBacksplashPanels = [], cabinets, countertops, allWalls, floorSteps = [] }: Props) {
   const wLen = wallLen(wall)
@@ -149,30 +149,50 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
   // ── Dimension calculations ──────────────────────────────────────────────────
   const dimColor = '#444'
   const textColor = '#222'
-  const fs = 6.5
+  const fs = 3.5
   const tk = 4
 
   const hasItems = wallCabinets.length > 0 || wallPanels.length > 0
   const hBreaks = new Set<number>()
   hBreaks.add(hasItems ? leftEdge : 0)
   hBreaks.add(hasItems ? rightEdge : wLen)
+  // Tier 1 breakpoints: cabinets + slatwall merged into one unified strip.
+  type Range = { start: number; end: number }
+  const cabRanges: Range[] = []
+  const slatRanges: Range[] = []
   wallCabinets.forEach(cab => {
     const { along } = projectCabinet(cab, wall)
-    hBreaks.add(Math.max(leftEdge, along - cab.w / 2))
-    hBreaks.add(Math.min(rightEdge, along + cab.w / 2))
+    const s = Math.max(leftEdge, along - cab.w / 2)
+    const e = Math.min(rightEdge, along + cab.w / 2)
+    hBreaks.add(s); hBreaks.add(e)
+    cabRanges.push({ start: s, end: e })
   })
   wallPanels.forEach(p => {
-    hBreaks.add(Math.max(leftEdge, p.alongStart))
-    hBreaks.add(Math.min(rightEdge, p.alongEnd))
+    const s = Math.max(leftEdge, p.alongStart)
+    const e = Math.min(rightEdge, p.alongEnd)
+    hBreaks.add(s); hBreaks.add(e)
+    slatRanges.push({ start: s, end: e })
   })
   const hSorted = [...hBreaks].sort((a, b) => a - b)
   const hasHSegs = hSorted.length > 2
+  const classifySeg = (start: number, end: number): 'cab' | 'slat' | 'gap' => {
+    const mid = (start + end) / 2
+    for (const r of cabRanges)  if (mid >= r.start - 0.1 && mid <= r.end + 0.1) return 'cab'
+    for (const r of slatRanges) if (mid >= r.start - 0.1 && mid <= r.end + 0.1) return 'slat'
+    return 'gap'
+  }
+  const TIER_COLOR = {
+    overall: '#333',
+    cab:     '#333',
+    slat:    '#1d6f3d',
+    gap:     '#888',
+  }
 
   // Slatwall section breaks — every panel gets dimensioned, with dividers at 96" (8') intervals
   const slatSectionBreaks: Array<{ start: number; end: number; sections: number[] }> = []
   wallPanels.forEach(p => {
     const panelW = p.alongEnd - p.alongStart
-    if (panelW < 1) return
+    if (panelW <= 96) return
     const sections: number[] = [p.alongStart]
     for (let offset = 96; offset < panelW; offset += 96) {
       sections.push(p.alongStart + offset)
@@ -186,42 +206,48 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
   //   dimY1  = item segments (cabinets, slatwall edges)
   //   dimYSlat = slatwall 8' section widths (only when panels > 8')
   //   dimYTotal = full wall width (always outermost, bold)
-  let nextDimY = toY(0) + 14
+  let nextDimY = toY(0) + 8
   const dimY1 = nextDimY                                               // item segments
-  if (hasHSegs) nextDimY += 14
+  if (hasHSegs) nextDimY += 8
   const dimYSlat = nextDimY                                            // slatwall sections
-  if (hasSlatSections) nextDimY += 14
+  if (hasSlatSections) nextDimY += 8
   const dimYTotal = nextDimY                                           // wall total (outermost)
 
   const svgH = dimYTotal + tk + 8  // accommodate all dimension rows
 
   const vBreaks = new Set<number>()
+  const cabVRanges: Array<{ bottom: number; top: number }> = []
   vBreaks.add(0); vBreaks.add(wH)
   wallCabinets.forEach(cab => {
-    vBreaks.add(Math.max(0, cab.y))
-    vBreaks.add(Math.min(wH, cab.y + cab.h))
+    const b = Math.max(0, cab.y)
+    const t = Math.min(wH, cab.y + cab.h)
+    vBreaks.add(b); vBreaks.add(t)
+    cabVRanges.push({ bottom: b, top: t })
   })
+  // Combined slatwall vertical span (lowest bottom → highest top).
+  const slatVRange: { bottom: number; top: number } | null = (() => {
+    if (wallPanels.length === 0) return null
+    const lo = Math.max(0, Math.min(...wallPanels.map(p => p.yBottom)))
+    const hi = Math.min(wH, Math.max(...wallPanels.map(p => p.yTop)))
+    return hi - lo > 1 ? { bottom: lo, top: hi } : null
+  })()
+  if (slatVRange) { vBreaks.add(slatVRange.bottom); vBreaks.add(slatVRange.top) }
   const vSorted = [...vBreaks].sort((a, b) => a - b)
   const hasVSegs = vSorted.length > 2
-
-  // Slatwall vertical breaks — each panel's bottom/top as a distinct segment.
-  // Rendered on its own tier so the heights are called out separately from
-  // the cabinet segment dimensions.
-  const slatVSegs: Array<{ bottom: number; top: number }> = wallPanels
-    .map(p => ({ bottom: p.yBottom, top: p.yTop }))
-    .filter(s => s.top - s.bottom > 0.5)
-    .sort((a, b) => a.bottom - b.bottom)
-  const hasSlatVSegs = slatVSegs.length > 0
+  const classifyVSeg = (bot: number, top: number): 'cab' | 'slat' | 'gap' => {
+    for (const r of cabVRanges) {
+      if (Math.abs(bot - r.bottom) < 0.1 && Math.abs(top - r.top) < 0.1) return 'cab'
+    }
+    if (slatVRange && Math.abs(bot - slatVRange.bottom) < 0.1 && Math.abs(top - slatVRange.top) < 0.1) return 'slat'
+    return 'gap'
+  }
 
   // Vertical dimension tiers (inside → outside):
-  //   dimX1     = cabinet/item segments (nearest to wall)
-  //   dimXSlat  = slatwall panel heights (middle tier, only when panels exist)
-  //   dimX2     = wall full height (outermost, bold)
-  let nextDimX = PAD - 14
+  //   dimX1  = unified cabinet/slatwall/gap strip
+  //   dimX2  = wall full height (outermost, bold)
+  let nextDimX = PAD - 8
   const dimX1 = nextDimX
-  if (hasVSegs) nextDimX -= 12
-  const dimXSlat = nextDimX
-  if (hasSlatVSegs) nextDimX -= 12
+  if (hasVSegs) nextDimX -= 8
   const dimX2 = nextDimX
 
   const clipId = `bp-clip-${wall.id.replace(/-/g, '')}`
@@ -406,10 +432,17 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
           const ctX = toX(along - ct.width / 2)
           const ctY = toY(ct.y + COUNTERTOP_THICKNESS)
           const ctHex = COUNTERTOP_HEX[ct.color] ?? '#b5813a'
+          // Thickness label: rendered just to the right of the countertop edge.
+          const labelX = ctX + ct.width + 4
+          const labelY = ctY + COUNTERTOP_THICKNESS / 2
           return (
             <g key={ct.id}>
               <rect x={ctX} y={ctY} width={ct.width} height={COUNTERTOP_THICKNESS}
                 fill={ctHex} stroke="#444" strokeWidth={0.4} />
+              <text x={labelX} y={labelY} fontSize={5} fill="#555"
+                dominantBaseline="middle" textAnchor="start">
+                {COUNTERTOP_THICKNESS}"
+              </text>
             </g>
           )
         })}
@@ -468,36 +501,17 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
       {hasVSegs && vSorted.slice(0, -1).map((bot, i) => {
         const top = vSorted[i + 1]
         const y1 = toY(top), y2 = toY(bot), mid = (y1 + y2) / 2
+        const kind = classifyVSeg(bot, top)
+        const color = TIER_COLOR[kind]
+        const prefix = kind === 'cab' ? 'CAB ' : kind === 'slat' ? 'SW ' : ''
         return (
           <g key={`vs${i}`}>
-            <line x1={dimX1} y1={y1} x2={dimX1} y2={y2} stroke={dimColor} strokeWidth={0.45} />
-            <line x1={dimX1 - tk} y1={y1} x2={dimX1 + tk} y2={y1} stroke={dimColor} strokeWidth={0.45} />
-            <line x1={dimX1 - tk} y1={y2} x2={dimX1 + tk} y2={y2} stroke={dimColor} strokeWidth={0.45} />
+            <line x1={dimX1} y1={y1} x2={dimX1} y2={y2} stroke={color} strokeWidth={0.45} />
+            <line x1={dimX1 - tk} y1={y1} x2={dimX1 + tk} y2={y1} stroke={color} strokeWidth={0.45} />
+            <line x1={dimX1 - tk} y1={y2} x2={dimX1 + tk} y2={y2} stroke={color} strokeWidth={0.45} />
             {(y2 - y1) > 14 && (
-              <text x={dimX1 - 4} y={mid} textAnchor="middle" fill={textColor} fontSize={fs}
-                transform={`rotate(-90 ${dimX1 - 4} ${mid})`}>{inchesToDisplay(top - bot)}</text>
-            )}
-          </g>
-        )
-      })}
-
-      {/* Slatwall vertical segments (own tier — between item segments and total) */}
-      {hasSlatVSegs && slatVSegs.map((seg, i) => {
-        const y1 = toY(seg.top), y2 = toY(seg.bottom), mid = (y1 + y2) / 2
-        return (
-          <g key={`svs${i}`}>
-            {/* Witness lines from panel top/bottom out to the slatwall tier */}
-            <line x1={toX(0)} y1={y1} x2={dimXSlat - tk} y2={y1}
-              stroke={dimColor} strokeWidth={0.35} strokeDasharray="3 2" />
-            <line x1={toX(0)} y1={y2} x2={dimXSlat - tk} y2={y2}
-              stroke={dimColor} strokeWidth={0.35} strokeDasharray="3 2" />
-            {/* Dimension line */}
-            <line x1={dimXSlat} y1={y1} x2={dimXSlat} y2={y2} stroke={dimColor} strokeWidth={0.45} />
-            <line x1={dimXSlat - tk} y1={y1} x2={dimXSlat + tk} y2={y1} stroke={dimColor} strokeWidth={0.45} />
-            <line x1={dimXSlat - tk} y1={y2} x2={dimXSlat + tk} y2={y2} stroke={dimColor} strokeWidth={0.45} />
-            {(y2 - y1) > 14 && (
-              <text x={dimXSlat - 4} y={mid} textAnchor="middle" fill={textColor} fontSize={fs}
-                transform={`rotate(-90 ${dimXSlat - 4} ${mid})`}>{inchesToDisplay(seg.top - seg.bottom)}</text>
+              <text x={dimX1 - 4} y={mid} textAnchor="middle" fill={color} fontSize={fs}
+                transform={`rotate(-90 ${dimX1 - 4} ${mid})`}>{prefix}{inchesToDisplay(top - bot)}</text>
             )}
           </g>
         )
@@ -508,11 +522,11 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
         const y1 = toY(wH), y2 = toY(0), mid = (y1 + y2) / 2
         return (
           <g>
-            <line x1={dimX2} y1={y1} x2={dimX2} y2={y2} stroke={dimColor} strokeWidth={0.6} />
-            <line x1={dimX2 - tk} y1={y1} x2={dimX2 + tk} y2={y1} stroke={dimColor} strokeWidth={0.45} />
-            <line x1={dimX2 - tk} y1={y2} x2={dimX2 + tk} y2={y2} stroke={dimColor} strokeWidth={0.45} />
-            <text x={dimX2 - 4} y={mid} textAnchor="middle" fill={textColor} fontSize={fs} fontWeight="600"
-              transform={`rotate(-90 ${dimX2 - 4} ${mid})`}>{inchesToDisplay(wH)}</text>
+            <line x1={dimX2} y1={y1} x2={dimX2} y2={y2} stroke={TIER_COLOR.overall} strokeWidth={0.6} />
+            <line x1={dimX2 - tk} y1={y1} x2={dimX2 + tk} y2={y1} stroke={TIER_COLOR.overall} strokeWidth={0.45} />
+            <line x1={dimX2 - tk} y1={y2} x2={dimX2 + tk} y2={y2} stroke={TIER_COLOR.overall} strokeWidth={0.45} />
+            <text x={dimX2 - 4} y={mid} textAnchor="middle" fill={TIER_COLOR.overall} fontSize={fs} fontWeight="600"
+              transform={`rotate(-90 ${dimX2 - 4} ${mid})`}>WALL {inchesToDisplay(wH)}</text>
           </g>
         )
       })()}
@@ -525,18 +539,21 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
           stroke={dimColor} strokeWidth={0.35} strokeDasharray="3 2" />
       ))}
 
-      {/* Horizontal segments (tier 1 — closest to wall) */}
+      {/* Horizontal segments (tier 1 — closest to wall). Color + prefix by kind. */}
       {hasHSegs && hSorted.slice(0, -1).map((start, i) => {
         const end = hSorted[i + 1]
         const x1 = toX(start), x2 = toX(end), mid = (x1 + x2) / 2
+        const kind = classifySeg(start, end)
+        const color = TIER_COLOR[kind]
+        const prefix = kind === 'cab' ? 'CAB ' : kind === 'slat' ? 'SW ' : ''
         return (
           <g key={`hs${i}`}>
-            <line x1={x1} y1={dimY1} x2={x2} y2={dimY1} stroke={dimColor} strokeWidth={0.45} />
-            <line x1={x1} y1={dimY1 - tk} x2={x1} y2={dimY1 + tk} stroke={dimColor} strokeWidth={0.45} />
-            <line x1={x2} y1={dimY1 - tk} x2={x2} y2={dimY1 + tk} stroke={dimColor} strokeWidth={0.45} />
+            <line x1={x1} y1={dimY1} x2={x2} y2={dimY1} stroke={color} strokeWidth={0.45} />
+            <line x1={x1} y1={dimY1 - tk} x2={x1} y2={dimY1 + tk} stroke={color} strokeWidth={0.45} />
+            <line x1={x2} y1={dimY1 - tk} x2={x2} y2={dimY1 + tk} stroke={color} strokeWidth={0.45} />
             {(x2 - x1) > 14 && (
-              <text x={mid} y={dimY1 - 3} textAnchor="middle" fill={textColor} fontSize={fs}>
-                {inchesToDisplay(end - start)}
+              <text x={mid} y={dimY1 - 3} textAnchor="middle" fill={color} fontSize={fs}>
+                {prefix}{inchesToDisplay(end - start)}
               </text>
             )}
           </g>
@@ -548,27 +565,27 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
         sb.sections.slice(0, -1).map((secStart, i) => {
           const secEnd = sb.sections[i + 1]
           const x1 = toX(secStart), x2 = toX(secEnd), mid = (x1 + x2) / 2
+          const swColor = TIER_COLOR.slat
           return (
             <g key={`ss${pi}-${i}`}>
               {/* Witness lines from section breaks down to slatwall dim row */}
               <line x1={x1} y1={toY(0)} x2={x1} y2={dimYSlat + tk}
-                stroke={dimColor} strokeWidth={0.35} strokeDasharray="3 2" />
+                stroke={swColor} strokeWidth={0.35} strokeDasharray="3 2" />
               {i === sb.sections.length - 2 && (
                 <line x1={x2} y1={toY(0)} x2={x2} y2={dimYSlat + tk}
-                  stroke={dimColor} strokeWidth={0.35} strokeDasharray="3 2" />
+                  stroke={swColor} strokeWidth={0.35} strokeDasharray="3 2" />
               )}
-              {/* Dimension line */}
-              <line x1={x1} y1={dimYSlat} x2={x2} y2={dimYSlat} stroke={dimColor} strokeWidth={0.45} />
-              <line x1={x1} y1={dimYSlat - tk} x2={x1} y2={dimYSlat + tk} stroke={dimColor} strokeWidth={0.45} />
-              <line x1={x2} y1={dimYSlat - tk} x2={x2} y2={dimYSlat + tk} stroke={dimColor} strokeWidth={0.45} />
+              <line x1={x1} y1={dimYSlat} x2={x2} y2={dimYSlat} stroke={swColor} strokeWidth={0.45} />
+              <line x1={x1} y1={dimYSlat - tk} x2={x1} y2={dimYSlat + tk} stroke={swColor} strokeWidth={0.45} />
+              <line x1={x2} y1={dimYSlat - tk} x2={x2} y2={dimYSlat + tk} stroke={swColor} strokeWidth={0.45} />
               {(x2 - x1) > 14 ? (
-                <text x={mid} y={dimYSlat - 3} textAnchor="middle" fill={textColor} fontSize={fs}>
-                  {inchesToDisplay(secEnd - secStart)}
+                <text x={mid} y={dimYSlat - 3} textAnchor="middle" fill={swColor} fontSize={fs}>
+                  SW {inchesToDisplay(secEnd - secStart)}
                 </text>
               ) : (
-                <text x={mid} y={dimYSlat - 3} textAnchor="middle" fill={textColor} fontSize={3.5}
+                <text x={mid} y={dimYSlat - 3} textAnchor="middle" fill={swColor} fontSize={3.5}
                   transform={`rotate(-90 ${mid} ${dimYSlat - 3})`}>
-                  {inchesToDisplay(secEnd - secStart)}
+                  SW {inchesToDisplay(secEnd - secStart)}
                 </text>
               )}
             </g>
@@ -581,11 +598,11 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
         const x1 = toX(leftEdge), x2 = toX(rightEdge), mid = (x1 + x2) / 2
         return (
           <g>
-            <line x1={x1} y1={dimYTotal} x2={x2} y2={dimYTotal} stroke={dimColor} strokeWidth={0.6} />
-            <line x1={x1} y1={dimYTotal - tk} x2={x1} y2={dimYTotal + tk} stroke={dimColor} strokeWidth={0.45} />
-            <line x1={x2} y1={dimYTotal - tk} x2={x2} y2={dimYTotal + tk} stroke={dimColor} strokeWidth={0.45} />
-            <text x={mid} y={dimYTotal - 3} textAnchor="middle" fill={textColor} fontSize={fs} fontWeight="600">
-              {inchesToDisplay(rightEdge - leftEdge)}
+            <line x1={x1} y1={dimYTotal} x2={x2} y2={dimYTotal} stroke={TIER_COLOR.overall} strokeWidth={0.6} />
+            <line x1={x1} y1={dimYTotal - tk} x2={x1} y2={dimYTotal + tk} stroke={TIER_COLOR.overall} strokeWidth={0.45} />
+            <line x1={x2} y1={dimYTotal - tk} x2={x2} y2={dimYTotal + tk} stroke={TIER_COLOR.overall} strokeWidth={0.45} />
+            <text x={mid} y={dimYTotal - 3} textAnchor="middle" fill={TIER_COLOR.overall} fontSize={fs} fontWeight="600">
+              WALL {inchesToDisplay(rightEdge - leftEdge)}
             </text>
           </g>
         )

@@ -145,6 +145,20 @@
   border-color: rgba(74, 148, 255, 0.5);
 }
 
+.shot-btn-row {
+  display: flex;
+  gap: 6px;
+}
+
+/* Off state inherits the default button background — the "Off" in the label
+   is the visual cue, avoiding hard-to-see red on light backgrounds. */
+.snap-toggle-btn.off {
+  opacity: 0.7;
+}
+.snap-toggle-btn.off:hover {
+  opacity: 0.9;
+}
+
 .shot-list {
   display: flex;
   flex-direction: column;

@@ -49,7 +49,7 @@ export function snapToGrid(inches: number, gridInches = 0.25): number {
 export function snapToWallEndpoints(
   x: number, z: number,
   walls: { id: string; x1: number; z1: number; x2: number; z2: number }[],
-  threshold = 6,
+  threshold = 2,
   excludeWallId?: string,
 ): [number, number] {
   let best = threshold
@@ -69,7 +69,7 @@ export function snapToWallEndpoints(
 export function snapToFloorEdge(
   x: number, z: number,
   floorPoints: { x: number; z: number }[],
-  threshold = 10,
+  threshold = 2,
 ): [number, number] {
   if (floorPoints.length < 2) return [x, z]
   let best = threshold
@@ -116,7 +116,7 @@ export function snapRackToWalls(
   rackLength: number,
   rotY: number,
   walls: { id: string; x1: number; z1: number; x2: number; z2: number; thickness: number }[],
-  threshold = 12,
+  threshold = 2,
 ): RackSnapResult {
   // Compute rack's 4 corner positions
   const hw = rackWidth / 2

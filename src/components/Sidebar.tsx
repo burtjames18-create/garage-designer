@@ -152,7 +152,10 @@ export default function Sidebar() {
     importedAssets,
   } = useGarageStore()
 
-  const importedFloorTextures = importedAssets.filter(a => a.assetType === 'floor-texture')
+  // All imported textures are available for flooring too (wall/floor/generic
+  // are all equivalent once imported).
+  const importedFloorTextures = importedAssets.filter(a =>
+    a.assetType === 'wall-texture' || a.assetType === 'floor-texture' || a.assetType === 'texture')
 
   const classic  = flooringColors.filter(c => c.series === 'classic')
   const stone    = flooringColors.filter(c => c.series === 'stone')

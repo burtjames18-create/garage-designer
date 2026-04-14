@@ -27,14 +27,25 @@ interface Props {
   overheadRacks?: OverheadRack[]
 }
 
-const PAD = 80  // more space for two tiers of dimension lines
+const PAD = 80  // compact padding for stacked dim tiers
 const SLATWALL_DEPTH = 3  // visual depth of slatwall on floor plan (inches)
 
 export default function FloorPlanBlueprint({ walls, cabinets, countertops, floorPoints, floorSteps = [], slatwallPanels = [], stainlessBacksplashPanels = [], overheadRacks = [] }: Props) {
-  const { selectRack, updateRack, selectedRackId } = useGarageStore()
+  const { selectRack, updateRack, selectedRackId,
+    selectCabinet, updateCabinet, selectedCabinetId, snappingEnabled } = useGarageStore()
   const svgRef = useRef<SVGSVGElement>(null)
   const rackDragRef = useRef<{ rackId: string; startX: number; startZ: number; startMouseX: number; startMouseZ: number } | null>(null)
   const [rackSnap, setRackSnap] = useState<RackSnapResult | null>(null)
+
+  // Cabinet drag — slide along the wall the cabinet is attached to.
+  // Locks the perpendicular component; only the along-wall position changes.
+  const cabinetDragRef = useRef<{
+    cabId: string
+    ux: number; uz: number            // along-wall unit vector (from cabinet rotY)
+    perpX: number; perpZ: number      // fixed perpendicular position (cabinet's current offset from origin along wall normal)
+    startAlong: number                // cabinet's current along-projection at drag start
+    startMouseAlong: number           // cursor's along-projection at drag start
+  } | null>(null)
 
   if (walls.length === 0) return null
 
@@ -63,7 +74,8 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
   const ix = (svgX: number) => (svgX - offX) / scale + minX
   const iz = (svgZ: number) => (svgZ - offZ) / scale + minZ
 
-  // Convert a mouse event to SVG coordinates (accounts for pan/zoom wrapper)
+  // Convert a mouse event to garage coords. Uses getScreenCTM so any CSS
+  // transforms on ancestors (viewport pan/zoom in Viewer3D) are accounted for.
   const mouseToSvg = useCallback((e: React.PointerEvent | PointerEvent): { x: number; z: number } | null => {
     const svg = svgRef.current
     if (!svg) return null
@@ -85,7 +97,7 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
     const pos = mouseToSvg(e)
     if (!pos) return
     rackDragRef.current = { rackId: rack.id, startX: rack.x, startZ: rack.z, startMouseX: pos.x, startMouseZ: pos.z }
-    ;(e.target as Element).setPointerCapture(e.pointerId)
+    ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
   }, [selectRack, mouseToSvg])
 
   const onRackPointerMove = useCallback((e: React.PointerEvent) => {
@@ -108,9 +120,134 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
     updateRack(rd.rackId, { x: snap.x, z: snap.z })
   }, [updateRack, mouseToSvg, overheadRacks, walls])
 
-  const onRackPointerUp = useCallback(() => {
+  const onRackPointerUp = useCallback((e?: React.PointerEvent) => {
     rackDragRef.current = null
     setRackSnap(null)
+    if (e) {
+      try { (e.currentTarget as Element).releasePointerCapture(e.pointerId) } catch (_) {}
+    }
+  }, [])
+
+  // ── Cabinet drag (floor plan) ──────────────────────────────────────────────
+  const onCabPointerDown = useCallback((e: React.PointerEvent, cab: PlacedCabinet) => {
+    e.stopPropagation()
+    e.preventDefault()
+    selectCabinet(cab.id)
+    if (cab.locked) return
+    const pos = mouseToSvg(e)
+    if (!pos) return
+    // Along-wall direction derived from cabinet rotY (same convention as 3D)
+    const ux = Math.cos(cab.rotY), uz = -Math.sin(cab.rotY)
+    const cabAlong = cab.x * ux + cab.z * uz
+    const cabPerpX = cab.x - cabAlong * ux
+    const cabPerpZ = cab.z - cabAlong * uz
+    const mouseAlong = pos.x * ux + pos.z * uz
+    cabinetDragRef.current = {
+      cabId: cab.id,
+      ux, uz,
+      perpX: cabPerpX, perpZ: cabPerpZ,
+      startAlong: cabAlong,
+      startMouseAlong: mouseAlong,
+    }
+    ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
+  }, [mouseToSvg, selectCabinet])
+
+  const onCabPointerMove = useCallback((e: React.PointerEvent) => {
+    const cd = cabinetDragRef.current
+    if (!cd) return
+    const pos = mouseToSvg(e)
+    if (!pos) return
+    const mouseAlong = pos.x * cd.ux + pos.z * cd.uz
+    let newAlong = cd.startAlong + (mouseAlong - cd.startMouseAlong)
+    const cab = cabinets.find(c => c.id === cd.cabId)
+    if (!cab) return
+
+    if (snappingEnabled) {
+      newAlong = snapToGrid(newAlong)
+      // Cabinet-to-cabinet edge snap along this wall
+      const halfW = cab.w / 2
+      const SIDE_SNAP = 2
+      for (const other of cabinets) {
+        if (other.id === cab.id) continue
+        // Only consider cabinets on the same along-wall axis (same rotY ±π)
+        const da = Math.abs(((cab.rotY - other.rotY) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)
+        const aligned = da < 0.15 || da > Math.PI * 2 - 0.15 || Math.abs(da - Math.PI) < 0.15
+        if (!aligned) continue
+        const oAlong = other.x * cd.ux + other.z * cd.uz
+        // Only snap to cabinets whose perpendicular position matches this wall
+        const oPerpX = other.x - oAlong * cd.ux
+        const oPerpZ = other.z - oAlong * cd.uz
+        if (Math.hypot(oPerpX - cd.perpX, oPerpZ - cd.perpZ) > 8) continue
+        const dLR = Math.abs((newAlong - halfW) - (oAlong + other.w / 2))
+        if (dLR < SIDE_SNAP) newAlong = oAlong + other.w / 2 + halfW
+        const dRL = Math.abs((newAlong + halfW) - (oAlong - other.w / 2))
+        if (dRL < SIDE_SNAP) newAlong = oAlong - other.w / 2 - halfW
+      }
+      // Corner snap — inset by adjacent wall thickness/2 at each end of the
+      // wall this cabinet is attached to (find nearest wall by rotY match).
+      let bestWall: GarageWall | null = null
+      let bestScore = Infinity
+      for (const w of walls) {
+        const wLen = wallLen(w)
+        if (wLen < 1) continue
+        const [wdx, wdz] = wallDir(w)
+        // cabinet facing: its rotY maps to wall axis as (cos, -sin)
+        const cross = Math.abs(cd.ux * wdz - cd.uz * wdx)
+        if (cross > 0.1) continue  // not parallel to this wall
+        // Distance from cabinet perp point to wall line
+        const relX = cd.perpX - w.x1, relZ = cd.perpZ - w.z1
+        const along = relX * wdx + relZ * wdz
+        const perp = Math.abs(relX * (-wdz) + relZ * wdx)
+        if (along < -12 || along > wLen + 12) continue
+        const score = perp
+        if (score < bestScore) { bestScore = score; bestWall = w }
+      }
+      if (bestWall) {
+        const wLen = wallLen(bestWall)
+        const [wdx, wdz] = wallDir(bestWall)
+        // Which direction of the wall corresponds to +along for cabinet?
+        const sign = (wdx * cd.ux + wdz * cd.uz) >= 0 ? 1 : -1
+        // Inset by adjacent connecting wall thickness/2 at either wall end
+        const CONNECT = 6
+        let startInset = 0, endInset = 0
+        for (const other of walls) {
+          if (other.id === bestWall.id) continue
+          const nearStart = Math.min(
+            Math.hypot(other.x1 - bestWall.x1, other.z1 - bestWall.z1),
+            Math.hypot(other.x2 - bestWall.x1, other.z2 - bestWall.z1),
+          ) < CONNECT
+          const nearEnd = Math.min(
+            Math.hypot(other.x1 - bestWall.x2, other.z1 - bestWall.z2),
+            Math.hypot(other.x2 - bestWall.x2, other.z2 - bestWall.z2),
+          ) < CONNECT
+          if (nearStart) startInset = Math.max(startInset, other.thickness / 2)
+          if (nearEnd)   endInset   = Math.max(endInset,   other.thickness / 2)
+        }
+        // Wall-start corresponds to along = 0 on the wall; convert to cabinet's along-space.
+        const wallStartAlong = bestWall.x1 * cd.ux + bestWall.z1 * cd.uz
+        const wallEndAlong   = bestWall.x2 * cd.ux + bestWall.z2 * cd.uz
+        const loAlong = Math.min(wallStartAlong, wallEndAlong)
+        const hiAlong = Math.max(wallStartAlong, wallEndAlong)
+        const startTarget = (sign > 0 ? loAlong + startInset : hiAlong - startInset) + (sign > 0 ? halfW : -halfW)
+        const endTarget   = (sign > 0 ? hiAlong - endInset   : loAlong + endInset  ) - (sign > 0 ? halfW : -halfW)
+        const CORNER_SNAP = 18
+        if (Math.abs(newAlong - startTarget) < CORNER_SNAP) newAlong = startTarget
+        else if (Math.abs(newAlong - endTarget) < CORNER_SNAP) newAlong = endTarget
+        // Also clamp the cabinet so its edge stays within the wall's usable span
+        void wLen
+      }
+    }
+
+    const newX = cd.perpX + newAlong * cd.ux
+    const newZ = cd.perpZ + newAlong * cd.uz
+    updateCabinet(cd.cabId, { x: newX, z: newZ })
+  }, [cabinets, walls, snappingEnabled, updateCabinet, mouseToSvg])
+
+  const onCabPointerUp = useCallback((e?: React.PointerEvent) => {
+    cabinetDragRef.current = null
+    if (e) {
+      try { (e.currentTarget as Element).releasePointerCapture(e.pointerId) } catch (_) {}
+    }
   }, [])
 
   const dimColor = '#555'
@@ -276,7 +413,7 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
     const mx = (x1 + x2) / 2, my = (y1 + y2) / 2
     const angle = readableAngle(Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI)
     // Place text on the outward side of the dim line
-    const textOff = 5
+    const textOff = 4
     const tx = mx + outX * textOff, ty = my + outZ * textOff
 
     return (
@@ -485,15 +622,23 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
         )
       })}
 
-      {/* Cabinet footprints */}
+      {/* Cabinet footprints — draggable along their wall */}
       {cabinets.map(cab => {
         const hw = (cab.w * scale) / 2
         const hd = (cab.d * scale) / 2
         const deg = -(cab.rotY * 180) / Math.PI
+        const isSel = selectedCabinetId === cab.id
         return (
-          <g key={cab.id} transform={`translate(${sx(cab.x)},${sz(cab.z)}) rotate(${deg})`}>
+          <g key={cab.id} transform={`translate(${sx(cab.x)},${sz(cab.z)}) rotate(${deg})`}
+             style={{ cursor: cab.locked ? 'default' : 'grab' }}
+             onPointerDown={(e) => onCabPointerDown(e, cab)}
+             onPointerMove={onCabPointerMove}
+             onPointerUp={onCabPointerUp}
+             onPointerCancel={onCabPointerUp}>
             <rect x={-hw} y={-hd} width={cab.w * scale} height={cab.d * scale}
-              fill="#e8e8e5" stroke="#444" strokeWidth={0.4} />
+              fill={isSel ? '#d0e8ff' : '#e8e8e5'}
+              stroke={isSel ? '#2d7bea' : '#444'}
+              strokeWidth={isSel ? 1.2 : 0.4} />
           </g>
         )
       })}
@@ -518,8 +663,33 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
          ══════════════════════════════════════════════════════════════════════ */}
       {(() => {
         const dims: JSX.Element[] = []
-        const TIER1_OFF = 38  // px offset from wall for overall dim (outer)
-        const TIER2_OFF = 20  // px offset from wall for breakdown dim (inner)
+        // Tier offsets tightened to compact the drawing; label sits right on line.
+        const TIER_STEP = 14
+        const TIER_BASE = 10
+        // Unified dim font — matches wall elevation view.
+        const fsDim = 5
+        const fsSeg = 5
+
+        // Pack strips onto as few tiers as possible using greedy interval
+        // scheduling. Each tier is a list of non-overlapping [start,end] strips.
+        type Strip = { start: number; end: number; label: string; bold: boolean; color: string }
+        const packIntoTiers = (strips: Strip[]): Strip[][] => {
+          const sorted = [...strips].sort((a, b) => a.start - b.start)
+          const tiers: Strip[][] = []
+          for (const s of sorted) {
+            let placed = false
+            for (const tier of tiers) {
+              const last = tier[tier.length - 1]
+              if (last.end <= s.start + 0.1) {
+                tier.push(s)
+                placed = true
+                break
+              }
+            }
+            if (!placed) tiers.push([s])
+          }
+          return tiers
+        }
 
         for (const w of walls) {
           const len = wallLen(w)
@@ -527,115 +697,118 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
 
           const [outX, outZ] = outwardDir(w)
           const [wdx, wdz] = wallDir(w)
-
-          // Interior face: trim at connected corners (angle-aware)
           const { trim1, trim2, interior, ifx1, ifz1, ifx2, ifz2 } = interiorLen(w)
+          const iStart = trim1
+          const iEnd = len - trim2
 
-          // SVG endpoints of the interior face
-          const ix1s = sx(ifx1), iz1s = sz(ifz1)
-          const ix2s = sx(ifx2), iz2s = sz(ifz2)
+          // Collect all dimension tiers for this wall in order (innermost first).
+          const tierStrips: Strip[][] = []
 
-          // ── TIER 1: Overall interior wall length ──
-          const t1x1 = ix1s + outX * TIER1_OFF, t1z1 = iz1s + outZ * TIER1_OFF
-          const t1x2 = ix2s + outX * TIER1_OFF, t1z2 = iz2s + outZ * TIER1_OFF
+          // ── Cabinets + gaps tier (breakdown along wall) ──
+          const wCabs = cabsByWall.get(w.id) ?? []
+          if (wCabs.length > 0) {
+            const items = wCabs.map(c => ({
+              start: (c.x - w.x1) * wdx + (c.z - w.z1) * wdz - c.w / 2,
+              end:   (c.x - w.x1) * wdx + (c.z - w.z1) * wdz + c.w / 2,
+            })).sort((a, b) => a.start - b.start)
 
-          dims.push(
-            <g key={`t1-${w.id}`}>
-              <line x1={ix1s} y1={iz1s} x2={ix1s + outX * (TIER1_OFF + 4)} y2={iz1s + outZ * (TIER1_OFF + 4)}
-                stroke={dimColor} strokeWidth={0.3} strokeDasharray="3 2" />
-              <line x1={ix2s} y1={iz2s} x2={ix2s + outX * (TIER1_OFF + 4)} y2={iz2s + outZ * (TIER1_OFF + 4)}
-                stroke={dimColor} strokeWidth={0.3} strokeDasharray="3 2" />
-              <DimLine x1={t1x1} y1={t1z1} x2={t1x2} y2={t1z2}
-                label={inchesToDisplay(interior)} outX={outX} outZ={outZ}
-                color={textColor} fontSize={fs} fontWeight="700" />
-            </g>
-          )
-
-          // ── TIER 2: Cabinet/gap breakdown (only for walls with cabinets) ──
-          const wCabs = cabsByWall.get(w.id)
-          if (!wCabs || wCabs.length === 0) continue
-
-          // Sort cabinets along wall direction (from wall centerline start)
-          const sorted = wCabs.map(cab => {
-            const along = (cab.x - w.x1) * wdx + (cab.z - w.z1) * wdz
-            return { cab, along }
-          }).sort((a, b) => a.along - b.along)
-
-          // Build segments using interior face range [trim1 .. len - trim2]
-          type Seg = { start: number; end: number; isCab: boolean }
-          const segments: Seg[] = []
-          const iStart = trim1       // interior face start along wall
-          const iEnd = len - trim2   // interior face end along wall
-
-          const firstStart = sorted[0].along - sorted[0].cab.w / 2
-          if (firstStart - iStart > 1) {
-            segments.push({ start: iStart, end: firstStart, isCab: false })
-          }
-
-          for (let i = 0; i < sorted.length; i++) {
-            const { cab, along } = sorted[i]
-            segments.push({ start: along - cab.w / 2, end: along + cab.w / 2, isCab: true })
-
-            if (i < sorted.length - 1) {
-              const gapStart = along + cab.w / 2
-              const gapEnd = sorted[i + 1].along - sorted[i + 1].cab.w / 2
-              if (gapEnd - gapStart > 1) {
-                segments.push({ start: gapStart, end: gapEnd, isCab: false })
+            const segs: Strip[] = []
+            if (items[0].start - iStart > 1) {
+              segs.push({ start: iStart, end: items[0].start, label: inchesToDisplay(items[0].start - iStart), bold: false, color: dimColorLight })
+            }
+            for (let i = 0; i < items.length; i++) {
+              const it = items[i]
+              segs.push({ start: it.start, end: it.end, label: 'CAB ' + inchesToDisplay(it.end - it.start), bold: true, color: '#333' })
+              if (i < items.length - 1) {
+                const gs = items[i].end, ge = items[i + 1].start
+                if (ge - gs > 1) {
+                  segs.push({ start: gs, end: ge, label: inchesToDisplay(ge - gs), bold: false, color: dimColorLight })
+                }
               }
             }
+            const lastEnd = items[items.length - 1].end
+            if (iEnd - lastEnd > 1) {
+              segs.push({ start: lastEnd, end: iEnd, label: inchesToDisplay(iEnd - lastEnd), bold: false, color: dimColorLight })
+            }
+            tierStrips.push(segs)
           }
 
-          const lastEnd = sorted[sorted.length - 1].along + sorted[sorted.length - 1].cab.w / 2
-          if (iEnd - lastEnd > 1) {
-            segments.push({ start: lastEnd, end: iEnd, isCab: false })
+
+          // ── Slatwall strip: full wall span with SW segments + gaps where
+          // there's no slatwall. Backsplash is intentionally not dimensioned.
+          const wPanels = slatwallPanels.filter(p => p.wallId === w.id)
+            .map(p => ({
+              start: Math.max(iStart, p.alongStart),
+              end:   Math.min(iEnd,   p.alongEnd),
+            }))
+            .filter(p => p.end - p.start > 0.5)
+            .sort((a, b) => a.start - b.start)
+          if (wPanels.length > 0) {
+            const slatSegs: Strip[] = []
+            if (wPanels[0].start - iStart > 1) {
+              slatSegs.push({ start: iStart, end: wPanels[0].start, label: inchesToDisplay(wPanels[0].start - iStart), bold: false, color: dimColorLight })
+            }
+            for (let i = 0; i < wPanels.length; i++) {
+              const p = wPanels[i]
+              slatSegs.push({ start: p.start, end: p.end, label: 'SW ' + inchesToDisplay(p.end - p.start), bold: true, color: '#1d6f3d' })
+              if (i < wPanels.length - 1) {
+                const gs = p.end, ge = wPanels[i + 1].start
+                if (ge - gs > 1) {
+                  slatSegs.push({ start: gs, end: ge, label: inchesToDisplay(ge - gs), bold: false, color: dimColorLight })
+                }
+              }
+            }
+            const lastEnd = wPanels[wPanels.length - 1].end
+            if (iEnd - lastEnd > 1) {
+              slatSegs.push({ start: lastEnd, end: iEnd, label: inchesToDisplay(iEnd - lastEnd), bold: false, color: dimColorLight })
+            }
+            tierStrips.push(slatSegs)
           }
 
-          // Witness lines to tier 2
-          const firstSeg = segments[0]
-          const lastSeg = segments[segments.length - 1]
-          const wlStartX = w.x1 + wdx * firstSeg.start, wlStartZ = w.z1 + wdz * firstSeg.start
-          const wlEndX = w.x1 + wdx * lastSeg.end, wlEndZ = w.z1 + wdz * lastSeg.end
+          // Overall wall length is always the outermost tier.
+          const tierCount = tierStrips.length + 1
+          const overallOff = TIER_BASE + TIER_STEP * (tierCount - 1)
 
+          // Overall wall dimension line
+          const ix1s = sx(ifx1), iz1s = sz(ifz1)
+          const ix2s = sx(ifx2), iz2s = sz(ifz2)
           dims.push(
-            <g key={`t2wl-${w.id}`}>
-              <line x1={sx(wlStartX)} y1={sz(wlStartZ)}
-                x2={sx(wlStartX) + outX * (TIER2_OFF + 4)} y2={sz(wlStartZ) + outZ * (TIER2_OFF + 4)}
-                stroke={dimColorLight} strokeWidth={0.25} strokeDasharray="2 1.5" />
-              <line x1={sx(wlEndX)} y1={sz(wlEndZ)}
-                x2={sx(wlEndX) + outX * (TIER2_OFF + 4)} y2={sz(wlEndZ) + outZ * (TIER2_OFF + 4)}
-                stroke={dimColorLight} strokeWidth={0.25} strokeDasharray="2 1.5" />
+            <g key={`tover-${w.id}`}>
+              <line x1={ix1s} y1={iz1s} x2={ix1s + outX * (overallOff + 4)} y2={iz1s + outZ * (overallOff + 4)}
+                stroke={dimColor} strokeWidth={0.3} strokeDasharray="3 2" />
+              <line x1={ix2s} y1={iz2s} x2={ix2s + outX * (overallOff + 4)} y2={iz2s + outZ * (overallOff + 4)}
+                stroke={dimColor} strokeWidth={0.3} strokeDasharray="3 2" />
+              <DimLine x1={ix1s + outX * overallOff} y1={iz1s + outZ * overallOff}
+                x2={ix2s + outX * overallOff} y2={iz2s + outZ * overallOff}
+                label={'WALL ' + inchesToDisplay(interior)} outX={outX} outZ={outZ}
+                color={textColor} fontSize={fsDim} fontWeight="700" />
             </g>
           )
 
-          // Render each segment
-          for (let i = 0; i < segments.length; i++) {
-            const seg = segments[i]
-            const segLen = seg.end - seg.start
-            if (segLen < 0.5) continue
-
-            const s1x = w.x1 + wdx * seg.start, s1z = w.z1 + wdz * seg.start
-            const s2x = w.x1 + wdx * seg.end, s2z = w.z1 + wdz * seg.end
-            const sx1 = sx(s1x) + outX * TIER2_OFF, sz1 = sz(s1z) + outZ * TIER2_OFF
-            const sx2 = sx(s2x) + outX * TIER2_OFF, sz2 = sz(s2z) + outZ * TIER2_OFF
-
-            // Witness lines for intermediate segment boundaries (from wall to inner tier)
-            if (i > 0) {
+          // Inner tiers: render each strip with witness lines at its endpoints.
+          for (let ti = 0; ti < tierStrips.length; ti++) {
+            const off = TIER_BASE + TIER_STEP * ti
+            const strips = tierStrips[ti]
+            for (let si = 0; si < strips.length; si++) {
+              const s = strips[si]
+              const segLen = s.end - s.start
+              if (segLen < 0.5) continue
+              const s1x = w.x1 + wdx * s.start, s1z = w.z1 + wdz * s.start
+              const s2x = w.x1 + wdx * s.end,   s2z = w.z1 + wdz * s.end
+              const sx1 = sx(s1x) + outX * off, sz1 = sz(s1z) + outZ * off
+              const sx2 = sx(s2x) + outX * off, sz2 = sz(s2z) + outZ * off
               dims.push(
-                <line key={`t2iw-${w.id}-${i}`}
-                  x1={sx(s1x)} y1={sz(s1z)}
-                  x2={sx(s1x) + outX * (TIER2_OFF + 4)} y2={sz(s1z) + outZ * (TIER2_OFF + 4)}
-                  stroke={dimColorLight} strokeWidth={0.25} strokeDasharray="2 1.5" />
+                <g key={`t${ti}-${w.id}-${si}`}>
+                  <line x1={sx(s1x)} y1={sz(s1z)} x2={sx(s1x) + outX * (off + 4)} y2={sz(s1z) + outZ * (off + 4)}
+                    stroke={dimColorLight} strokeWidth={0.25} strokeDasharray="2 1.5" />
+                  <line x1={sx(s2x)} y1={sz(s2z)} x2={sx(s2x) + outX * (off + 4)} y2={sz(s2z) + outZ * (off + 4)}
+                    stroke={dimColorLight} strokeWidth={0.25} strokeDasharray="2 1.5" />
+                  <DimLine x1={sx1} y1={sz1} x2={sx2} y2={sz2}
+                    label={s.label} outX={outX} outZ={outZ}
+                    color={s.color} fontSize={fsSeg} fontWeight={s.bold ? '700' : '500'} />
+                </g>
               )
             }
-
-            dims.push(
-              <g key={`t2seg-${w.id}-${i}`}>
-                <DimLine x1={sx1} y1={sz1} x2={sx2} y2={sz2}
-                  label={inchesToDisplay(segLen)} outX={outX} outZ={outZ}
-                  color={seg.isCab ? '#444' : dimColorLight}
-                  fontSize={fs - 0.5} fontWeight={seg.isCab ? '700' : '500'} />
-              </g>
-            )
           }
         }
 

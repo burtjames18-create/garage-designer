@@ -142,16 +142,16 @@ function SceneCamera({ orbitRef }: { orbitRef: React.RefObject<any> }) {
 }
 
 function SceneLighting() {
-  const { ambientIntensity, envReflection, sceneLights, qualityPreset } = useGarageStore()
+  const { ambientIntensity, envReflection, sceneLights, qualityPreset, exposure } = useGarageStore()
   // On low quality, disable shadows on scene lights entirely
   const enableSceneShadows = qualityPreset !== 'low'
   return (
     <>
       {/* Environment for reflections only (epoxy, steel) */}
-      <Environment preset="warehouse" environmentIntensity={envReflection} />
+      <Environment preset="warehouse" environmentIntensity={envReflection * exposure} />
 
-      {/* Ambient fill — user-adjustable base illumination */}
-      <ambientLight intensity={ambientIntensity} />
+      {/* Ambient fill — user-adjustable base illumination, scaled by exposure */}
+      <ambientLight intensity={ambientIntensity * exposure} />
 
       {/* All real illumination comes from user-placed ceiling lights (CeilingLightMesh)
          and any additional scene lights below */}
@@ -160,7 +160,7 @@ function SceneLighting() {
           <spotLight
             key={l.id}
             position={[l.x, l.y, l.z]}
-            intensity={l.intensity * 80}
+            intensity={l.intensity * exposure}
             color={l.color}
             angle={l.angle}
             penumbra={l.penumbra}
@@ -171,7 +171,7 @@ function SceneLighting() {
           <pointLight
             key={l.id}
             position={[l.x, l.y, l.z]}
-            intensity={l.intensity * 80}
+            intensity={l.intensity * exposure}
             color={l.color}
             castShadow={enableSceneShadows}
             decay={2}
@@ -413,15 +413,17 @@ export default function Viewer3D() {
   const { viewMode, cameraAngle, setCameraAngle, setFloorSelected, selectWall, selectShape, selectSlatwallPanel, selectItem,
     exportShots, addExportShot, updateExportShot, deleteExportShot, reorderExportShots,
     walls, cabinets, countertops, floorPoints, floorSteps, slatwallPanels, overheadRacks,
-    qualityPreset } = useGarageStore()
+    qualityPreset, snappingEnabled, setSnappingEnabled } = useGarageStore()
   const isWireframe  = viewMode === 'wireframe'
   const isPerspective = viewMode === 'perspective' || viewMode === 'wireframe'
-  const showGrid     = viewMode === 'top' || viewMode === 'wireframe'
   const orbitRef     = useRef<any>(null)
   const isTopView = viewMode === 'top'
   const bgColor = isWireframe ? '#0a0f1a' : isTopView ? '#ffffff' : '#ffffff'
   const [editingId, setEditingId] = useState<string | null>(null)
   const [dragId, setDragId] = useState<string | null>(null)
+  // Wireframe mode floor-grid visibility (local toggle, not persisted)
+  const [gridVisible, setGridVisible] = useState(false)
+  const showGrid     = (viewMode === 'top') || (viewMode === 'wireframe' && gridVisible)
 
   const handleSaveShot = useCallback(() => {
     if (!exportCaptureRef.saveShot) return
@@ -465,12 +467,13 @@ export default function Viewer3D() {
       forceUpdate(n => n + 1)
     }
     const handlePointerDown = (e: React.PointerEvent) => {
-      // Don't start viewport pan if clicking on an interactive SVG element (rack polygon/circle)
-      const target = e.target as Element
-      if (target instanceof SVGPolygonElement || target instanceof SVGCircleElement) return
+      // Only pan on right-click (2) or middle-click (1). Left-click (0) is
+      // reserved for cabinet/rack drag inside the SVG.
+      if (e.button !== 1 && e.button !== 2) return
+      e.preventDefault()
       fpDragging.current = true
       fpLastMouse.current = [e.clientX, e.clientY]
-      ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+      ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
     }
     const handlePointerMove = (e: React.PointerEvent) => {
       if (!fpDragging.current) return
@@ -480,7 +483,10 @@ export default function Viewer3D() {
       fpPanRef.current = [fpPanRef.current[0] + dx, fpPanRef.current[1] + dy]
       forceUpdate(n => n + 1)
     }
-    const handlePointerUp = () => { fpDragging.current = false }
+    const handlePointerUp = (e: React.PointerEvent) => {
+      fpDragging.current = false
+      try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId) } catch (_) {}
+    }
 
     return (
       <div className="viewer-wrap" style={{ background: '#fff' }}>
@@ -491,7 +497,8 @@ export default function Viewer3D() {
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerUp}
-          style={{ cursor: fpDragging.current ? 'grabbing' : 'grab' }}
+          onContextMenu={(e) => e.preventDefault()}
+          style={{ cursor: fpDragging.current ? 'grabbing' : 'default' }}
         >
           <div style={{
             transform: `translate(${fpPan[0]}px, ${fpPan[1]}px) scale(${fpZoom})`,
@@ -510,6 +517,22 @@ export default function Viewer3D() {
             />
           </div>
         </div>
+        {/* Snap toggle — also available in floor plan view */}
+        <div className="shot-panel">
+          <div className="shot-btn-row">
+            <button
+              className={`shot-save-btn snap-toggle-btn${snappingEnabled ? '' : ' off'}`}
+              onClick={() => setSnappingEnabled(!snappingEnabled)}
+              title={snappingEnabled ? 'Snapping ON — click to disable' : 'Snapping OFF — click to enable'}
+              aria-pressed={!snappingEnabled}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" />
+              </svg>
+              Snap: {snappingEnabled ? 'On' : 'Off'}
+            </button>
+          </div>
+        </div>
         {/* View mode label */}
         <div className="view-label view-label--blueprint">Floor Plan</div>
       </div>
@@ -519,7 +542,7 @@ export default function Viewer3D() {
   return (
     <div className="viewer-wrap">
       <Canvas
-        shadows={qualityPreset === 'low' ? false : 'soft'}
+        shadows={qualityPreset === 'low' ? false : qualityPreset === 'high' ? 'variance' : 'soft'}
         dpr={[1, 2]}
         gl={{
           preserveDrawingBuffer: true,
@@ -541,12 +564,14 @@ export default function Viewer3D() {
           <Grid
             position={[0, 0.01, 0]}
             args={[200, 200]}
+            // Thicker lines in wireframe let the shader's built-in derivative
+            // AA sample more pixels per line, which kills shimmer at distance.
             cellSize={1}
-            cellThickness={0.4}
+            cellThickness={isWireframe ? 0.8 : 0.4}
             cellColor={isWireframe ? '#1a3050' : '#e0e0e0'}
             sectionSize={10}
-            sectionThickness={0.8}
-            sectionColor={isWireframe ? '#204060' : '#cccccc'}
+            sectionThickness={isWireframe ? 1.4 : 0.8}
+            sectionColor={isWireframe ? '#2d5a85' : '#cccccc'}
             fadeDistance={150}
             fadeStrength={1}
             infiniteGrid
@@ -607,18 +632,45 @@ export default function Viewer3D() {
         </div>
       )}
 
-      {/* ── Export shots panel ── */}
-      {isPerspective && (
-        <div className="shot-panel">
-          <button className="shot-save-btn" onClick={handleSaveShot}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
-              <circle cx="12" cy="13" r="4" />
-            </svg>
-            Save Shot
-          </button>
+      {/* ── Export shots + snap toggle panel ── */}
+      <div className="shot-panel">
+          <div className="shot-btn-row">
+            {isPerspective && (
+              <button className="shot-save-btn" onClick={handleSaveShot}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                  <circle cx="12" cy="13" r="4" />
+                </svg>
+                Save Shot
+              </button>
+            )}
+            <button
+              className={`shot-save-btn snap-toggle-btn${snappingEnabled ? '' : ' off'}`}
+              onClick={() => setSnappingEnabled(!snappingEnabled)}
+              title={snappingEnabled ? 'Snapping ON — click to disable' : 'Snapping OFF — click to enable'}
+              aria-pressed={!snappingEnabled}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" />
+              </svg>
+              Snap: {snappingEnabled ? 'On' : 'Off'}
+            </button>
+            {isWireframe && (
+              <button
+                className={`shot-save-btn snap-toggle-btn${gridVisible ? '' : ' off'}`}
+                onClick={() => setGridVisible(!gridVisible)}
+                title={gridVisible ? 'Floor grid ON — click to hide' : 'Floor grid OFF — click to show'}
+                aria-pressed={!gridVisible}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18" />
+                </svg>
+                Grid: {gridVisible ? 'On' : 'Off'}
+              </button>
+            )}
+          </div>
 
-          {exportShots.length > 0 && (
+          {isPerspective && exportShots.length > 0 && (
             <div className="shot-list">
               {exportShots.map((shot, idx) => (
                 <div
@@ -665,11 +717,10 @@ export default function Viewer3D() {
             </div>
           )}
 
-          {exportShots.length > 0 && (
+          {isPerspective && exportShots.length > 0 && (
             <div className="shot-hint">{exportShots.length} shot{exportShots.length !== 1 ? 's' : ''} saved for export</div>
           )}
         </div>
-      )}
 
       {/* View mode label */}
       <div className="view-label">

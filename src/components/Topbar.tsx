@@ -1,8 +1,10 @@
 import { useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useGarageStore } from '../store/garageStore'
 import type { ViewMode, QualityPreset } from '../store/garageStore'
 import ExportModal from './ExportModal'
 import ImportModelModal from './ImportModelModal'
+import TextureLibraryModal from './TextureLibraryModal'
 import { IconSave, IconOpen } from './Icons'
 import { showToast } from './Toast'
 import './Topbar.css'
@@ -22,9 +24,13 @@ const QUALITY_LEVELS: { key: QualityPreset; label: string; title: string }[] = [
 
 export default function Topbar() {
   const { customerName, siteAddress, viewMode, setViewMode, saveProject, loadProject,
-    qualityPreset, setQualityPreset } = useGarageStore()
+    qualityPreset, setQualityPreset, projectName } = useGarageStore()
   const [showExport, setShowExport] = useState(false)
   const [showImport, setShowImport] = useState(false)
+  const [showTextures, setShowTextures] = useState(false)
+  const [showSaveMenu, setShowSaveMenu] = useState(false)
+  const [showNamePrompt, setShowNamePrompt] = useState<null | 'save' | 'saveAs'>(null)
+  const [promptName, setPromptName] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const preExportQuality = useRef<typeof qualityPreset | null>(null)
 
@@ -32,10 +38,35 @@ export default function Topbar() {
     fileInputRef.current?.click()
   }
 
-  async function handleSave() {
+  async function doSave(nameOverride?: string) {
     showToast('Saving project...', 'success')
-    await saveProject()
+    await saveProject(nameOverride)
     showToast('Project saved', 'success')
+  }
+
+  function handleSaveClick() {
+    setShowSaveMenu(s => !s)
+  }
+
+  function handleSaveOption(mode: 'save' | 'saveAs') {
+    setShowSaveMenu(false)
+    if (mode === 'save' && projectName) {
+      // Existing project — silent overwrite to same filename.
+      doSave()
+      return
+    }
+    // New project OR Save As New — prompt for a name.
+    const suggested = projectName
+      ?? (customerName ? customerName.replace(/[^a-z0-9]/gi, '_') : '')
+    setPromptName(suggested)
+    setShowNamePrompt(mode)
+  }
+
+  function handleNamePromptConfirm() {
+    const clean = promptName.trim().replace(/\.garage$/i, '').replace(/[^a-z0-9_\- ]/gi, '_').trim()
+    if (!clean) return
+    setShowNamePrompt(null)
+    doSave(clean)
   }
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -45,7 +76,7 @@ export default function Topbar() {
     reader.onload = (ev) => {
       try {
         const data = JSON.parse(ev.target?.result as string)
-        loadProject(data)
+        loadProject(data, file.name)
         showToast('Project loaded', 'success')
       } catch {
         showToast('Could not read project file. Make sure it is a valid .garage file.', 'error')
@@ -122,6 +153,16 @@ export default function Topbar() {
         Import Model
       </button>
 
+      {/* Textures library button */}
+      <button className="import-btn" onClick={() => setShowTextures(true)} aria-label="Manage imported textures">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2" />
+          <circle cx="9" cy="9" r="2" />
+          <path d="M21 15l-5-5L5 21" />
+        </svg>
+        Textures
+      </button>
+
       {/* Quality preset */}
       <div className="quality-toggle" role="radiogroup" aria-label="Render quality">
         <span className="quality-label">Quality</span>
@@ -141,9 +182,85 @@ export default function Topbar() {
 
       {/* Actions */}
       <div className="topbar-actions">
-        <button className="save-btn" onClick={handleSave} aria-label="Save project to file">
-          <IconSave size={14} /> Save
-        </button>
+        <div className="save-btn-wrap" style={{ position: 'relative' }}>
+          <button className="save-btn" onClick={handleSaveClick} aria-label="Save project">
+            <IconSave size={14} /> Save {projectName ? `(${projectName})` : ''} ▾
+          </button>
+          {showSaveMenu && (
+            <div className="save-menu" style={{
+              position: 'absolute', top: '100%', left: 0, marginTop: 2, zIndex: 100,
+              background: '#2a2a2a', border: '1px solid rgba(255,255,255,0.15)',
+              borderRadius: 4, boxShadow: '0 4px 12px rgba(0,0,0,0.4)', minWidth: 140,
+            }}>
+              <button
+                onClick={() => handleSaveOption('save')}
+                style={{ display: 'block', width: '100%', padding: '8px 12px', textAlign: 'left',
+                  background: 'transparent', border: 'none', color: '#eee', cursor: 'pointer', fontSize: 12 }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.08)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              >
+                Save
+              </button>
+              <button
+                onClick={() => handleSaveOption('saveAs')}
+                style={{ display: 'block', width: '100%', padding: '8px 12px', textAlign: 'left',
+                  background: 'transparent', border: 'none', color: '#eee', cursor: 'pointer', fontSize: 12 }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.08)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              >
+                Save As New…
+              </button>
+            </div>
+          )}
+        </div>
+        {showSaveMenu && (
+          <div onClick={() => setShowSaveMenu(false)}
+            style={{ position: 'fixed', inset: 0, zIndex: 99 }} />
+        )}
+        {showNamePrompt && createPortal(
+          <div style={{
+            position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh',
+            background: 'rgba(0,0,0,0.5)', zIndex: 10000,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }} onClick={() => setShowNamePrompt(null)}>
+            <div onClick={e => e.stopPropagation()} style={{
+              background: '#2a2a2a', padding: 20, borderRadius: 8,
+              border: '1px solid rgba(255,255,255,0.15)', minWidth: 320,
+            }}>
+              <div style={{ fontSize: 14, color: '#eee', marginBottom: 10, fontWeight: 600 }}>
+                {showNamePrompt === 'saveAs' ? 'Save As New Project' : 'Save Project'}
+              </div>
+              <div style={{ fontSize: 11, color: '#aaa', marginBottom: 6 }}>Project name:</div>
+              <input
+                type="text" autoFocus value={promptName}
+                onChange={e => setPromptName(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') handleNamePromptConfirm()
+                  if (e.key === 'Escape') setShowNamePrompt(null)
+                }}
+                placeholder="my-garage"
+                style={{ width: '100%', padding: '6px 8px', fontSize: 13,
+                  background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.2)',
+                  borderRadius: 4, color: '#eee' }}
+              />
+              <div style={{ fontSize: 10, color: '#888', marginTop: 4 }}>Saved as {promptName.trim() || 'my-garage'}.garage</div>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
+                <button onClick={() => setShowNamePrompt(null)}
+                  style={{ padding: '6px 12px', fontSize: 12, background: 'transparent',
+                    border: '1px solid rgba(255,255,255,0.2)', borderRadius: 4, color: '#ccc', cursor: 'pointer' }}>
+                  Cancel
+                </button>
+                <button onClick={handleNamePromptConfirm} disabled={!promptName.trim()}
+                  style={{ padding: '6px 12px', fontSize: 12, background: '#3a6eb5',
+                    border: '1px solid #4a82c4', borderRadius: 4, color: '#fff', cursor: 'pointer',
+                    opacity: promptName.trim() ? 1 : 0.5 }}>
+                  Save
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
         <button className="load-btn" onClick={handleLoadClick} aria-label="Open saved project">
           <IconOpen size={14} /> Open Project
         </button>
@@ -179,6 +296,7 @@ export default function Topbar() {
         preExportQuality.current = null
       }} />}
       {showImport && <ImportModelModal onClose={() => setShowImport(false)} />}
+      {showTextures && <TextureLibraryModal onClose={() => setShowTextures(false)} />}
     </div>
   )
 }

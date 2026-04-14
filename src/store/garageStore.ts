@@ -12,7 +12,7 @@ export const CEILING_LIGHT_W  = 1      // feet
 export const CEILING_LIGHT_L  = 4      // feet
 export const CEILING_LIGHT_TH = 2 / 12 // feet (2 inches)
 
-export type CeilingLightKind = 'bar' | 'puck'
+export type CeilingLightKind = 'bar' | 'puck' | 'ledbar'
 export interface CeilingLight {
   id: string
   label: string
@@ -23,6 +23,10 @@ export interface CeilingLight {
   color: string // emitted light color hex (warm white default)
   intensity: number // 0–3
   enabled: boolean
+  // ledbar-only: mounted under an upper cabinet. length in inches (draggable),
+  // y in feet = world height of fixture bottom face (set from cabinet bottom).
+  lengthIn?: number
+  y?: number
 }
 
 export interface SceneLight {
@@ -200,6 +204,10 @@ export interface GarageShape {
   // cylinder
   r: number
   material: 'concrete' | 'steel' | 'wood' | 'drywall'
+  // appearance (all optional — falls back to material-based default)
+  color?: string       // hex color for solid fill
+  textureId?: string   // wall texture id, or 'floor:<id>', or 'imported:<id>'
+  textureScale?: number // multiplier for UV repeat (1 = default; <1 larger pattern; >1 tighter tiling)
 }
 
 export interface FloorPoint {
@@ -306,15 +314,23 @@ export const OVERHEAD_RACK_PRESETS: OverheadRackPreset[] = [
   { key: 'rack-2x6', label: "2' × 6'", rackWidth: 24, rackLength: 72, sku: 'GL-RACK-2X6', price: 249 },
 ]
 
-export type ImportAssetType = '3d-model' | 'wall-texture' | 'floor-texture'
+export type ImportAssetType = '3d-model' | 'wall-texture' | 'floor-texture' | 'texture'
 
 /** An imported custom asset (model or texture) stored as a data blob */
 export interface ImportedAsset {
   id: string
   name: string         // original filename
   assetType: ImportAssetType
-  /** For 3D models: base64-encoded GLB; for textures: data URL */
+  /** For 3D models: base64-encoded GLB; for textures: diffuse/color data URL */
   data: string
+  /** PBR sidecar maps — populated when a zip contains multiple maps.
+   *  `data` holds the color/diffuse map; these are the extras. Any map may be
+   *  undefined. Shape/wall/floor renderers use the full set when present. */
+  normalMap?: string
+  roughnessMap?: string
+  metalnessMap?: string
+  aoMap?: string
+  displacementMap?: string
   /** For 3D models: vehicle category */
   modelCategory?: 'car' | 'motorcycle' | 'equipment' | 'furniture'
   /** For 3D models: display label */
@@ -416,6 +432,10 @@ interface GarageStore {
   // When true, all components render at max quality regardless of qualityPreset
   isExporting: boolean
   setIsExporting: (v: boolean) => void
+
+  // Global snapping toggle — disables all position/corner/stack snapping when false
+  snappingEnabled: boolean
+  setSnappingEnabled: (v: boolean) => void
 
   // Floor selection
   floorSelected: boolean
@@ -534,6 +554,8 @@ interface GarageStore {
   setEnvReflection: (v: number) => void
   lightMultiplier: number
   setLightMultiplier: (v: number) => void
+  exposure: number
+  setExposure: (v: number) => void
   sceneLights: SceneLight[]
   addSceneLight: (type: LightType) => void
   updateSceneLight: (id: string, changes: Partial<SceneLight>) => void
@@ -550,8 +572,10 @@ interface GarageStore {
   getQuote: () => { subtotal: number; labor: number; total: number; lineItems: { label: string; sku: string; price: number }[] }
 
   // Save / Load
-  saveProject: () => Promise<void>
-  loadProject: (data: unknown) => void
+  projectName: string | null  // current project filename (without .garage extension)
+  setProjectName: (v: string | null) => void
+  saveProject: (overrideName?: string) => Promise<void>
+  loadProject: (data: unknown, filename?: string) => void
 }
 
 /** Generate a sensible grid of recessed puck lights for a given room size. */
@@ -636,6 +660,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
   elevationSide: 'interior' as 'interior' | 'exterior',
   qualityPreset: 'low' as QualityPreset,
   isExporting: false,
+  snappingEnabled: true,
 
   isDraggingWall: false,
   dragCount: 0,
@@ -935,6 +960,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
                           { qualityPreset: preset, floorReflection: 0.1, envReflection: 0.05, bounceDistance: 30 }
   ),
   setIsExporting: (v) => set({ isExporting: v }),
+  setSnappingEnabled: (v) => set({ snappingEnabled: v }),
   setIsDraggingWall: (v) => set({ isDraggingWall: v }),
   beginDrag: () => set(s => { const n = s.dragCount + 1; return { dragCount: n, isDraggingWall: n > 0 } }),
   endDrag: () => set(s => { const n = Math.max(0, s.dragCount - 1); return { dragCount: n, isDraggingWall: n > 0 } }),
@@ -1054,6 +1080,30 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
   ceilingLights: buildPuckGrid(240 / 12, 264 / 12),  // matches default 20×22 ft garage
   selectedCeilingLightId: null,
   addCeilingLight: (kind = 'bar') => {
+    const state = get()
+    // ledbar: mount under the currently selected upper cabinet, centered,
+    // default length = cabinet width, rotated to match the cabinet face.
+    if (kind === 'ledbar') {
+      const selId = state.selectedCabinetId
+      const cab = selId ? state.cabinets.find(c => c.id === selId) : null
+      if (!cab || cab.style !== 'upper') {
+        return // silently ignore — UI should disable button when not applicable
+      }
+      const light: CeilingLight = {
+        id: uid(),
+        label: 'LED Light Bar',
+        kind: 'ledbar',
+        x: cab.x / 12, z: cab.z / 12,
+        rotY: cab.rotY,
+        color: '#ffffff',
+        intensity: 2.0,
+        enabled: true,
+        lengthIn: cab.w,
+        y: cab.y / 12, // cabinet bottom face height in feet
+      }
+      set(s => ({ ceilingLights: [...s.ceilingLights, light], selectedCeilingLightId: light.id }))
+      return
+    }
     const light: CeilingLight = {
       id: uid(),
       label: kind === 'puck' ? 'Puck Light' : 'LED Bar',
@@ -1081,7 +1131,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
     const area = wFt * dFt
     const lights = buildPuckGrid(wFt, dFt)
     // Scale ambient and bounce based on room size
-    const ambient = area > 600 ? 0.20 : area > 300 ? 0.18 : 0.15
+    const ambient = area > 600 ? 0.08 : area > 300 ? 0.06 : 0.05
     const bounce = area > 600 ? 5.0 : area > 300 ? 4.0 : 3.5
     const bounceD = Math.max(20, Math.min(45, Math.max(wFt, dFt) * 1.5))
     const chFt = ceilingHeight / 12
@@ -1099,12 +1149,14 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
     })
   },
 
-  ambientIntensity: 0.15,
+  ambientIntensity: 0.05,
   setAmbientIntensity: (v) => set({ ambientIntensity: v }),
   bounceIntensity: 4,
   setBounceIntensity: (v) => set({ bounceIntensity: v }),
   bounceDistance: 30,
   setBounceDistance: (v) => set({ bounceDistance: v }),
+  exposure: 1.0,
+  setExposure: (v) => set({ exposure: v }),
   floorReflection: 0.1,
   setFloorReflection: (v) => set({ floorReflection: v }),
   envReflection: 0.05,
@@ -1116,7 +1168,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
     const light: SceneLight = {
       id: uid(), label: type === 'spot' ? 'Spotlight' : 'Point Light',
       type, x: 0, y: 8, z: 0, color: '#fff8f0',
-      intensity: type === 'spot' ? 1.5 : 1.0,
+      intensity: type === 'spot' ? 120 : 80,
       enabled: true, angle: Math.PI / 6, penumbra: 0.3,
     }
     set(s => ({ sceneLights: [...s.sceneLights, light] }))
@@ -1158,7 +1210,9 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
     return { subtotal, labor, total: subtotal + labor, lineItems }
   },
 
-  saveProject: async () => {
+  projectName: null,
+  setProjectName: (v) => set({ projectName: v }),
+  saveProject: async (overrideName?: string) => {
     const s = get()
 
     // Encode 3D model buffers to base64 asynchronously (handles large files)
@@ -1202,6 +1256,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       floorReflection: s.floorReflection,
       envReflection: s.envReflection,
       lightMultiplier: s.lightMultiplier,
+      exposure: s.exposure,
       sceneLights: s.sceneLights,
       exportShots: s.exportShots,
     }
@@ -1209,22 +1264,31 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
     const blob = new Blob([json], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
-    const name = s.customerName
-      ? s.customerName.replace(/[^a-z0-9]/gi, '_') + '.garage'
-      : 'garage-design.garage'
+    // Priority: explicit override → existing projectName → customerName → default.
+    const baseName = overrideName
+      ?? s.projectName
+      ?? (s.customerName ? s.customerName.replace(/[^a-z0-9]/gi, '_') : 'garage-design')
     a.href = url
-    a.download = name
+    a.download = baseName + '.garage'
     a.click()
     URL.revokeObjectURL(url)
+    // Remember this name so subsequent saves overwrite the same file.
+    if (overrideName || !s.projectName) set({ projectName: baseName })
   },
 
-  loadProject: (data: unknown) => {
+  loadProject: (data: unknown, filename?: string) => {
     const d = data as Record<string, unknown>
     if (!d || typeof d !== 'object' || d._version !== 1) {
       alert('Invalid or unsupported project file.')
       return
     }
+    // Derive project name from the loaded filename so subsequent saves
+    // overwrite the same file instead of prompting.
+    const projectName = filename
+      ? filename.replace(/\.garage$/i, '')
+      : null
     set({
+      projectName,
       customerName:     (d.customerName as string)     ?? '',
       siteAddress:      (d.siteAddress as string)       ?? '',
       consultantName:   (d.consultantName as string)    ?? 'Garage Living',
@@ -1263,7 +1327,13 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       floorReflection:  (d.floorReflection as number)  ?? 0.1,
       envReflection:    (d.envReflection as number)    ?? 0.05,
       lightMultiplier:  (d.lightMultiplier as number)  ?? 15,
-      sceneLights:      (d.sceneLights as SceneLight[]) ?? [],
+      exposure:         (d.exposure as number)         ?? 1.0,
+      // Migration: pre-exposure saves had scene-light intensity multiplied by
+      // 80 in the renderer. Now we render intensity as-is, so scale stored
+      // values up by 80 on legacy loads so brightness doesn't drop.
+      sceneLights:      (d.exposure === undefined
+                          ? ((d.sceneLights as SceneLight[]) ?? []).map(l => ({ ...l, intensity: (l.intensity ?? 1) * 80 }))
+                          : ((d.sceneLights as SceneLight[]) ?? [])),
       exportShots:      (d.exportShots as ExportShot[]) ?? [],
       // reset selection state
       selectedWallId: null,

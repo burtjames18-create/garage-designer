@@ -613,12 +613,14 @@ function snapShapeToWalls(
     if (dist < bestDist) {
       bestDist = dist
 
-      // Corner snap: align shape edge flush with wall endpoint
+      // Corner snap: align shape side with adjacent wall's interior face
+      // (inset by adjacent wall's thickness/2 so the shape doesn't overlap it).
+      const { startInset, endInset } = wallEndInset(wall, walls)
       let snappedAlong = along
-      const edgeToStart = along - halfAlong
-      const edgeToEnd   = (len - along) - halfAlong
-      if (Math.abs(edgeToStart) < cornerThresh) snappedAlong = halfAlong
-      else if (Math.abs(edgeToEnd) < cornerThresh) snappedAlong = len - halfAlong
+      const startTarget = startInset + halfAlong
+      const endTarget   = len - endInset - halfAlong
+      if (Math.abs(along - startTarget) < cornerThresh) snappedAlong = startTarget
+      else if (Math.abs(along - endTarget) < cornerThresh) snappedAlong = endTarget
 
       const snapX = wall.x1 + snappedAlong * ux + targetPerp * nx
       const snapZ = wall.z1 + snappedAlong * uz + targetPerp * nz
@@ -699,6 +701,132 @@ function computeCornerAdj(wall: GarageWall, allWalls: GarageWall[], threshold = 
   }
 
   return { startExt, endExt, startTrim, endTrim }
+}
+
+/**
+ * For a given wall, find how much an object's edge should be inset from each
+ * endpoint so its side butts up against the INTERIOR face of any adjacent
+ * connecting wall (L-corner or T-junction). Used for corner-snapping any
+ * object that mounts flush to a wall face (cabinets, shapes, etc.).
+ */
+function wallEndInset(wall: GarageWall, allWalls: GarageWall[], connectDist = 6): {
+  startInset: number; endInset: number
+} {
+  let startInset = 0, endInset = 0
+  for (const other of allWalls) {
+    if (other.id === wall.id) continue
+    const nearStart = Math.min(
+      Math.hypot(other.x1 - wall.x1, other.z1 - wall.z1),
+      Math.hypot(other.x2 - wall.x1, other.z2 - wall.z1),
+    ) < connectDist
+    const nearEnd = Math.min(
+      Math.hypot(other.x1 - wall.x2, other.z1 - wall.z2),
+      Math.hypot(other.x2 - wall.x2, other.z2 - wall.z2),
+    ) < connectDist
+    if (nearStart) startInset = Math.max(startInset, other.thickness / 2)
+    if (nearEnd)   endInset   = Math.max(endInset,   other.thickness / 2)
+  }
+  return { startInset, endInset }
+}
+
+// ─── Shape-to-shape snapping ─────────────────────────────────────────────────
+// Edge-to-edge snap in X, Z, and Y. Works for box/beam (w × d × h). For a
+// cylinder, treat footprint as a (2r × 2r) bounding box.
+function shapeHalfExtents(sh: GarageShape): { hx: number; hz: number; hy: number } {
+  if (sh.type === 'cylinder') return { hx: sh.r, hz: sh.r, hy: sh.h / 2 }
+  return { hx: sh.w / 2, hz: sh.d / 2, hy: sh.h / 2 }
+}
+
+function snapShapeToOthers(
+  shapeId: string,
+  x: number, y: number, z: number,
+  hx: number, hy: number, hz: number,
+  others: GarageShape[],
+  threshold = 6,
+): { x: number; y: number; z: number } {
+  let bx = x, by = y, bz = z
+  let bestX = threshold, bestZ = threshold, bestY = threshold
+  // Track the shape that won the Y-stack snap so we can corner-align XZ to it.
+  let stackWinner: { sh: GarageShape; ohx: number; ohz: number } | null = null
+  let stackWinnerScore = threshold
+
+  for (const sh of others) {
+    if (sh.id === shapeId) continue
+    const { hx: ohx, hy: ohy, hz: ohz } = shapeHalfExtents(sh)
+
+    const zOverlap = Math.abs(z - sh.z) < hz + ohz + threshold
+    const xOverlap = Math.abs(x - sh.x) < hx + ohx + threshold
+
+    // X-axis edge snap — requires Z overlap
+    if (zOverlap) {
+      const dLR = Math.abs((x - hx) - (sh.x + ohx))
+      if (dLR < bestX) { bestX = dLR; bx = sh.x + ohx + hx }
+      const dRL = Math.abs((x + hx) - (sh.x - ohx))
+      if (dRL < bestX) { bestX = dRL; bx = sh.x - ohx - hx }
+      // Same-edge align (top-view X edges flush)
+      const dSameL = Math.abs((x - hx) - (sh.x - ohx))
+      if (dSameL < bestX) { bestX = dSameL; bx = sh.x - ohx + hx }
+      const dSameR = Math.abs((x + hx) - (sh.x + ohx))
+      if (dSameR < bestX) { bestX = dSameR; bx = sh.x + ohx - hx }
+    }
+    // Z-axis edge snap — requires X overlap
+    if (xOverlap) {
+      const dFB = Math.abs((z - hz) - (sh.z + ohz))
+      if (dFB < bestZ) { bestZ = dFB; bz = sh.z + ohz + hz }
+      const dBF = Math.abs((z + hz) - (sh.z - ohz))
+      if (dBF < bestZ) { bestZ = dBF; bz = sh.z - ohz - hz }
+      const dSameF = Math.abs((z - hz) - (sh.z - ohz))
+      if (dSameF < bestZ) { bestZ = dSameF; bz = sh.z - ohz + hz }
+      const dSameB = Math.abs((z + hz) - (sh.z + ohz))
+      if (dSameB < bestZ) { bestZ = dSameB; bz = sh.z + ohz - hz }
+    }
+    // Y-axis stack snap — requires X AND Z overlap
+    if (zOverlap && xOverlap) {
+      const dStackOn = Math.abs((y - hy) - (sh.y + ohy))
+      if (dStackOn < bestY) {
+        bestY = dStackOn; by = sh.y + ohy + hy
+        if (dStackOn < stackWinnerScore) { stackWinnerScore = dStackOn; stackWinner = { sh, ohx, ohz } }
+      }
+      const dHangBelow = Math.abs((y + hy) - (sh.y - ohy))
+      if (dHangBelow < bestY) {
+        bestY = dHangBelow; by = sh.y - ohy - hy
+        if (dHangBelow < stackWinnerScore) { stackWinnerScore = dHangBelow; stackWinner = { sh, ohx, ohz } }
+      }
+    }
+  }
+
+  // If a Y-stack snap won, also align horizontal corners to the supporter so
+  // the stacked shape's footprint lines up with an edge of the shape below.
+  // Pick whichever X-edge pairing (same-side or opposite-side) is closer, same
+  // for Z. Within a slightly more generous window so corners click into place.
+  if (stackWinner) {
+    const { sh: s, ohx, ohz } = stackWinner
+    const CORNER_WIN = Math.max(threshold, 10)
+    const xCandidates = [
+      s.x + ohx - hx,   // our +X edge flush with their +X edge
+      s.x + ohx + hx,   // our -X edge flush with their +X edge (side-by-side)
+      s.x - ohx + hx,   // our -X edge flush with their -X edge
+      s.x - ohx - hx,   // our +X edge flush with their -X edge (side-by-side)
+    ]
+    let bxBest = Math.abs(bx - x) < CORNER_WIN ? Math.abs(bx - x) : CORNER_WIN
+    for (const cand of xCandidates) {
+      const d = Math.abs(cand - x)
+      if (d < bxBest) { bxBest = d; bx = cand }
+    }
+    const zCandidates = [
+      s.z + ohz - hz,
+      s.z + ohz + hz,
+      s.z - ohz + hz,
+      s.z - ohz - hz,
+    ]
+    let bzBest = Math.abs(bz - z) < CORNER_WIN ? Math.abs(bz - z) : CORNER_WIN
+    for (const cand of zCandidates) {
+      const d = Math.abs(cand - z)
+      if (d < bzBest) { bzBest = d; bz = cand }
+    }
+  }
+
+  return { x: bx, y: by, z: bz }
 }
 
 // ─── Cabinet-to-cabinet snapping ─────────────────────────────────────────────
@@ -1853,6 +1981,24 @@ const PUCK_TRIM_R  = 4.6 / 12 / 2   // slightly larger trim ring
  *  the parent group so its world matrix updates with the group transform —
  *  this prevents the spotlight from aiming at world origin (which causes the
  *  visible inward streak from corner pucks). */
+function LedBarSpot({ bottomY, lenFt, depthFt, light, lightMultiplier, exposure }: {
+  bottomY: number; lenFt: number; depthFt: number; light: CeilingLight
+  lightMultiplier: number; exposure: number; bounceIntensity: number; bounceDistance: number
+}) {
+  // Pure elongated emission: rectAreaLight matches the bar footprint and emits
+  // downward. No spotlight — the area light is the light, shape and all.
+  return (
+    <rectAreaLight
+      position={[0, bottomY - 0.01, 0]}
+      rotation={[-Math.PI / 2, 0, 0]}
+      width={lenFt}
+      height={depthFt}
+      intensity={light.intensity * lightMultiplier * exposure}
+      color={light.color}
+    />
+  )
+}
+
 function PuckSpotlight({ bottomY, light, lightMultiplier, bounceDistance, effectiveQuality }: {
   bottomY: number; light: CeilingLight; lightMultiplier: number;
   bounceDistance: number; effectiveQuality: 'high' | 'medium' | 'low'
@@ -1893,12 +2039,13 @@ function PuckSpotlight({ bottomY, light, lightMultiplier, bounceDistance, effect
   )
 }
 
-function CeilingLightMesh({ light, chFt, selected, wireframe, onClick, onPointerDown }: {
+function CeilingLightMesh({ light, chFt, selected, wireframe, castsShadow, onClick, onPointerDown }: {
   light: CeilingLight; chFt: number; selected: boolean; wireframe: boolean
+  castsShadow: boolean
   onClick: () => void
   onPointerDown: (e: ThreeEvent<PointerEvent>) => void
 }) {
-  const { bounceIntensity, bounceDistance, lightMultiplier, qualityPreset, isExporting } = useGarageStore()
+  const { bounceIntensity, bounceDistance, lightMultiplier, qualityPreset, isExporting, exposure } = useGarageStore()
   const effectiveQuality = isExporting ? 'high' : qualityPreset
   const kind = light.kind ?? 'bar'
   const frameColor  = wireframe ? (selected ? '#ffcc00' : '#ff9944') : '#d0d0cc'
@@ -1933,6 +2080,47 @@ function CeilingLightMesh({ light, chFt, selected, wireframe, onClick, onPointer
         {light.enabled && !wireframe && <PuckSpotlight bottomY={bottomY}
           light={light} lightMultiplier={lightMultiplier}
           bounceDistance={bounceDistance} effectiveQuality={effectiveQuality} />}
+      </group>
+    )
+  }
+
+  if (kind === 'ledbar') {
+    // Under-cabinet LED bar: 1/4" thick (Y), 1" deep (across cabinet depth),
+    // length adjustable. Mounted at light.y (cabinet bottom) — not ceiling.
+    const lengthIn = light.lengthIn ?? 18
+    const mountYFt = light.y ?? (chFt - 1)
+    const thickFt = FT(0.25)
+    const depthFt = FT(1)
+    const lenFt   = FT(lengthIn)
+    const bottomY = -thickFt / 2
+    const yCenter = mountYFt - thickFt / 2 - 0.005
+    return (
+      <group
+        position={[light.x, yCenter, light.z]}
+        rotation={[0, light.rotY, 0]}
+        onClick={(e) => { e.stopPropagation(); onClick() }}
+        onPointerDown={onPointerDown}
+      >
+        {/* Fixture body — thin aluminum strip under cabinet */}
+        <mesh>
+          <boxGeometry args={[lenFt, thickFt, depthFt]} />
+          <meshLambertMaterial wireframe={wireframe} color={frameColor}
+            emissive={selected ? '#334466' : '#000000'} emissiveIntensity={selected ? 0.3 : 0} />
+        </mesh>
+        {/* Emissive diffuser strip — flat white, not affected by scene lighting */}
+        {!wireframe && (
+          <mesh position={[0, bottomY - 0.002, 0]}>
+            <boxGeometry args={[lenFt * 0.98, 0.004, depthFt * 0.8]} />
+            <meshBasicMaterial color={light.enabled ? '#ffffff' : '#555555'} toneMapped={false} />
+          </mesh>
+        )}
+        {/* Downward rectAreaLight + narrow spot (target must be a real Object3D
+           in the scene graph or the spotLight aims at world origin). */}
+        {light.enabled && !wireframe && (
+          <LedBarSpot bottomY={bottomY} lenFt={lenFt} depthFt={depthFt} light={light}
+            lightMultiplier={lightMultiplier} exposure={exposure}
+            bounceIntensity={bounceIntensity} bounceDistance={bounceDistance} />
+        )}
       </group>
     )
   }
@@ -1977,20 +2165,22 @@ function CeilingLightMesh({ light, chFt, selected, wireframe, onClick, onPointer
             rotation={[-Math.PI / 2, 0, 0]}
             width={innerL}
             height={innerW}
-            intensity={light.intensity * lightMultiplier}
+            intensity={light.intensity * lightMultiplier * exposure}
             color={light.color}
           />
-          {/* Omni-directional bounce fill — simulates light scattering off the floor
-             back onto walls. Positioned well below the fixture so it doesn't
-             illuminate the ceiling, and uses low intensity relative to the main
-             rect area light. */}
-          <pointLight
-            position={[0, bottomY - 1.5, 0]}
-            intensity={light.intensity * bounceIntensity}
+          {/* Downward spotlight as shadow caster — cheaper than pointLight
+             (1 shadow map vs 6 cubemap faces) and casts realistic downward
+             shadows from cabinets/racks. Wide angle covers full floor area. */}
+          <spotLight
+            position={[0, bottomY - 0.5, 0]}
+            target-position={[0, bottomY - 10, 0]}
+            intensity={light.intensity * bounceIntensity * exposure}
             color={light.color}
+            angle={Math.PI / 2.5}
+            penumbra={0.6}
             decay={2}
             distance={bounceDistance}
-            castShadow={effectiveQuality !== 'low'}
+            castShadow={castsShadow}
             shadow-mapSize-width={effectiveQuality === 'high' ? 2048 : 1024}
             shadow-mapSize-height={effectiveQuality === 'high' ? 2048 : 1024}
             shadow-bias={-0.0008}
@@ -2065,6 +2255,12 @@ function BaseboardChain({ chain, floorSteps, cx, cz, baseTex, wireframe, side = 
   const useFlake = !wireframe && chain.some(e => e.wall.baseboardTexture) && isBaseTexValid;
   // Fallback color if both color and texture are missing
   const fallbackColor = '#ff00ff' // bright magenta for debug
+  // Slight self-illumination so the exterior-side baseboard (which typically
+  // has no lights facing it) doesn't render visibly darker than the interior
+  // copy of the same baseboard. Keeps shading consistent across both sides
+  // without washing out the interior in well-lit scenes.
+  const emissiveColor = useFlake ? '#ffffff' : (bbColor || fallbackColor)
+  const emissiveIntensity = wireframe ? 0 : 0.18
   return (
     <mesh geometry={geo} frustumCulled={false}>
       <meshStandardMaterial
@@ -2073,6 +2269,8 @@ function BaseboardChain({ chain, floorSteps, cx, cz, baseTex, wireframe, side = 
         map={useFlake ? baseTex : null}
         wireframe={wireframe}
         roughness={0.85}
+        emissive={emissiveColor}
+        emissiveIntensity={emissiveIntensity}
         side={THREE.DoubleSide}
         depthWrite
         polygonOffset polygonOffsetFactor={-1} polygonOffsetUnits={-1}
@@ -2197,25 +2395,278 @@ function ImportedWallTexture({ assetId, widthFt, heightFt, selected }: {
 }) {
   const asset = useGarageStore(s => s.importedAssets.find(a => a.id === assetId))
   if (!asset) return <meshLambertMaterial color="#e0dedd" />
-  return <ImportedTextureMaterial dataUrl={asset.data} widthFt={widthFt} heightFt={heightFt} selected={selected} />
+  return <ImportedTextureMaterial
+    dataUrl={asset.data}
+    normalUrl={asset.normalMap} roughnessUrl={asset.roughnessMap}
+    metalnessUrl={asset.metalnessMap} aoUrl={asset.aoMap}
+    widthFt={widthFt} heightFt={heightFt} selected={selected}
+  />
+}
+
+/** Generic material for a shape — accepts a wall textureId, 'floor:<id>',
+ *  'imported:<id>', or neither (solid color fallback).
+ *
+ *  Tiling: uses the two largest dimensions of the shape so the texture doesn't
+ *  stretch when the shape is resized. `uFt` spans the wrapping axis (e.g. the
+ *  larger of width/depth for a box), `vFt` spans the vertical/other axis.
+ */
+function TexturedShapeMaterial({ textureId, color, uFt, vFt, scale = 1, wireframe, selected }: {
+  textureId?: string; color: string; uFt: number; vFt: number; scale?: number; wireframe: boolean; selected: boolean
+}) {
+  // Route: no textureId → solid color
+  if (!textureId) {
+    return (
+      <meshStandardMaterial
+        wireframe={wireframe}
+        color={selected ? '#d0e8ff' : color}
+        roughness={0.7}
+        emissive={selected ? '#4488bb' : '#000000'}
+        emissiveIntensity={selected ? 0.25 : 0}
+      />
+    )
+  }
+  if (textureId.startsWith('floor:')) {
+    const floorId = textureId.slice('floor:'.length)
+    return <FloorIdTextureMaterial id={floorId} uFt={uFt} vFt={vFt} scale={scale} selected={selected} wireframe={wireframe} />
+  }
+  if (textureId.startsWith('imported:')) {
+    const assetId = textureId.slice('imported:'.length)
+    return <ImportedShapeTexture assetId={assetId} uFt={uFt} vFt={vFt} scale={scale} selected={selected} />
+  }
+  // Wall catalog
+  const entry = getTextureById(textureId)
+  if (!entry) {
+    return (
+      <meshStandardMaterial color={selected ? '#d0e8ff' : color} roughness={0.7} wireframe={wireframe} />
+    )
+  }
+  return <WallIdTextureMaterial textureId={textureId} uFt={uFt} vFt={vFt} scale={scale} selected={selected} wireframe={wireframe} />
+}
+
+/** Wall-catalog texture sized for a shape (normal + roughness when available).
+ *  UV repeat scales independently per axis (uFt×vFt in feet) so the pattern
+ *  doesn't stretch when the shape is resized along one dimension.
+ */
+function WallIdTextureMaterial({ textureId, uFt, vFt, scale = 1, selected, wireframe }: {
+  textureId: string; uFt: number; vFt: number; scale?: number; selected: boolean; wireframe: boolean
+}) {
+  const entry = getTextureById(textureId)!
+  const basePath = `${import.meta.env.BASE_URL}${texturePath(entry.category, entry.file)}`
+  const normalPath = entry.normalFile
+    ? `${import.meta.env.BASE_URL}${texturePath(entry.category, entry.normalFile)}`
+    : undefined
+  const roughPath = entry.roughFile
+    ? `${import.meta.env.BASE_URL}${texturePath(entry.category, entry.roughFile)}`
+    : undefined
+  const paths = [basePath, normalPath, roughPath].filter(Boolean) as string[]
+  const textures = useTexture(paths)
+  const srcDiffuse = Array.isArray(textures) ? textures[0] : textures
+  const srcNormal = Array.isArray(textures) && normalPath ? textures[1] : undefined
+  const srcRough = Array.isArray(textures) && roughPath ? textures[normalPath ? 2 : 1] : undefined
+  const diffuse = useClonedTexture(srcDiffuse)
+  const normal = useClonedTexture(srcNormal)
+  const rough = useClonedTexture(srcRough)
+  useMemo(() => {
+    const repU = Math.max(0.05, (uFt / 4) * scale)
+    const repV = Math.max(0.05, (vFt / 4) * scale)
+    for (const t of [diffuse, normal, rough]) {
+      if (!t) continue
+      t.wrapS = t.wrapT = THREE.RepeatWrapping
+      t.repeat.set(repU, repV)
+      t.needsUpdate = true
+    }
+  }, [diffuse, normal, rough, uFt, vFt, scale])
+  return (
+    <meshStandardMaterial
+      wireframe={wireframe}
+      map={diffuse || null}
+      normalMap={normal || null}
+      roughnessMap={rough || null}
+      roughness={rough ? 1.0 : 0.7}
+      color={selected ? '#d0e8ff' : '#ffffff'}
+    />
+  )
+}
+
+/** Floor-catalog texture sized for a shape. */
+function FloorIdTextureMaterial({ id, uFt, vFt, scale = 1, selected, wireframe }: {
+  id: string; uFt: number; vFt: number; scale?: number; selected: boolean; wireframe: boolean
+}) {
+  const path = `${import.meta.env.BASE_URL}${flooringTexturePathById(id)}`
+  const src = useTexture(path)
+  const tex = useClonedTexture(src as THREE.Texture)
+  useMemo(() => {
+    if (!tex) return
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+    const repU = Math.max(0.05, (uFt / 2) * scale)
+    const repV = Math.max(0.05, (vFt / 2) * scale)
+    tex.repeat.set(repU, repV)
+    tex.needsUpdate = true
+  }, [tex, uFt, vFt, scale])
+  return (
+    <meshStandardMaterial
+      wireframe={wireframe}
+      map={tex || null}
+      roughness={0.8}
+      color={selected ? '#d0e8ff' : '#ffffff'}
+    />
+  )
+}
+
+/** Imported asset texture applied to a shape. */
+function ImportedShapeTexture({ assetId, uFt, vFt, scale = 1, selected }: {
+  assetId: string; uFt: number; vFt: number; scale?: number; selected: boolean
+}) {
+  const asset = useGarageStore(s => s.importedAssets.find(a => a.id === assetId))
+  if (!asset) return <meshLambertMaterial color="#e0dedd" />
+  return <ImportedTextureMaterial
+    dataUrl={asset.data}
+    normalUrl={asset.normalMap} roughnessUrl={asset.roughnessMap}
+    metalnessUrl={asset.metalnessMap} aoUrl={asset.aoMap}
+    widthFt={uFt * scale} heightFt={vFt * scale} selected={selected}
+  />
+}
+
+/** Imported floor material — loads sidecar PBR maps (normal/roughness/metal/AO)
+ *  only when the asset actually has them, avoiding unconditional useTexture
+ *  hooks on data URLs that don't exist. Sub-component boundary keeps the
+ *  Suspense fallout local to the floor mesh, not the whole scene. */
+function ImportedFloorMaterial({ asset, colorTex, floorTextureScale, maxAnisotropy, effectiveQuality, floorReflection }: {
+  asset: { data: string; normalMap?: string; roughnessMap?: string; metalnessMap?: string; aoMap?: string }
+  colorTex: THREE.Texture
+  floorTextureScale: number
+  maxAnisotropy: number
+  effectiveQuality: 'low' | 'medium' | 'high'
+  floorReflection: number
+}) {
+  // useTexture must run unconditionally. Use a 1x1 transparent PNG as a
+  // fallback for any missing map so hook shape stays stable, then gate the
+  // resulting texture on whether the asset actually has that map.
+  const EMPTY_PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
+  const normalSrcRaw    = useTexture(asset.normalMap    || EMPTY_PIXEL)
+  const roughnessSrcRaw = useTexture(asset.roughnessMap || EMPTY_PIXEL)
+  const metalnessSrcRaw = useTexture(asset.metalnessMap || EMPTY_PIXEL)
+  const aoSrcRaw        = useTexture(asset.aoMap        || EMPTY_PIXEL)
+  const normalSrc    = asset.normalMap    ? normalSrcRaw    : undefined
+  const roughnessSrc = asset.roughnessMap ? roughnessSrcRaw : undefined
+  const aoSrc        = asset.aoMap        ? aoSrcRaw        : undefined
+  void metalnessSrcRaw  // metalness map intentionally ignored; reflections come from MeshReflectorMaterial
+
+  const normal    = useClonedTexture(normalSrc)
+  const roughness = useClonedTexture(roughnessSrc)
+  const ao        = useClonedTexture(aoSrc)
+
+  useMemo(() => {
+    const ftPerRepeat = Math.max(0.25, floorTextureScale / 2)
+    const rep = 1 / ftPerRepeat
+    for (const t of [normal, roughness, ao]) {
+      if (!t) continue
+      t.wrapS = t.wrapT = THREE.RepeatWrapping
+      t.colorSpace = THREE.NoColorSpace
+      t.anisotropy = maxAnisotropy
+      t.minFilter = THREE.LinearMipmapLinearFilter
+      t.magFilter = THREE.LinearFilter
+      t.generateMipmaps = true
+      t.repeat.set(rep, rep)
+      t.needsUpdate = true
+    }
+  }, [normal, roughness, ao, floorTextureScale, maxAnisotropy])
+
+  // Low quality: plain PBR, no live reflections.
+  if (effectiveQuality === 'low') {
+    return (
+      <meshStandardMaterial
+        side={THREE.DoubleSide}
+        map={colorTex}
+        normalMap={normal || null}
+        roughnessMap={roughness || null}
+        aoMap={ao || null}
+        roughness={roughness ? 1.0 : 0.55}
+        metalness={0.0}
+        envMapIntensity={0}
+        color='#ffffff'
+      />
+    )
+  }
+  // Medium/high: route through MeshReflectorMaterial so imported PBR floors
+  // get true live reflections (like the catalog marble). We intentionally
+  // drop metalnessMap, normalMap, AND roughnessMap so the only reflection is
+  // the real planar one — no per-pixel highlights/streaks from the texture's
+  // baked-in ridges or polished/matte variation.
+  return (
+    <MeshReflectorMaterial
+      side={THREE.DoubleSide}
+      map={colorTex}
+      aoMap={ao || null}
+      color='#ffffff'
+      roughness={0.55}
+      metalness={0.0}
+      blur={effectiveQuality === 'high' ? [400, 200] : [200, 100]}
+      resolution={effectiveQuality === 'high' ? 2048 : 512}
+      mixBlur={0.5}
+      mixStrength={floorReflection * 2.5}
+      mixContrast={1.0}
+      depthScale={0.8}
+      minDepthThreshold={0.6}
+      maxDepthThreshold={1.0}
+      mirror={1}
+      envMapIntensity={0}
+    />
+  )
 }
 
 /** Material for an imported texture (data URL) applied to a wall or floor */
-function ImportedTextureMaterial({ dataUrl, widthFt, heightFt, selected }: {
+function ImportedTextureMaterial({
+  dataUrl, widthFt, heightFt, selected,
+  normalUrl, roughnessUrl, metalnessUrl, aoUrl,
+}: {
   dataUrl: string; widthFt: number; heightFt: number; selected: boolean
+  normalUrl?: string; roughnessUrl?: string; metalnessUrl?: string; aoUrl?: string
 }) {
-  const tex = useTexture(dataUrl)
-  const cloned = useClonedTexture(tex)
+  // Load color + sidecar PBR maps (normal/rough/metal/AO). useTexture must run
+  // unconditionally so we supply a 1x1 transparent PNG for missing maps, then
+  // gate the resulting texture on whether the asset actually has that map.
+  const EMPTY_PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
+  const colorTex     = useTexture(dataUrl)
+  const normalRaw    = useTexture(normalUrl    || EMPTY_PIXEL)
+  const roughnessRaw = useTexture(roughnessUrl || EMPTY_PIXEL)
+  const metalnessRaw = useTexture(metalnessUrl || EMPTY_PIXEL)
+  const aoRaw        = useTexture(aoUrl        || EMPTY_PIXEL)
+
+  const color     = useClonedTexture(colorTex)
+  const normal    = useClonedTexture(normalUrl    ? normalRaw    : undefined)
+  const roughness = useClonedTexture(roughnessUrl ? roughnessRaw : undefined)
+  const metalness = useClonedTexture(metalnessUrl ? metalnessRaw : undefined)
+  const ao        = useClonedTexture(aoUrl        ? aoRaw        : undefined)
+
   useMemo(() => {
-    if (!cloned) return
-    cloned.wrapS = cloned.wrapT = THREE.RepeatWrapping
-    cloned.repeat.set(widthFt / 4, heightFt / 4)
-  }, [cloned, widthFt, heightFt])
+    const ftPerRepeat = 4
+    const repX = widthFt / ftPerRepeat
+    const repY = heightFt / ftPerRepeat
+    if (color) {
+      color.wrapS = color.wrapT = THREE.RepeatWrapping
+      color.repeat.set(repX, repY)
+      color.colorSpace = THREE.SRGBColorSpace
+      color.needsUpdate = true
+    }
+    for (const t of [normal, roughness, metalness, ao]) {
+      if (!t) continue
+      t.wrapS = t.wrapT = THREE.RepeatWrapping
+      t.colorSpace = THREE.NoColorSpace
+      t.repeat.set(repX, repY)
+      t.needsUpdate = true
+    }
+  }, [color, normal, roughness, metalness, ao, widthFt, heightFt])
 
   return (
     <meshStandardMaterial
-      map={cloned || null}
-      roughness={0.7}
+      map={color || null}
+      normalMap={normal || null}
+      roughnessMap={roughness || null}
+      metalnessMap={metalness || null}
+      aoMap={ao || null}
+      roughness={roughness ? 1.0 : 0.7}
+      metalness={metalness ? 1.0 : 0.0}
       color={selected ? '#d0e8ff' : '#ffffff'}
     />
   )
@@ -2611,6 +3062,8 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
       const n0 = faceAt(seg.x0, 'n'), n1 = faceAt(seg.x1, 'n')
       const segH = FT(seg.y1 - seg.y0)
       const segY = FT(seg.y0)
+      const segWFt = FT(seg.x1 - seg.x0)
+      const segHFt = segH
 
       // Shape is in XY plane, extruded along +Z.
       // After rotateX(-PI/2): shapeY becomes -worldZ.
@@ -2623,23 +3076,54 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
       shape.closePath()
 
       const geo = new THREE.ExtrudeGeometry(shape, { depth: segH, bevelEnabled: false })
+
+      // Rewrite UVs BEFORE rotation. Map UVs so U = along-wall fraction (0..1
+      // across segment width), V = height fraction (0..1 across segment height).
+      // The material multiplies by widthFt/heightFt in `texture.repeat` to get
+      // ftPerRepeat tiling — same scaling the box fallback relied on.
+      const pos = geo.attributes.position as THREE.BufferAttribute
+      const uvs = new Float32Array(pos.count * 2)
+      const aux = wall.x2 - wall.x1, auz = wall.z2 - wall.z1
+      const alen = Math.hypot(aux, auz) || 1
+      const uxn = aux / alen, uzn = auz / alen
+      const startXIn = wall.x1 + uxn * seg.x0
+      const segLenIn = seg.x1 - seg.x0
+      const segHIn = seg.y1 - seg.y0
+      for (let i = 0; i < pos.count; i++) {
+        // Pre-rotation: shape.x = FT(worldX_in), shape.y = -FT(worldZ_in), z = heightFt
+        const sx = pos.getX(i), sy = pos.getY(i), sz = pos.getZ(i)
+        const worldXIn = sx / FT(1)
+        const worldZIn = -sy / FT(1)
+        const alongIn = (worldXIn - startXIn) * uxn + (worldZIn - (wall.z1 + uzn * seg.x0)) * uzn
+        const heightIn = sz / FT(1)
+        uvs[i * 2]     = segLenIn > 0 ? alongIn / segLenIn : 0
+        uvs[i * 2 + 1] = segHIn > 0 ? heightIn / segHIn : 0
+      }
+      geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
       geo.rotateX(-Math.PI / 2)
       geo.translate(0, segY, 0)
-      return geo
+
+      return { geo, segWFt, segHFt }
     })
   }, [outline, blueprint, segs, lengthIn, wall.x1, wall.z1, wall.x2, wall.z2, wall.thickness])
 
   return (
     <>
     {/* Mitered segment bodies — world-space extruded shapes (no transform group) */}
-    {segGeos && segGeos.map((geo, i) => (
+    {segGeos && segGeos.map(({ geo, segWFt, segHFt }, i) => (
       <mesh key={`ms-${i}`} geometry={geo} receiveShadow
         onClick={(e) => { e.stopPropagation(); onClick() }}
         onPointerDown={onPointerDown}
       >
         {blueprint
           ? <meshBasicMaterial color={color} />
-          : <meshLambertMaterial wireframe={wireframe} color={color} />
+          : hasWallTexture
+            ? <Suspense fallback={<meshLambertMaterial color={color} />}>
+                {isImportedWallTex
+                  ? <ImportedWallTexture assetId={wall.wallTextureId!.replace('imported:', '')} widthFt={segWFt} heightFt={segHFt} selected={selected} />
+                  : <TexturedWallMaterial textureId={wall.wallTextureId!} widthFt={segWFt} heightFt={segHFt} selected={selected} />}
+              </Suspense>
+            : <meshLambertMaterial wireframe={wireframe} color={color} />
         }
       </mesh>
     ))}
@@ -2657,11 +3141,13 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
             onPointerDown={onPointerDown}
           >
             <boxGeometry args={[segW, segH, thickFt]} />
-            {hasWallTexture
-              ? isImportedWallTex
-                ? <ImportedWallTexture assetId={wall.wallTextureId!.replace('imported:', '')} widthFt={segW} heightFt={segH} selected={selected} />
-                : <TexturedWallMaterial textureId={wall.wallTextureId!} widthFt={segW} heightFt={segH} selected={selected} />
-              : blueprint
+            {hasWallTexture ? (
+              <Suspense fallback={<meshLambertMaterial color={color} />}>
+                {isImportedWallTex
+                  ? <ImportedWallTexture assetId={wall.wallTextureId!.replace('imported:', '')} widthFt={segW} heightFt={segH} selected={selected} />
+                  : <TexturedWallMaterial textureId={wall.wallTextureId!} widthFt={segW} heightFt={segH} selected={selected} />}
+              </Suspense>
+            ) : blueprint
                 ? <meshBasicMaterial color={color} />
                 : <meshLambertMaterial wireframe={wireframe} color={color} />
             }
@@ -3715,7 +4201,7 @@ export default function GarageShell() {
     countertops, selectedCountertopId, selectCountertop, updateCountertop,
     sceneLights, updateSceneLight,
     ceilingLights, selectedCeilingLightId, selectCeilingLight, updateCeilingLight,
-    viewMode, selectedWallId, selectWall, selectShape,
+    viewMode, selectedWallId, selectWall, selectShape, selectedShapeId,
     updateWall, updateShape, setFloorSelected, setIsDraggingWall, beginDrag, endDrag,
     updateSlatwallPanel, selectSlatwallPanel,
     items, selectedItemId, selectItem, updateItem,
@@ -3863,6 +4349,7 @@ export default function GarageShell() {
   const countertopDragRef   = useRef<CountertopDragState | null>(null)
   const lightDragRef        = useRef<LightDragState | null>(null)
   const ceilingLightDragRef = useRef<CeilingLightDragState | null>(null)
+  const ledbarResizeRef     = useRef<{ lightId: string; side: 'left' | 'right'; ux: number; uz: number; fixedX: number; fixedZ: number } | null>(null)
   const itemDragRef         = useRef<{ itemId: string; startXFt: number; startZFt: number; startHitX: number; startHitZ: number } | null>(null)
   const rackDragRef         = useRef<{ rackId: string; startXIn: number; startZIn: number; startHitX: number; startHitZ: number } | null>(null)
   const floorStepDragRef    = useRef<FloorStepDragState | null>(null)
@@ -3877,6 +4364,11 @@ export default function GarageShell() {
 
   // Modifier key tracking — Shift disables snap, held state tracked via refs for perf
   const modKeysRef = useRef({ shift: false, ctrl: false })
+  // Global snapping toggle (from store) mirrored into a ref for cheap reads
+  // inside pointer-move handlers without triggering re-renders.
+  const snappingDisabledRef = useRef(false)
+  const snappingEnabled = useGarageStore(s => s.snappingEnabled)
+  useEffect(() => { snappingDisabledRef.current = !snappingEnabled }, [snappingEnabled])
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Shift') modKeysRef.current.shift = true
@@ -3922,6 +4414,64 @@ export default function GarageShell() {
     const ceilPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), chFt)
     const target = new THREE.Vector3()
     return ray.ray.intersectPlane(ceilPlane, target) ? target : null
+  }, [camera, gl, ray])
+
+  // Raycast against all wall face planes (both sides of each wall), bounded by
+  // wall segment length + wall height range. Returns world-space hit in FEET
+  // plus wall reference, which face side was hit, and along-axis param (inches).
+  const wallFaceHit = useCallback((
+    clientX: number, clientY: number, walls: GarageWall[],
+  ): {
+    point: THREE.Vector3    // world feet
+    wall: GarageWall
+    side: 1 | -1             // which face normal direction was hit
+    along: number            // inches from wall.x1/z1 along wall axis
+    yIn: number              // height in inches (world Y)
+    dist: number             // ray distance from camera (feet) — for surface-closer-than-floor test
+  } | null => {
+    const rect = gl.domElement.getBoundingClientRect()
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width)  *  2 - 1,
+      ((clientY - rect.top)  / rect.height) * -2 + 1,
+    )
+    ray.setFromCamera(ndc, camera)
+
+    let best: { point: THREE.Vector3; wall: GarageWall; side: 1 | -1; along: number; yIn: number; dist: number } | null = null
+    const tmpPlane = new THREE.Plane()
+    const tmpPt = new THREE.Vector3()
+    const tmpNormal = new THREE.Vector3()
+
+    for (const wall of walls) {
+      const dx = wall.x2 - wall.x1, dz = wall.z2 - wall.z1
+      const lenIn = Math.hypot(dx, dz)
+      if (lenIn < 1) continue
+      const ux = dx / lenIn, uz = dz / lenIn           // unit along wall
+      const nxs = -uz, nzs = ux                        // wall normal (store/world XZ share sign)
+      // Each wall has two faces (one per side). Test both.
+      for (const side of [1, -1] as const) {
+        const faceX = (wall.x1 + wall.x2) / 2 + side * (wall.thickness / 2) * nxs
+        const faceZ = (wall.z1 + wall.z2) / 2 + side * (wall.thickness / 2) * nzs
+        tmpNormal.set(side * nxs, 0, side * nzs).normalize()
+        tmpPlane.setFromNormalAndCoplanarPoint(tmpNormal, new THREE.Vector3(FT(faceX), 0, FT(faceZ)))
+        if (!ray.ray.intersectPlane(tmpPlane, tmpPt)) continue
+
+        const hitXIn = tmpPt.x * 12
+        const hitZIn = tmpPt.z * 12
+        const along = (hitXIn - wall.x1) * ux + (hitZIn - wall.z1) * uz
+        if (along < -2 || along > lenIn + 2) continue  // outside segment
+
+        const yIn = tmpPt.y * 12
+        const wallBottomIn = wall.yOffset
+        const wallTopIn = wall.yOffset + wall.height
+        if (yIn < wallBottomIn - 2 || yIn > wallTopIn + 2) continue  // outside height range
+
+        const dist = tmpPt.distanceTo(ray.ray.origin)
+        if (!best || dist < best.dist) {
+          best = { point: tmpPt.clone(), wall, side, along, yIn, dist }
+        }
+      }
+    }
+    return best
   }, [camera, gl, ray])
 
   // ── Start wall drag ──────────────────────────────────────────────────────
@@ -4397,11 +4947,59 @@ export default function GarageShell() {
         return
       }
 
-      // Ceiling light drag — ceiling plane, XZ only
+      // LED bar resize drag — drag an end handle to change length.
+      // Opposite end stays fixed. Works in feet throughout. lengthIn stored
+      // in inches (so the light store stays consistent with other inch fields).
+      // Snaps moving endpoint to nearby upper-cabinet edges within 3".
+      const lbr = ledbarResizeRef.current
+      if (lbr) {
+        const lgt = ceilingLightsRef.current.find(l => l.id === lbr.lightId)
+        const mountY = lgt?.y ?? 0
+        const hitLb = ceilingHit(e.clientX, e.clientY, mountY)
+        if (hitLb) {
+          // All in feet. fixedX/fixedZ were captured in feet at drag start.
+          const alongFixed  = lbr.fixedX * lbr.ux + lbr.fixedZ * lbr.uz
+          const alongCursor = hitLb.x * lbr.ux + hitLb.z * lbr.uz
+          let newLenFt = Math.abs(alongCursor - alongFixed)
+          // Snap moving endpoint to upper-cabinet edges within 3 inches.
+          const SNAP_FT = 3 / 12
+          for (const cab of cabinetsRef.current) {
+            if (cab.style !== 'upper') continue
+            const cux = Math.cos(cab.rotY), cuz = -Math.sin(cab.rotY)
+            if (Math.abs(cux * lbr.ux + cuz * lbr.uz) < 0.95) continue
+            // Cabinet coords are inches; convert to feet and project.
+            const cabAlongFt = (cab.x * lbr.ux + cab.z * lbr.uz) / 12
+            const halfCabFt = cab.w / 24
+            for (const edgeFt of [cabAlongFt - halfCabFt, cabAlongFt + halfCabFt]) {
+              const candLen = Math.abs(edgeFt - alongFixed)
+              if (Math.abs(candLen - newLenFt) < SNAP_FT) { newLenFt = candLen; break }
+            }
+          }
+          newLenFt = Math.max(3 / 12, newLenFt) // 3" minimum
+          const dir = Math.sign(alongCursor - alongFixed) || 1
+          const movingAlong = alongFixed + dir * newLenFt
+          const centerAlong = (alongFixed + movingAlong) / 2
+          const perpX = lbr.fixedX - alongFixed * lbr.ux
+          const perpZ = lbr.fixedZ - alongFixed * lbr.uz
+          const newX = perpX + centerAlong * lbr.ux
+          const newZ = perpZ + centerAlong * lbr.uz
+          updateCeilLtRef.current(lbr.lightId, {
+            lengthIn: Math.round(newLenFt * 12 * 4) / 4,  // quarter-inch precision
+            x: newX,
+            z: newZ,
+          } as any)
+        }
+        return
+      }
+
+      // Ceiling light drag — ceiling plane, XZ only. For ledbar fixtures
+      // mounted under cabinets, drag on the mount plane (light.y) instead.
       const cld = ceilingLightDragRef.current
       if (cld) {
         const chFt = FT(wallsRef.current.reduce((h, w) => Math.max(h, w.height), 108))
-        const hitCl = ceilingHit(e.clientX, e.clientY, chFt)
+        const lgt = ceilingLightsRef.current.find(l => l.id === cld.lightId)
+        const mountY = lgt?.kind === 'ledbar' && lgt.y !== undefined ? lgt.y : chFt
+        const hitCl = ceilingHit(e.clientX, e.clientY, mountY)
         if (hitCl) {
           const dx = hitCl.x - cld.startHitX, dz = hitCl.z - cld.startHitZ
           updateCeilLtRef.current(cld.lightId, {
@@ -4412,16 +5010,29 @@ export default function GarageShell() {
         return
       }
 
-      // Overhead rack drag — ceiling plane, XZ only (stored in inches)
+      // Overhead rack drag — ceiling plane, XZ only (stored in inches).
+      // Guard: if the cursor ray hits a wall closer than the ceiling, clamp
+      // the rack's XZ to the wall line so it can't tunnel through.
       const rd = rackDragRef.current
       if (rd) {
         const chFt = FT(wallsRef.current.reduce((h, w) => Math.max(h, w.height), 108))
         const hitR = ceilingHit(e.clientX, e.clientY, chFt)
         if (hitR) {
-          const dxIn = (hitR.x - rd.startHitX) * 12
-          const dzIn = (hitR.z - rd.startHitZ) * 12
-          const gridX = snapToGrid(rd.startXIn + dxIn)
-          const gridZ = snapToGrid(rd.startZIn + dzIn)
+          const wh = wallFaceHit(e.clientX, e.clientY, wallsRef.current)
+          const ceilDist = ray.ray.origin.distanceTo(new THREE.Vector3(hitR.x, hitR.y, hitR.z))
+          let baseX: number, baseZ: number
+          if (wh && wh.dist + 0.01 < ceilDist) {
+            // Use wall-face hit's XZ in inches — clamps rack against the wall line
+            baseX = wh.point.x * 12
+            baseZ = wh.point.z * 12
+          } else {
+            const dxIn = (hitR.x - rd.startHitX) * 12
+            const dzIn = (hitR.z - rd.startHitZ) * 12
+            baseX = rd.startXIn + dxIn
+            baseZ = rd.startZIn + dzIn
+          }
+          const gridX = snapToGrid(baseX)
+          const gridZ = snapToGrid(baseZ)
           const rack = racksRef.current.find(r => r.id === rd.rackId)
           if (rack) {
             const snap = snapRackToWalls(gridX, gridZ, rack.rackWidth, rack.rackLength, rack.rotY, wallsRef.current)
@@ -4491,7 +5102,7 @@ export default function GarageShell() {
               const dLR = Math.abs((ctCenterAlong - ctHalfW) - cabRightEdge)
               const dRL = Math.abs((ctCenterAlong + ctHalfW) - cabLeftEdge)
               const bestEdgeDist = Math.min(dLL, dRR, dLR, dRL)
-              if (bestEdgeDist < 12) {
+              if (bestEdgeDist < 2) {
                 let snappedAlong = ctCenterAlong
                 if (bestEdgeDist === dLL) snappedAlong = cabLeftEdge  + ctHalfW
                 else if (bestEdgeDist === dRR) snappedAlong = cabRightEdge - ctHalfW
@@ -4519,6 +5130,187 @@ export default function GarageShell() {
         return
       }
 
+      // Shape drag (wall-face path) — runs BEFORE the floor-hit gate so that
+      // a near-horizontal or upward-tilted cursor ray (which misses the floor)
+      // can still drop onto a wall. Without this, dragging a soffit up near the
+      // top of a wall would stall as soon as the ray went above the floor plane.
+      {
+        const sd = shapeDragRef.current
+        if (sd) {
+          const shape = shapesRef.current.find(s => s.id === sd.shapeId)
+          if (!shape) return
+          const wh = wallFaceHit(e.clientX, e.clientY, wallsRef.current)
+          if (wh) {
+            const floorHitMaybe = floorHit(e.clientX, e.clientY)
+            const floorDist = floorHitMaybe
+              ? ray.ray.origin.distanceTo(new THREE.Vector3(floorHitMaybe.x, 0, floorHitMaybe.z))
+              : Infinity
+            if (wh.dist + 0.01 < floorDist) {
+              const wall = wh.wall
+              const dx = wall.x2 - wall.x1, dz = wall.z2 - wall.z1
+              const lenIn = Math.hypot(dx, dz)
+              const ux = dx / lenIn, uz = dz / lenIn
+              const nxs = -uz, nzs = ux
+
+              const halfAlong = Math.abs(ux) * shape.w / 2 + Math.abs(uz) * shape.d / 2
+              const halfDepth = Math.abs(nxs) * shape.w / 2 + Math.abs(nzs) * shape.d / 2
+              let snappedAlong = snapToGrid(wh.along)
+              const { startInset, endInset } = wallEndInset(wall, wallsRef.current)
+              const startTarget = startInset + halfAlong
+              const endTarget   = lenIn - endInset - halfAlong
+              const CORNER_SNAP = 18
+              if (Math.abs(snappedAlong - startTarget) < CORNER_SNAP) snappedAlong = startTarget
+              else if (Math.abs(snappedAlong - endTarget) < CORNER_SNAP) snappedAlong = endTarget
+              const perp = wall.thickness / 2 + halfDepth
+              const nx_ = wall.x1 + snappedAlong * ux + wh.side * perp * nxs
+              const nz_ = wall.z1 + snappedAlong * uz + wh.side * perp * nzs
+
+              const halfH = shape.h / 2
+              const baseboard = wall.baseboard && wall.baseboardHeight > 0 ? wall.baseboardHeight : 0
+              const topY = wall.yOffset + wall.height
+              const candidates = [halfH, baseboard + halfH, topY - halfH]
+              let newY = wh.yIn
+              let bestDy = 8
+              for (const c of candidates) {
+                const d = Math.abs(wh.yIn - c)
+                if (d < bestDy) { bestDy = d; newY = c }
+              }
+              newY = Math.max(halfH, newY)
+              // Shape-to-shape edge snap: pulls this shape flush against any
+              // neighbouring shape's edges in X/Z and stacks vertically.
+              const snapDisabled = modKeysRef.current.shift || snappingDisabledRef.current
+              let finalX = nx_, finalY = newY, finalZ = nz_
+              if (!snapDisabled) {
+                const { hx, hy, hz } = shapeHalfExtents(shape)
+                const snapped = snapShapeToOthers(sd.shapeId, finalX, finalY, finalZ, hx, hy, hz, shapesRef.current)
+                finalX = snapped.x; finalY = Math.max(hy, snapped.y); finalZ = snapped.z
+              }
+              updateShapeRef.current(sd.shapeId, { x: finalX, z: finalZ, y: finalY })
+              return
+            }
+          }
+          // Wall path didn't take — fall through to floor-hit path below.
+        }
+      }
+
+      // Cabinet drag — wall-face path (same hoisting trick as shapes). Lets the
+      // cabinet mount flush onto a wall at the actual cursor Y, even when the
+      // ray angle skips the floor. Floor-based movement still runs below if the
+      // cursor ray favors the floor over any wall.
+      {
+        const cd = cabinetDragRef.current
+        if (cd) {
+          const cab = cabinetsRef.current.find(c => c.id === cd.cabinetId)
+          if (cab) {
+            const wh = wallFaceHit(e.clientX, e.clientY, wallsRef.current)
+            if (wh) {
+              const floorHitMaybe = floorHit(e.clientX, e.clientY)
+              const floorDist = floorHitMaybe
+                ? ray.ray.origin.distanceTo(new THREE.Vector3(floorHitMaybe.x, 0, floorHitMaybe.z))
+                : Infinity
+              if (wh.dist + 0.01 < floorDist) {
+                const skipSnap = modKeysRef.current.shift || snappingDisabledRef.current
+                const wall = wh.wall
+                const dx = wall.x2 - wall.x1, dz = wall.z2 - wall.z1
+                const lenIn = Math.hypot(dx, dz)
+                const ux = dx / lenIn, uz = dz / lenIn
+                const nxs = -uz, nzs = ux
+
+                // Orient cabinet so back is against wall — interior face by default,
+                // exterior side when hit from outside.
+                const baseRotY = -Math.atan2(dz, dx)
+                const isExterior = wh.side < 0
+                const rotY = isExterior ? baseRotY + Math.PI : baseRotY
+
+                // Flush XZ: cabinet center sits (thickness/2 + d/2) away from wall
+                // centerline on the hit side. Add 1" offset if slatwall is mounted
+                // on this wall's interior face (matches existing logic).
+                const slatwallOnWall = slatwallPanelsRef.current.some(p => p.wallId === wall.id)
+                const slatwallExtra = (!isExterior && slatwallOnWall) ? 1 : 0
+                const perp = wall.thickness / 2 + cab.d / 2 + slatwallExtra
+
+                let snappedAlong = skipSnap ? wh.along : snapToGrid(wh.along)
+                const halfW = cab.w / 2
+                // Corner snap — align cabinet's side edge flush with the
+                // INTERIOR face of any adjacent wall at this endpoint. Works
+                // regardless of which wall wins the mitered corner, because we
+                // always inset by the adjacent wall's thickness/2.
+                if (!skipSnap) {
+                  const CORNER_SNAP = 18
+                  const { startInset, endInset } = wallEndInset(wall, wallsRef.current)
+                  const startTarget = startInset + halfW
+                  const endTarget   = lenIn - endInset - halfW
+                  if (Math.abs(snappedAlong - startTarget) < CORNER_SNAP) snappedAlong = startTarget
+                  else if (Math.abs(snappedAlong - endTarget) < CORNER_SNAP) snappedAlong = endTarget
+                }
+                const cabCx = wall.x1 + snappedAlong * ux + wh.side * perp * nxs
+                const cabCz = wall.z1 + snappedAlong * uz + wh.side * perp * nzs
+
+                // Vertical: cursor Y is the middle of the cabinet; then snap
+                // bottom to floor/baseboard/step/wall-top AND neighboring
+                // cabinet tops (stacking) / bottoms (hanging under).
+                let cabY = Math.max(0, wh.yIn - cab.h / 2)
+                if (!skipSnap) {
+                  const bbH = wall.baseboard ? wall.baseboardHeight : 0
+                  const yTargets: number[] = [0]
+                  if (bbH > 0) yTargets.push(bbH)
+                  for (const step of floorStepsRef.current) {
+                    const overlaps = getStepWallOverlaps(wall, step, lenIn)
+                    for (const ov of overlaps) {
+                      if (snappedAlong + halfW > ov.u0 && snappedAlong - halfW < ov.u1) {
+                        yTargets.push(ov.stepHeight)
+                        if (bbH > 0) yTargets.push(ov.stepHeight + bbH)
+                      }
+                    }
+                  }
+                  const wallTop = wall.yOffset + wall.height
+                  yTargets.push(wallTop - cab.h)
+                  // Neighboring cabinet tops/bottoms (only those that overlap
+                  // this cabinet's X/Z footprint, so we don't snap to unrelated
+                  // cabinets across the garage).
+                  for (const other of cabinetsRef.current) {
+                    if (other.id === cab.id) continue
+                    const overlapX = Math.abs(cabCx - other.x) < (cab.w + other.w) / 2 + 6
+                    const overlapZ = Math.abs(cabCz - other.z) < (cab.d + other.d) / 2 + 6
+                    if (overlapX && overlapZ) {
+                      yTargets.push(other.y + other.h)       // our bottom on their top
+                      yTargets.push(other.y - cab.h)         // our top at their bottom
+                    }
+                  }
+                  const Y_SNAP = 8
+                  let bestDy = Y_SNAP
+                  let bestY = cabY
+                  for (const yt of yTargets) {
+                    const d = Math.abs(cabY - yt)
+                    if (d < bestDy) { bestDy = d; bestY = yt }
+                  }
+                  cabY = Math.max(0, bestY)
+                  cabY = snapToGrid(cabY)
+                }
+
+                // Apply cabinet-vs-cabinet edge snapping at this wall-mounted spot too
+                let finalX = cabCx, finalY = cabY, finalZ = cabCz
+                if (!skipSnap) {
+                  const snapped = snapCabinetToOthers(
+                    cab.id, cabCx, cabY, cabCz, rotY, cab.w, cab.h, cabinetsRef.current,
+                  )
+                  finalX = snapped.cx; finalY = snapped.cy; finalZ = snapped.cz
+                }
+
+                cabinetDragPosRef.current = { x: finalX, z: finalZ, y: finalY, rotY }
+                const group = cabinetGroupRefs.current[cd.cabinetId]
+                if (group) {
+                  group.position.set(FT(finalX), FT(finalY), FT(finalZ))
+                  group.rotation.y = rotY
+                }
+                return
+              }
+            }
+            // Wall path didn't take — fall through to floor-hit path below.
+          }
+        }
+      }
+
       const hit = floorHit(e.clientX, e.clientY)
       if (!hit) return
       if (Math.abs(hit.x) > 200 || Math.abs(hit.z) > 200) return
@@ -4531,7 +5323,7 @@ export default function GarageShell() {
       // Wall drag — absolute offset: endpoint = initial_pos + (current_mouse - drag_start_mouse)
       const wd = wallDragRef.current
       if (wd) {
-        const skipSnap = modKeysRef.current.shift
+        const skipSnap = modKeysRef.current.shift || snappingDisabledRef.current
         const dx = curXIn - wd.hitX, dz = curZIn - wd.hitZ
         if (wd.endpoint === 'start') {
           const rawX = S(wd.initX1 + dx), rawZ = S(wd.initZ1 + dz)
@@ -4577,26 +5369,33 @@ export default function GarageShell() {
         return
       }
 
-      // Shape drag
+      // Shape drag (floor-hit fallback) — wall-face path already handled above
       const sd = shapeDragRef.current
       if (sd) {
         const shape = shapesRef.current.find(s => s.id === sd.shapeId)
         if (!shape) return
-        const dx = clamp(curXIn - sd.startXIn), dz = clamp(curZIn - sd.startZIn)
-        const rawX = S(sd.rawX + dx), rawZ = S(sd.rawZ + dz)
-
-        // Wall-face snap (edge alignment + corner snap + baseboard height)
+        const snapDisabled = modKeysRef.current.shift || snappingDisabledRef.current
+        const dx_ = clamp(curXIn - sd.startXIn), dz_ = clamp(curZIn - sd.startZIn)
+        const rawX = S(sd.rawX + dx_), rawZ = S(sd.rawZ + dz_)
         const wallSnap = snapShapeToWalls(rawX, rawZ, shape.w, shape.d, wallsRef.current)
+        let newX: number, newZ: number, newY: number
         if (wallSnap) {
-          // Auto-set y: always for cylinders (columns), or if shape bottom is at/near floor
           const isFloorLevel = shape.type === 'cylinder' || (shape.y - shape.h / 2) <= 6
-          const newY = isFloorLevel ? wallSnap.baseY + shape.h / 2 : shape.y
-          updateShapeRef.current(sd.shapeId, { x: wallSnap.x, z: wallSnap.z, y: newY })
+          newY = isFloorLevel ? wallSnap.baseY + shape.h / 2 : shape.y
+          newX = wallSnap.x; newZ = wallSnap.z
         } else {
-          // Fallback: snap to wall endpoints / shape centers / floor edges
           const [nx, nz] = snapToTargets(rawX, rawZ, wallsRef.current, shapesRef.current, floorPtsRef.current, undefined, sd.shapeId)
-          updateShapeRef.current(sd.shapeId, { x: nx, z: nz })
+          newX = nx; newZ = nz; newY = shape.y
         }
+        // Shape-to-shape edge snap: aligns with neighbours' edges in X/Z and
+        // stacks vertically when footprints overlap. Runs after wall/floor
+        // snapping so walls/corners win when in range.
+        if (!snapDisabled) {
+          const { hx, hy, hz } = shapeHalfExtents(shape)
+          const snapped = snapShapeToOthers(sd.shapeId, newX, newY, newZ, hx, hy, hz, shapesRef.current)
+          newX = snapped.x; newZ = snapped.z; newY = Math.max(hy, snapped.y)
+        }
+        updateShapeRef.current(sd.shapeId, { x: newX, z: newZ, y: newY })
         sd.rawX = rawX; sd.rawZ = rawZ
         sd.startXIn = curXIn; sd.startZIn = curZIn
         return
@@ -4612,12 +5411,19 @@ export default function GarageShell() {
           let bestPos: { x?: number; z?: number; y?: number; rotY?: number } | null = null
 
           if (hit) {
-            const skipSnap = modKeysRef.current.shift
-            // Offset-based floor movement (cabinet stays under grab point)
+            const skipSnap = modKeysRef.current.shift || snappingDisabledRef.current
+            // Offset-based floor movement (cabinet stays under grab point).
+            // Snap the DELTA instead of the absolute position — this preserves
+            // the cabinet's original sub-1/4" precision (e.g. from wall-flush
+            // positions saved before grid rounding existed), while still
+            // quantizing movement to 1/4" steps during a real drag.
             const dx = hit.x * 12 - cd.startHitXIn
             const dz = hit.z * 12 - cd.startHitZIn
-            const rawX = skipSnap ? (cd.startXIn + dx) : snapToGrid(cd.startXIn + dx)
-            const rawZ = skipSnap ? (cd.startZIn + dz) : snapToGrid(cd.startZIn + dz)
+            const sdx = skipSnap ? dx : snapToGrid(dx)
+            const sdz = skipSnap ? dz : snapToGrid(dz)
+            if (Math.abs(sdx) < 0.01 && Math.abs(sdz) < 0.01) return
+            const rawX = cd.startXIn + sdx
+            const rawZ = cd.startZIn + sdz
 
             // Set up ray for wall-face Y tracking (reuse pre-allocated objects)
             const rect = gl.domElement.getBoundingClientRect()
@@ -4629,14 +5435,24 @@ export default function GarageShell() {
 
             // Check for wall snap — only snap when cabinet center is within 20" of wall face
             // Shift key disables wall/cabinet snapping
-            const WALL_SNAP_DIST = skipSnap ? 0 : 20
+            const WALL_SNAP_DIST = skipSnap ? 0 : 2
             let wallSnap: { x: number; z: number; y: number; rotY: number; dist: number } | null = null
             for (const wall of wallsRef.current) {
               const wdx = wall.x2 - wall.x1, wdz = wall.z2 - wall.z1
               const len = Math.hypot(wdx, wdz)
               if (len < 1) continue
               const ux = wdx / len, uz = wdz / len
-              const nx = -uz, nz = ux  // interior face normal
+              // Determine the true interior-facing normal by testing a probe
+              // point against the floor polygon. Wall draw order is arbitrary
+              // (back wall may be drawn reversed), so (-uz, ux) isn't always
+              // interior. Use pointInPolygon to pick the side that faces in.
+              let nx = -uz, nz = ux
+              const midX = (wall.x1 + wall.x2) / 2
+              const midZ = (wall.z1 + wall.z2) / 2
+              const probeDist = 6 // inches into either side
+              if (!pointInPolygon(midX + nx * probeDist, midZ + nz * probeDist, floorPtsRef.current)) {
+                nx = -nx; nz = -nz
+              }
 
               // Project cabinet position onto wall coordinate system
               const relX = rawX - wall.x1, relZ = rawZ - wall.z1
@@ -4646,9 +5462,16 @@ export default function GarageShell() {
               // Must be within wall span (with half-width margin)
               if (along < -cab.w / 2 || along > len + cab.w / 2) continue
 
-              // Distance from cabinet center to wall face position (interior or exterior)
-              const slatwallOnWall = slatwallPanelsRef.current.some(p => p.wallId === wall.id)
-              const slatwallExtra = slatwallOnWall ? 1 : 0
+              // Distance from cabinet center to wall face position (interior or exterior).
+              // Only add the 1" slatwall thickness when the cabinet actually sits
+              // IN FRONT of a slatwall panel on this wall — not just any cabinet
+              // on a wall that has some slatwall somewhere.
+              const overlapsSlatwall = slatwallPanelsRef.current.some(p =>
+                p.wallId === wall.id &&
+                along + cab.w / 2 > p.alongStart + 0.1 &&
+                along - cab.w / 2 < p.alongEnd - 0.1
+              )
+              const slatwallExtra = overlapsSlatwall ? 1 : 0
               const intTargetPerp = wall.thickness / 2 + cab.d / 2 + slatwallExtra
               const extTargetPerp = -(wall.thickness / 2 + cab.d / 2)
               const intDist = Math.abs(perp - intTargetPerp)
@@ -4705,9 +5528,17 @@ export default function GarageShell() {
               }
 
               if (!wallSnap || perpDist < wallSnap.dist) {
+                // Cabinet rotation: face the interior (or exterior) using the
+                // pointInPolygon-resolved normal, not the wall draw direction.
+                // Cabinet back is at local -Z, open front at +Z. For the front
+                // to face the room, local +Z must point along the interior
+                // normal. rotation.y = θ rotates local +Z to world (sinθ, cosθ),
+                // so θ = atan2(nx, nz).
                 const isExterior = targetPerp < 0
-                const baseRotY = -Math.atan2(wdz, wdx)
-                wallSnap = { x: cabCx, z: cabCz, y: cabY, rotY: isExterior ? baseRotY + Math.PI : baseRotY, dist: perpDist }
+                const faceX = isExterior ? -nx : nx
+                const faceZ = isExterior ? -nz : nz
+                const rotY = Math.atan2(faceX, faceZ)
+                wallSnap = { x: cabCx, z: cabCz, y: cabY, rotY, dist: perpDist }
               }
             }
 
@@ -4728,7 +5559,7 @@ export default function GarageShell() {
           }
 
           if (bestPos) {
-            const skipSnap = modKeysRef.current.shift
+            const skipSnap = modKeysRef.current.shift || snappingDisabledRef.current
             if (!skipSnap) {
               const snapRot = bestPos.rotY ?? cab.rotY
               const snapped = snapCabinetToOthers(
@@ -4783,7 +5614,7 @@ export default function GarageShell() {
         if (hit) {
           let hx = hit.x * 12, hz = hit.z * 12
           // Snap dragged corner to wall interior faces (axis-aligned walls only)
-          const SNAP = 5  // inches
+          const SNAP = 2  // inches
           for (const wall of wallsRef.current) {
             if (Math.abs(wall.z1 - wall.z2) < 2) {
               // Horizontal wall — snap Z
@@ -4817,7 +5648,7 @@ export default function GarageShell() {
           let newX = snapToGrid(fsd.initX + dx * 12)
           let newZ = snapToGrid(fsd.initZ + dz * 12)
           if (step) {
-            const SNAP = 5
+            const SNAP = 2
             const halfW = step.width / 2, halfD = step.depth / 2
             for (const wall of wallsRef.current) {
               if (Math.abs(wall.z1 - wall.z2) < 2) {
@@ -4854,7 +5685,7 @@ export default function GarageShell() {
         updateCabRef.current(cd.cabinetId, { x: dragPos.x, z: dragPos.z, y: dragPos.y, rotY: dragPos.rotY })
         cabinetDragPosRef.current = null
       }
-      const wasDragging = wallDragRef.current || shapeDragRef.current || floorPointDragRef.current || vertDragRef.current || slatBodyDragRef.current || slatCornerDragRef.current || backsplashBodyDragRef.current || backsplashCornerDragRef.current || cabinetDragRef.current || countertopDragRef.current || lightDragRef.current || ceilingLightDragRef.current || itemDragRef.current || rackDragRef.current || floorStepDragRef.current || floorStepCornerDragRef.current
+      const wasDragging = wallDragRef.current || shapeDragRef.current || floorPointDragRef.current || vertDragRef.current || slatBodyDragRef.current || slatCornerDragRef.current || backsplashBodyDragRef.current || backsplashCornerDragRef.current || cabinetDragRef.current || countertopDragRef.current || lightDragRef.current || ceilingLightDragRef.current || ledbarResizeRef.current || itemDragRef.current || rackDragRef.current || floorStepDragRef.current || floorStepCornerDragRef.current
       wallDragRef.current = null
       shapeDragRef.current = null
       floorPointDragRef.current = null
@@ -4867,6 +5698,7 @@ export default function GarageShell() {
       countertopDragRef.current = null
       lightDragRef.current = null
       ceilingLightDragRef.current = null
+      ledbarResizeRef.current = null
       rackDragRef.current = null
       itemDragRef.current = null
       floorStepDragRef.current = null
@@ -4886,16 +5718,48 @@ export default function GarageShell() {
   }, [gl, floorHit, endDrag])
 
   // ── Floor / ceiling geometry from polygon ────────────────────────────────
-  const floorTex = useTexture(`${import.meta.env.BASE_URL}${flooringTexturePathById(flooringColor)}`)
+  // Resolve the floor texture path. Supports catalog IDs, plus the
+  // 'imported:<id>' scheme for user-uploaded flooring textures (including
+  // bundled PBR packs — for the floor we just use the color/diffuse map).
+  const importedFloorAsset = useGarageStore(s =>
+    flooringColor.startsWith('imported:')
+      ? s.importedAssets.find(a => a.id === flooringColor.slice('imported:'.length))
+      : undefined
+  )
+  const floorTexUrl = flooringColor.startsWith('imported:')
+    ? (importedFloorAsset?.data ?? `${import.meta.env.BASE_URL}assets/textures/flooring/quicksilver.jpg`)
+    : `${import.meta.env.BASE_URL}${flooringTexturePathById(flooringColor)}`
+  const floorTex = useTexture(floorTexUrl)
   const maxAnisotropy = useMemo(() => gl.capabilities.getMaxAnisotropy?.() ?? 1, [gl])
 
-  // Build a de-tiled composite canvas to break the obvious repeating grid pattern.
-  // Each cell of the composite is rotated 0/90/180/270° using a deterministic pattern
-  // so the epoxy chip flakes never align across cells, but individual chip size is preserved.
+  // Imported textures are usually physically-scaled PBR packs (e.g. AmbientCG
+  // 2K/4K), not seamless flake chips. They need sensible feet-per-tile sizing,
+  // NOT the chip-per-inch math used by stock floor textures, and the de-tile
+  // rotation hurts uniform materials like metal/wood. Skip de-tiling for them.
+  const isImportedFloor = flooringColor.startsWith('imported:')
+
   const detileFloorTex = useMemo(() => {
+    if (isImportedFloor) {
+      // Straight tileable texture. Scale with the existing slider where
+      // floorTextureScale now means inches-per-repeat (1 chip = 1 inch by
+      // default; slider 6 ≈ 6" repeat = 0.5 ft). For imported textures the
+      // user usually wants much larger repeats; map 1..24 slider → 0.5..12 ft.
+      const ftPerRepeat = Math.max(0.25, floorTextureScale / 2)
+      const tex = floorTex.clone()
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+      tex.colorSpace = THREE.SRGBColorSpace
+      tex.anisotropy = maxAnisotropy
+      tex.minFilter = THREE.LinearMipmapLinearFilter
+      tex.magFilter = THREE.LinearFilter
+      tex.generateMipmaps = true
+      // Floor UVs are in feet; set repeats so 1 tile spans ftPerRepeat feet
+      tex.repeat.set(1 / ftPerRepeat, 1 / ftPerRepeat)
+      tex.needsUpdate = true
+      return tex
+    }
+    // Stock flake-chip flooring — de-tile via rotated cell composite.
     const img = floorTex.image as (HTMLImageElement & { width: number; height: number }) | null
     if (!img) return floorTex  // fallback: texture not yet decoded
-    // Support both HTMLImageElement (.naturalWidth) and ImageBitmap (.width)
     const tileW = (img as any).naturalWidth ?? img.width
     const tileH = (img as any).naturalHeight ?? img.height
     if (!tileW || !tileH) return floorTex
@@ -4907,7 +5771,6 @@ export default function GarageShell() {
     const rows = Math.ceil(SIZE / tileH) + 1
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        // Deterministic 90° rotation per cell — no two adjacent cells share the same rotation
         const rot = ((r * 3 + c * 7) % 4) * (Math.PI / 2)
         ctx.save()
         ctx.translate(c * tileW + tileW / 2, r * tileH + tileH / 2)
@@ -4918,23 +5781,16 @@ export default function GarageShell() {
     }
     const tex = new THREE.CanvasTexture(canvas)
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping
-    // Set color space for correct color rendering
     tex.colorSpace = THREE.SRGBColorSpace
-    // Max anisotropy — without this, wide garages hit extreme UV repeats
-    // (ShapeGeometry UVs are in feet) and mipmapping collapses the texture
-    // to a flat average gray at oblique/distant angles. Anisotropic filtering
-    // keeps chip detail visible across the whole floor regardless of size.
     tex.anisotropy = maxAnisotropy
     tex.minFilter = THREE.LinearMipmapLinearFilter
     tex.magFilter = THREE.LinearFilter
     tex.generateMipmaps = true
-    // floorGeo's UVs are now rewritten to feet-scale (see buildFloorGeometry)
-    // so this repeat math stays as it always was: chips per foot.
     const tilesPerFoot = 12 / floorTextureScale
     tex.repeat.set(tilesPerFoot * tileW / SIZE, tilesPerFoot * tileH / SIZE)
     tex.needsUpdate = true
     return tex
-  }, [floorTex, floorTextureScale, maxAnisotropy])
+  }, [floorTex, floorTextureScale, maxAnisotropy, isImportedFloor])
 
   const { geometry: floorGeo, scale: floorScale } = useMemo(() => buildFloorGeometry(effectiveFloorPts), [effectiveFloorPts])
   const chFt = FT(ceilingHeight)
@@ -4970,6 +5826,16 @@ export default function GarageShell() {
           />
         ) : blueprint ? (
           <meshBasicMaterial side={THREE.DoubleSide} color='#ffffff' />
+        ) : isImportedFloor && importedFloorAsset ? (
+          /* Imported PBR floor — sub-component loads all sidecar maps. */
+          <ImportedFloorMaterial
+            asset={importedFloorAsset}
+            colorTex={detileFloorTex}
+            floorTextureScale={floorTextureScale}
+            maxAnisotropy={maxAnisotropy}
+            effectiveQuality={effectiveQuality}
+            floorReflection={floorReflection}
+          />
         ) : effectiveQuality === 'low' ? (
           /* Low quality: standard material, no reflections — huge GPU savings */
           <meshStandardMaterial
@@ -4988,9 +5854,9 @@ export default function GarageShell() {
             metalness={0.0}
             blur={effectiveQuality === 'high' ? [400, 200] : [200, 100]}
             resolution={effectiveQuality === 'high' ? 2048 : 512}
-            mixBlur={0.95}
-            mixStrength={floorReflection * 0.8}
-            mixContrast={0.6}
+            mixBlur={0.85}
+            mixStrength={floorReflection * 1.2}
+            mixContrast={0.75}
             depthScale={0.8}
             minDepthThreshold={0.6}
             maxDepthThreshold={1.0}
@@ -5021,6 +5887,53 @@ export default function GarageShell() {
             color={wireframe ? '#1a2a3a' : '#f0ede4'} wireframe={wireframe} />
         </mesh>
       )}
+
+      {/* Wall corner angles — floor labels, wireframe/mesh mode only */}
+      {wireframe && (() => {
+        const labels: JSX.Element[] = []
+        const SNAP_IN = 8
+        type EP = { x: number; z: number; dx: number; dz: number }
+        const eps: EP[] = []
+        for (const w of walls) {
+          const dx = w.x2 - w.x1, dz = w.z2 - w.z1
+          const len = Math.hypot(dx, dz) || 1
+          const ux = dx / len, uz = dz / len
+          eps.push({ x: w.x1, z: w.z1, dx: ux,  dz: uz })
+          eps.push({ x: w.x2, z: w.z2, dx: -ux, dz: -uz })
+        }
+        const used = new Array(eps.length).fill(false)
+        for (let i = 0; i < eps.length; i++) {
+          if (used[i]) continue
+          const g: EP[] = [eps[i]]; used[i] = true
+          for (let j = i + 1; j < eps.length; j++) {
+            if (used[j]) continue
+            if (Math.hypot(eps[j].x - eps[i].x, eps[j].z - eps[i].z) < SNAP_IN) {
+              g.push(eps[j]); used[j] = true
+            }
+          }
+          if (g.length !== 2) continue
+          const a = g[0], b = g[1]
+          const dot = a.dx * b.dx + a.dz * b.dz
+          const deg = Math.round(Math.acos(Math.max(-1, Math.min(1, dot))) * 180 / Math.PI)
+          const bx = a.dx + b.dx, bz = a.dz + b.dz
+          const blen = Math.hypot(bx, bz) || 1
+          const inX = bx / blen, inZ = bz / blen
+          const labelInches = 14
+          const wx = FT(a.x + inX * labelInches)
+          const wz = FT(a.z + inZ * labelInches)
+          labels.push(
+            <Text key={`ang-${Math.round(a.x)}-${Math.round(a.z)}`}
+              position={[wx, 0.5, wz]}
+              rotation={[-Math.PI / 2, 0, 0]}
+              fontSize={0.6} color="#ffcc00"
+              anchorX="center" anchorY="middle" renderOrder={999}
+              outlineWidth={0.03} outlineColor="#000">
+              {deg}°
+            </Text>
+          )
+        }
+        return labels
+      })()}
 
       {/* Walls */}
       {walls.map(wall => {
@@ -5254,12 +6167,17 @@ export default function GarageShell() {
           beginDrag()
         }
         return (
-          <CabinetMesh key={cab.id} cabinet={cab} wireframe={wireframe} blueprint={blueprint} selected={isSel}
-            overlapping={cabinetOverlapsAny(cab, cabinets)}
-            onClick={() => selectCabinet(cab.id)}
-            onPointerDown={startDrag}
-            groupRef={registerCabinetGroup}
-          />
+          // Per-cabinet Suspense keeps texture loads from blanking the whole
+          // Canvas — only this one cabinet delays its first frame while PBR
+          // maps decode. Placeholder is a transparent no-op so it's invisible.
+          <Suspense key={cab.id} fallback={null}>
+            <CabinetMesh cabinet={cab} wireframe={wireframe} blueprint={blueprint} selected={isSel}
+              overlapping={cabinetOverlapsAny(cab, cabinets)}
+              onClick={() => selectCabinet(cab.id)}
+              onPointerDown={startDrag}
+              groupRef={registerCabinetGroup}
+            />
+          </Suspense>
         )
       })}
 
@@ -5328,6 +6246,120 @@ export default function GarageShell() {
         )
       })}
 
+      {/* User-added shapes: box/beam/cylinder soffits, columns, beams */}
+      {shapes.map(shape => {
+        const isSel = selectedShapeId === shape.id
+        const fallbackColor = shape.material === 'steel' ? '#8a8f96' : '#e8e4dc'
+        const color = shape.color ?? fallbackColor
+        const pos: [number, number, number] = [FT(shape.x), FT(shape.y), FT(shape.z)]
+        // Per-axis UV tiling so resizing one dimension doesn't stretch the
+        // texture. Box/beam: use the largest horizontal (width or depth) as U
+        // and height as V — this keeps the front/back AND side faces reading
+        // at roughly the same scale. Cylinder: U = circumference (wrap), V = h.
+        const uFt = shape.type === 'cylinder'
+          ? FT(2 * Math.PI * shape.r)
+          : FT(Math.max(shape.w, shape.d))
+        const vFt = FT(shape.h)
+        const startDrag = (e: ThreeEvent<PointerEvent>) => {
+          if (e.nativeEvent.button !== 0) return
+          e.stopPropagation()
+          e.nativeEvent.stopImmediatePropagation()
+          selectShape(shape.id)
+          const hit = floorHit(e.nativeEvent.clientX, e.nativeEvent.clientY)
+          const curXIn = hit ? hit.x * 12 : shape.x
+          const curZIn = hit ? hit.z * 12 : shape.z
+          shapeDragRef.current = {
+            shapeId: shape.id,
+            startXIn: curXIn, startZIn: curZIn,
+            rawX: shape.x, rawZ: shape.z,
+          }
+          beginDrag()
+        }
+        // Cylinders: single mesh (natural UV unwrap = circumference × height).
+        // Boxes/beams: render 6 face planes so each face's UV tiling matches
+        // its own dimensions — top/bottom get (w × d), sides get (d × h) etc.
+        // This prevents the top face from stretching when w ≠ d or h is large.
+        if (shape.type === 'cylinder') {
+          return (
+            <mesh
+              key={shape.id}
+              position={pos}
+              castShadow receiveShadow
+              onClick={(e) => { e.stopPropagation(); selectShape(shape.id) }}
+              onPointerDown={startDrag}
+            >
+              <cylinderGeometry args={[FT(shape.r), FT(shape.r), FT(shape.h), 32]} />
+              <Suspense fallback={<meshLambertMaterial color={color} />}>
+                <TexturedShapeMaterial
+                  textureId={shape.textureId}
+                  color={color}
+                  uFt={uFt}
+                  vFt={vFt}
+                  scale={shape.textureScale ?? 1}
+                  wireframe={wireframe}
+                  selected={isSel}
+                />
+              </Suspense>
+            </mesh>
+          )
+        }
+        // Box/beam — 6 faces, each with its own plane and correctly-tiled texture.
+        const wFt = FT(shape.w), hFt = FT(shape.h), dFt = FT(shape.d)
+        const hw = wFt / 2, hh = hFt / 2, hd = dFt / 2
+        const commonHandlers = {
+          onClick: (e: ThreeEvent<MouseEvent>) => { e.stopPropagation(); selectShape(shape.id) },
+          onPointerDown: startDrag,
+        }
+        const texScale = shape.textureScale ?? 1
+        const faceMat = (u: number, v: number) => (
+          <Suspense fallback={<meshLambertMaterial color={color} />}>
+            <TexturedShapeMaterial
+              textureId={shape.textureId}
+              color={color}
+              uFt={u}
+              vFt={v}
+              scale={texScale}
+              wireframe={wireframe}
+              selected={isSel}
+            />
+          </Suspense>
+        )
+        return (
+          <group key={shape.id} position={pos}>
+            {/* +Z front */}
+            <mesh position={[0, 0, hd]} {...commonHandlers} castShadow receiveShadow>
+              <planeGeometry args={[wFt, hFt]} />
+              {faceMat(FT(shape.w), FT(shape.h))}
+            </mesh>
+            {/* -Z back */}
+            <mesh position={[0, 0, -hd]} rotation={[0, Math.PI, 0]} {...commonHandlers} castShadow receiveShadow>
+              <planeGeometry args={[wFt, hFt]} />
+              {faceMat(FT(shape.w), FT(shape.h))}
+            </mesh>
+            {/* +X right */}
+            <mesh position={[hw, 0, 0]} rotation={[0, Math.PI / 2, 0]} {...commonHandlers} castShadow receiveShadow>
+              <planeGeometry args={[dFt, hFt]} />
+              {faceMat(FT(shape.d), FT(shape.h))}
+            </mesh>
+            {/* -X left */}
+            <mesh position={[-hw, 0, 0]} rotation={[0, -Math.PI / 2, 0]} {...commonHandlers} castShadow receiveShadow>
+              <planeGeometry args={[dFt, hFt]} />
+              {faceMat(FT(shape.d), FT(shape.h))}
+            </mesh>
+            {/* +Y top */}
+            <mesh position={[0, hh, 0]} rotation={[-Math.PI / 2, 0, 0]} {...commonHandlers} castShadow receiveShadow>
+              <planeGeometry args={[wFt, dFt]} />
+              {faceMat(FT(shape.w), FT(shape.d))}
+            </mesh>
+            {/* -Y bottom */}
+            <mesh position={[0, -hh, 0]} rotation={[Math.PI / 2, 0, 0]} {...commonHandlers} castShadow receiveShadow>
+              <planeGeometry args={[wFt, dFt]} />
+              {faceMat(FT(shape.w), FT(shape.d))}
+            </mesh>
+          </group>
+        )
+      })}
+
       {/* Overhead storage racks */}
       {overheadRacks.map(rack => {
         const isSel = selectedRackId === rack.id
@@ -5359,33 +6391,82 @@ export default function GarageShell() {
       })}
 
       <group onClick={handleDeselect}>
-      {ceilingLights.map(light => {
-        const isSel = selectedCeilingLightId === light.id
-        return (
-          <CeilingLightMesh
-            key={light.id}
-            light={light}
-            chFt={chFt}
-            selected={isSel}
-            wireframe={wireframe}
-            onClick={() => selectCeilingLight(light.id)}
-            onPointerDown={(e) => {
-              if (e.nativeEvent.button !== 0) return
-              e.stopPropagation()
-              e.nativeEvent.stopImmediatePropagation()
-              selectCeilingLight(light.id)
-              const hit = ceilingHit(e.nativeEvent.clientX, e.nativeEvent.clientY, chFt)
-              ceilingLightDragRef.current = {
-                lightId: light.id,
-                startXFt: light.x, startZFt: light.z,
-                startHitX: hit ? hit.x : light.x,
-                startHitZ: hit ? hit.z : light.z,
-              }
-              beginDrag()
-            }}
-          />
+      {(() => {
+        // Cap total shadow-casting ceiling fixtures: 4 on high, 2 on medium,
+        // 0 on low. Pick the brightest enabled lights so shadows land where
+        // they matter. Rest still emit light, just without shadow maps.
+        const maxCasters = qualityPreset === 'high' ? 4 : qualityPreset === 'medium' ? 2 : 0
+        const shadowCasterIds = new Set(
+          [...ceilingLights]
+            .filter(l => l.enabled)
+            .sort((a, b) => (b.intensity ?? 0) - (a.intensity ?? 0))
+            .slice(0, maxCasters)
+            .map(l => l.id)
         )
-      })}
+        return ceilingLights.map(light => {
+          const isSel = selectedCeilingLightId === light.id
+          return (
+            <CeilingLightMesh
+              key={light.id}
+              light={light}
+              chFt={chFt}
+              selected={isSel}
+              wireframe={wireframe}
+              castsShadow={shadowCasterIds.has(light.id)}
+              onClick={() => selectCeilingLight(light.id)}
+              onPointerDown={(e) => {
+                if (e.nativeEvent.button !== 0) return
+                e.stopPropagation()
+                e.nativeEvent.stopImmediatePropagation()
+                selectCeilingLight(light.id)
+                const mountY = light.kind === 'ledbar' && light.y !== undefined ? light.y : chFt
+                const hit = ceilingHit(e.nativeEvent.clientX, e.nativeEvent.clientY, mountY)
+                ceilingLightDragRef.current = {
+                  lightId: light.id,
+                  startXFt: light.x, startZFt: light.z,
+                  startHitX: hit ? hit.x : light.x,
+                  startHitZ: hit ? hit.z : light.z,
+                }
+                beginDrag()
+              }}
+            />
+          )
+        })
+      })()}
+
+      {/* LED bar resize handles — end spheres on the selected ledbar */}
+      {(() => {
+        const sel = ceilingLights.find(l => l.id === selectedCeilingLightId)
+        if (!sel || sel.kind !== 'ledbar') return null
+        const lenIn = sel.lengthIn ?? 18
+        const halfL = FT(lenIn / 2)
+        const ux = Math.cos(sel.rotY), uz = -Math.sin(sel.rotY)
+        const y = (sel.y ?? 0) - 0.02
+        const leftPos: [number, number, number]  = [sel.x - ux * halfL, y, sel.z - uz * halfL]
+        const rightPos: [number, number, number] = [sel.x + ux * halfL, y, sel.z + uz * halfL]
+        const startResize = (side: 'left' | 'right', e: ThreeEvent<PointerEvent>) => {
+          if (e.nativeEvent.button !== 0) return
+          e.stopPropagation()
+          e.nativeEvent.stopImmediatePropagation()
+          // fixedX/fixedZ = endpoint opposite the one being dragged, in feet.
+          ledbarResizeRef.current = {
+            lightId: sel.id,
+            side,
+            ux, uz,
+            fixedX: sel.x + (side === 'left' ? halfL : -halfL) * ux,
+            fixedZ: sel.z + (side === 'left' ? halfL : -halfL) * uz,
+          }
+          beginDrag()
+        }
+        return (
+          <group key={sel.id + '-ledbar-handles'}>
+            <DragHandle position={leftPos}  color="#44aaff" size={0.12}
+              onPointerDown={(e) => startResize('left', e)} />
+            <DragHandle position={rightPos} color="#44aaff" size={0.12}
+              onPointerDown={(e) => startResize('right', e)} />
+          </group>
+        )
+      })()}
 
       {/* Scene light bulb indicators — hidden in blueprint/wireframe */}
       {!wireframe && !blueprint && sceneLights.map(l => (

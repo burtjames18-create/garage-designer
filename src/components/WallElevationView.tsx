@@ -5,9 +5,10 @@ import { slatwallColors } from '../data/slatwallColors'
 import { snapToGrid, inchesToDisplay } from '../utils/measurements'
 import { cabinetFrontPaths } from './CabinetFrontSVG'
 import './WallElevationView.css'
+import './Viewer3D.css'
 
-const PAD = 48  // SVG padding in wall-space inches
-const SNAP_DIST = 8  // inches
+const PAD = 40  // SVG padding in wall-space inches — leaves room for dim tiers + corner stubs
+const SNAP_DIST = 2  // inches
 
 // ─── Geometry helpers ─────────────────────────────────────────────────────────
 
@@ -157,6 +158,7 @@ export default function WallElevationView() {
     updateCabinet, selectCabinet, selectedCabinetId, addCabinet, deleteCabinet,
     updateCountertop, selectCountertop, selectedCountertopId, addCountertop, deleteCountertop,
     elevationSide, setElevationSide,
+    snappingEnabled, setSnappingEnabled,
   } = useGarageStore()
 
   const svgRef = useRef<SVGSVGElement>(null)
@@ -1253,8 +1255,8 @@ export default function WallElevationView() {
           {(() => {
             const dimColor = '#666'
             const textColor = '#333'
-            const fontSize = 7
-            const tickSz = 4
+            const fontSize = 2.5
+            const tickSz = 2
 
             // ── Horizontal breakpoints (along wall) ─────────────────────────
             // Use interior face edges so corner stubs don't create phantom gaps
@@ -1264,88 +1266,182 @@ export default function WallElevationView() {
             // Only use interior face edges when there are items to dimension
             hBreaks.add(hasItems ? leftEdge : 0)
             hBreaks.add(hasItems ? rightEdge : wLen)
+            // Cabinet tier: breakpoints from cabinets only. Each segment is
+            // either a cabinet span or a gap between them.
+            type Range = { start: number; end: number }
+            const cabRanges: Range[] = []
             wallCabinets.forEach(cab => {
               const { along } = projectCabinet(cab, wall)
-              hBreaks.add(Math.max(leftEdge, along - cab.w / 2))
-              hBreaks.add(Math.min(rightEdge, along + cab.w / 2))
-            })
-            wallPanels.forEach(p => {
-              hBreaks.add(Math.max(leftEdge, p.alongStart))
-              hBreaks.add(Math.min(rightEdge, p.alongEnd))
+              const s = Math.max(leftEdge, along - cab.w / 2)
+              const e = Math.min(rightEdge, along + cab.w / 2)
+              hBreaks.add(s); hBreaks.add(e)
+              cabRanges.push({ start: s, end: e })
             })
             const hSorted = [...hBreaks].sort((a, b) => a - b)
             const hasHSegs = hSorted.length > 2
+            const classifySeg = (start: number, end: number): 'cab' | 'gap' => {
+              const mid = (start + end) / 2
+              for (const r of cabRanges) if (mid >= r.start - 0.1 && mid <= r.end + 0.1) return 'cab'
+              return 'gap'
+            }
 
-            // Slatwall section breaks — every panel gets dimensioned, with dividers at 96" (8') intervals
-            const slatSectionBreaks: Array<{ start: number; end: number; sections: number[] }> = []
+            // Slatwall tier: breakpoints from slatwall panels. Each segment is
+            // either a slatwall span or a gap where there's no slatwall.
+            const slatBreaks = new Set<number>()
+            slatBreaks.add(leftEdge); slatBreaks.add(rightEdge)
+            const slatRanges: Range[] = []
             wallPanels.forEach(p => {
-              const panelW = p.alongEnd - p.alongStart
-              if (panelW < 1) return
-              const sections: number[] = [p.alongStart]
-              for (let offset = 96; offset < panelW; offset += 96) {
-                sections.push(p.alongStart + offset)
-              }
-              sections.push(p.alongEnd)
-              slatSectionBreaks.push({ start: p.alongStart, end: p.alongEnd, sections })
+              const s = Math.max(leftEdge, p.alongStart)
+              const e = Math.min(rightEdge, p.alongEnd)
+              slatBreaks.add(s); slatBreaks.add(e)
+              slatRanges.push({ start: s, end: e })
             })
-            const hasSlatSections = slatSectionBreaks.length > 0
+            const slatSorted = [...slatBreaks].sort((a, b) => a - b)
+            const hasSlatTier = slatRanges.length > 0
+            const classifySlatSeg = (start: number, end: number): 'slat' | 'gap' => {
+              const mid = (start + end) / 2
+              for (const r of slatRanges) if (mid >= r.start - 0.1 && mid <= r.end + 0.1) return 'slat'
+              return 'gap'
+            }
+            const TIER_COLOR = {
+              overall: '#333',
+              cab:     '#333',
+              slat:    '#1d6f3d',
+              gap:     '#888',
+            }
+
+            // Slatwall section tier — only shown when a panel exceeds 96" (8')
+            // so we can annotate the 8' section divisions. Panels ≤ 96" are
+            // already dimensioned in the main strip above with "SW" prefix.
+            // Slatwall tier segments: full wall strip, split into SW spans
+            // (broken at 8' intervals for long panels) and gap segments.
+            type SlatSeg = { start: number; end: number; kind: 'slat' | 'gap' }
+            const slatTierSegs: SlatSeg[] = []
+            {
+              // Add 8' break points INSIDE each panel (for panels > 96").
+              const pts = new Set<number>(slatSorted)
+              wallPanels.forEach(p => {
+                const panelW = p.alongEnd - p.alongStart
+                for (let offset = 96; offset < panelW; offset += 96) {
+                  pts.add(p.alongStart + offset)
+                }
+              })
+              const sorted = [...pts].sort((a, b) => a - b)
+              for (let i = 0; i < sorted.length - 1; i++) {
+                const s = sorted[i], e = sorted[i + 1]
+                if (e - s < 0.5) continue
+                slatTierSegs.push({ start: s, end: e, kind: classifySlatSeg(s, e) })
+              }
+            }
 
             // Horizontal dimension tiers (inside → outside):
-            //   dimY1     = item segments (cabinets, slatwall edges)
-            //   dimYSlat  = slatwall 8' section widths (only when panels > 8')
-            //   dimYTotal = full wall width (always outermost, bold)
-            let nextDimY = toY(0) + 20
-            const dimY1 = nextDimY                                    // item segments
-            if (hasHSegs) nextDimY += 20
-            const dimYSlat = nextDimY                                 // slatwall sections
-            if (hasSlatSections) nextDimY += 20
-            const dimYTotal = nextDimY                                // wall total (outermost)
+            //   dimY1     = cabinet/gap strip
+            //   dimYSlat  = slatwall/gap strip (with 8' breaks for long panels)
+            //   dimYTotal = full wall width (outermost, bold)
+            let nextDimY = toY(0) + 6
+            const dimY1 = nextDimY
+            if (hasHSegs) nextDimY += 6
+            const dimYSlat = nextDimY
+            if (hasSlatTier) nextDimY += 6
+            const dimYTotal = nextDimY
 
             // ── Vertical breakpoints (height) ────────────────────────────────
+            // Cabinet vertical tier: cabinets + gaps, no slatwall mixed in.
             const vBreaks = new Set<number>()
-            vBreaks.add(0)
-            vBreaks.add(wH)
+            vBreaks.add(0); vBreaks.add(wH)
+            const cabVRanges: Array<{ bottom: number; top: number }> = []
             wallCabinets.forEach(cab => {
-              vBreaks.add(Math.max(0, cab.y))
-              vBreaks.add(Math.min(wH, cab.y + cab.h))
-            })
-            wallPanels.forEach(p => {
-              vBreaks.add(Math.max(0, p.yBottom))
-              vBreaks.add(Math.min(wH, p.yTop))
+              const b = Math.max(0, cab.y)
+              const t = Math.min(wH, cab.y + cab.h)
+              vBreaks.add(b); vBreaks.add(t)
+              cabVRanges.push({ bottom: b, top: t })
             })
             const vSorted = [...vBreaks].sort((a, b) => a - b)
             const hasVSegs = vSorted.length > 2
+            // 'cab' only if both endpoints match the SAME cabinet's edges.
+            const classifyVSeg = (bot: number, top: number): 'cab' | 'gap' => {
+              for (const r of cabVRanges) {
+                if (Math.abs(bot - r.bottom) < 0.1 && Math.abs(top - r.top) < 0.1) return 'cab'
+              }
+              return 'gap'
+            }
 
-            const dimX1 = PAD - 18
-            const dimX2 = PAD - (hasVSegs ? 34 : 18)
+            // Slatwall vertical tier: one combined SW span + gaps above/below.
+            const slatVRange: { bottom: number; top: number } | null = (() => {
+              if (wallPanels.length === 0) return null
+              const lo = Math.max(0, Math.min(...wallPanels.map(p => p.yBottom)))
+              const hi = Math.min(wH, Math.max(...wallPanels.map(p => p.yTop)))
+              return hi - lo > 1 ? { bottom: lo, top: hi } : null
+            })()
+            type VSlatSeg = { bottom: number; top: number; kind: 'slat' | 'gap' }
+            const slatVSegs: VSlatSeg[] = []
+            if (slatVRange) {
+              if (slatVRange.bottom > 0.5)    slatVSegs.push({ bottom: 0, top: slatVRange.bottom, kind: 'gap' })
+              slatVSegs.push({ bottom: slatVRange.bottom, top: slatVRange.top, kind: 'slat' })
+              if (slatVRange.top < wH - 0.5) slatVSegs.push({ bottom: slatVRange.top, top: wH, kind: 'gap' })
+            }
+            const hasSlatVTier = slatVSegs.length > 0
 
+            // Offset all vertical dim tiers past any left-side corner stub so
+            // they don't land inside the extended wall face.
+            const leftStubT = Math.max(0, ...wallStubs.filter(s => s.along <= 2).map(s => s.thickness))
+            const dimStart = PAD - leftStubT - 6
+            const dimX1 = dimStart
+            const dimXSlat = dimStart - (hasVSegs ? 6 : 0)
+            const dimX2 = dimXSlat - (hasSlatVTier ? 6 : 0)
+
+            // Witness lines must start at the OUTER edge of the wall face,
+            // which extends left past toX(0) when a left corner stub exists.
+            const witnessStartX = PAD - leftStubT
             return <>
               {/* Vertical witness lines (horizontal, going left from wall face) */}
-              <line x1={toX(0)} y1={toY(0)} x2={dimX2 - tickSz} y2={toY(0)}
+              <line x1={witnessStartX} y1={toY(0)} x2={dimX2 - tickSz} y2={toY(0)}
                 stroke={dimColor} strokeWidth={0.35} strokeDasharray="3 2" />
-              <line x1={toX(0)} y1={toY(wH)} x2={dimX2 - tickSz} y2={toY(wH)}
+              <line x1={witnessStartX} y1={toY(wH)} x2={dimX2 - tickSz} y2={toY(wH)}
                 stroke={dimColor} strokeWidth={0.35} strokeDasharray="3 2" />
               {hasVSegs && vSorted.slice(1, -1).map((bp, i) => (
-                <line key={`vw${i}`} x1={toX(0)} y1={toY(bp)} x2={dimX1 - tickSz} y2={toY(bp)}
+                <line key={`vw${i}`} x1={witnessStartX} y1={toY(bp)} x2={dimX1 - tickSz} y2={toY(bp)}
                   stroke={dimColor} strokeWidth={0.35} strokeDasharray="3 2" />
               ))}
 
-              {/* Vertical segment dims */}
+              {/* Vertical segment dims — color + prefix by kind */}
               {hasVSegs && vSorted.slice(0, -1).map((bot, i) => {
                 const top = vSorted[i + 1]
                 const y1 = toY(top), y2 = toY(bot)
                 const mid = (y1 + y2) / 2
                 const segPx = y2 - y1
-                // Scale font to fit: allow ~1.2px per font unit, min 3.5
-                const fitSize = Math.max(3.5, Math.min(fontSize, segPx * 0.55))
+                const fitSize = Math.max(2, Math.min(fontSize, segPx * 0.55))
+                const kind = classifyVSeg(bot, top)
+                const color = TIER_COLOR[kind]
+                const prefix = kind === 'cab' ? 'CAB ' : ''
                 return (
                   <g key={`vs${i}`}>
-                    <line x1={dimX1} y1={y1} x2={dimX1} y2={y2} stroke={dimColor} strokeWidth={0.5} />
-                    <line x1={dimX1 - tickSz} y1={y1} x2={dimX1 + tickSz} y2={y1} stroke={dimColor} strokeWidth={0.5} />
-                    <line x1={dimX1 - tickSz} y1={y2} x2={dimX1 + tickSz} y2={y2} stroke={dimColor} strokeWidth={0.5} />
-                    <text x={dimX1 - 4} y={mid} textAnchor="middle" fill={textColor} fontSize={fitSize}
-                      transform={`rotate(-90 ${dimX1 - 4} ${mid})`}>
-                      {inchesToDisplay(top - bot)}
+                    <line x1={dimX1} y1={y1} x2={dimX1} y2={y2} stroke={color} strokeWidth={0.5} />
+                    <line x1={dimX1 - tickSz} y1={y1} x2={dimX1 + tickSz} y2={y1} stroke={color} strokeWidth={0.5} />
+                    <line x1={dimX1 - tickSz} y1={y2} x2={dimX1 + tickSz} y2={y2} stroke={color} strokeWidth={0.5} />
+                    <text x={dimX1 - 1} y={mid} textAnchor="middle" fill={color} fontSize={fitSize}
+                      transform={`rotate(-90 ${dimX1 - 1} ${mid})`}>
+                      {prefix}{inchesToDisplay(top - bot)}
+                    </text>
+                  </g>
+                )
+              })}
+
+              {/* Slatwall vertical tier — SW span + gaps above/below */}
+              {hasSlatVTier && slatVSegs.map((seg, i) => {
+                const y1 = toY(seg.top), y2 = toY(seg.bottom), mid = (y1 + y2) / 2
+                const segPx = y2 - y1
+                const fitSize = Math.max(2, Math.min(fontSize, segPx * 0.55))
+                const color = TIER_COLOR[seg.kind]
+                const prefix = seg.kind === 'slat' ? 'SW ' : ''
+                return (
+                  <g key={`svt${i}`}>
+                    <line x1={dimXSlat} y1={y1} x2={dimXSlat} y2={y2} stroke={color} strokeWidth={0.5} />
+                    <line x1={dimXSlat - tickSz} y1={y1} x2={dimXSlat + tickSz} y2={y1} stroke={color} strokeWidth={0.5} />
+                    <line x1={dimXSlat - tickSz} y1={y2} x2={dimXSlat + tickSz} y2={y2} stroke={color} strokeWidth={0.5} />
+                    <text x={dimXSlat - 1} y={mid} textAnchor="middle" fill={color} fontSize={fitSize}
+                      transform={`rotate(-90 ${dimXSlat - 1} ${mid})`}>
+                      {prefix}{inchesToDisplay(seg.top - seg.bottom)}
                     </text>
                   </g>
                 )
@@ -1356,12 +1452,12 @@ export default function WallElevationView() {
                 const y1 = toY(wH), y2 = toY(0), mid = (y1 + y2) / 2
                 return (
                   <g>
-                    <line x1={dimX2} y1={y1} x2={dimX2} y2={y2} stroke={dimColor} strokeWidth={0.6} />
-                    <line x1={dimX2 - tickSz} y1={y1} x2={dimX2 + tickSz} y2={y1} stroke={dimColor} strokeWidth={0.5} />
-                    <line x1={dimX2 - tickSz} y1={y2} x2={dimX2 + tickSz} y2={y2} stroke={dimColor} strokeWidth={0.5} />
-                    <text x={dimX2 - 4} y={mid} textAnchor="middle" fill={textColor} fontSize={fontSize} fontWeight="600"
-                      transform={`rotate(-90 ${dimX2 - 4} ${mid})`}>
-                      {inchesToDisplay(wH)}
+                    <line x1={dimX2} y1={y1} x2={dimX2} y2={y2} stroke={TIER_COLOR.overall} strokeWidth={0.6} />
+                    <line x1={dimX2 - tickSz} y1={y1} x2={dimX2 + tickSz} y2={y1} stroke={TIER_COLOR.overall} strokeWidth={0.5} />
+                    <line x1={dimX2 - tickSz} y1={y2} x2={dimX2 + tickSz} y2={y2} stroke={TIER_COLOR.overall} strokeWidth={0.5} />
+                    <text x={dimX2 - 1} y={mid} textAnchor="middle" fill={TIER_COLOR.overall} fontSize={fontSize} fontWeight="600"
+                      transform={`rotate(-90 ${dimX2 - 1} ${mid})`}>
+                      WALL {inchesToDisplay(wH)}
                     </text>
                   </g>
                 )
@@ -1377,57 +1473,54 @@ export default function WallElevationView() {
                   stroke={dimColor} strokeWidth={0.35} strokeDasharray="3 2" />
               ))}
 
-              {/* Horizontal segment dims — tier 1, closest to wall */}
+              {/* Horizontal segment dims — tier 1, closest to wall. Color-coded
+                 and prefixed by segment type. */}
               {hasHSegs && hSorted.slice(0, -1).map((start, i) => {
                 const end = hSorted[i + 1]
                 const x1 = toX(start), x2 = toX(end)
                 const mid = (x1 + x2) / 2
                 const segPx = x2 - x1
-                const fitSize = Math.max(3.5, Math.min(fontSize, segPx * 0.55))
+                const fitSize = Math.max(2, Math.min(fontSize, segPx * 0.55))
+                const kind = classifySeg(start, end)
+                const color = TIER_COLOR[kind]
+                const prefix = kind === 'cab' ? 'CAB ' : ''
                 return (
                   <g key={`hs${i}`}>
-                    <line x1={x1} y1={dimY1} x2={x2} y2={dimY1} stroke={dimColor} strokeWidth={0.5} />
-                    <line x1={x1} y1={dimY1 - tickSz} x2={x1} y2={dimY1 + tickSz} stroke={dimColor} strokeWidth={0.5} />
-                    <line x1={x2} y1={dimY1 - tickSz} x2={x2} y2={dimY1 + tickSz} stroke={dimColor} strokeWidth={0.5} />
-                    <text x={mid} y={dimY1 - 4} textAnchor="middle" fill={textColor} fontSize={fitSize}>
-                      {inchesToDisplay(end - start)}
+                    <line x1={x1} y1={dimY1} x2={x2} y2={dimY1} stroke={color} strokeWidth={0.5} />
+                    <line x1={x1} y1={dimY1 - tickSz} x2={x1} y2={dimY1 + tickSz} stroke={color} strokeWidth={0.5} />
+                    <line x1={x2} y1={dimY1 - tickSz} x2={x2} y2={dimY1 + tickSz} stroke={color} strokeWidth={0.5} />
+                    <text x={mid} y={dimY1 - 1} textAnchor="middle" fill={color} fontSize={fitSize}>
+                      {prefix}{inchesToDisplay(end - start)}
                     </text>
                   </g>
                 )
               })}
 
-              {/* Slatwall 8' section dimensions — tier 2, middle */}
-              {hasSlatSections && slatSectionBreaks.map((sb, pi) =>
-                sb.sections.slice(0, -1).map((secStart, i) => {
-                  const secEnd = sb.sections[i + 1]
-                  const x1 = toX(secStart), x2 = toX(secEnd), mid = (x1 + x2) / 2
-                  const segPx = x2 - x1
-                  const fitSize = Math.max(3.5, Math.min(fontSize, segPx * 0.55))
-                  return (
-                    <g key={`ss${pi}-${i}`}>
-                      <line x1={x1} y1={toY(0)} x2={x1} y2={dimYSlat + tickSz}
-                        stroke={dimColor} strokeWidth={0.35} strokeDasharray="3 2" />
-                      {i === sb.sections.length - 2 && (
-                        <line x1={x2} y1={toY(0)} x2={x2} y2={dimYSlat + tickSz}
-                          stroke={dimColor} strokeWidth={0.35} strokeDasharray="3 2" />
-                      )}
-                      <line x1={x1} y1={dimYSlat} x2={x2} y2={dimYSlat} stroke={dimColor} strokeWidth={0.5} />
-                      <line x1={x1} y1={dimYSlat - tickSz} x2={x1} y2={dimYSlat + tickSz} stroke={dimColor} strokeWidth={0.5} />
-                      <line x1={x2} y1={dimYSlat - tickSz} x2={x2} y2={dimYSlat + tickSz} stroke={dimColor} strokeWidth={0.5} />
-                      {segPx > 14 ? (
-                        <text x={mid} y={dimYSlat - 4} textAnchor="middle" fill={textColor} fontSize={fitSize}>
-                          {inchesToDisplay(secEnd - secStart)}
-                        </text>
-                      ) : (
-                        <text x={mid} y={dimYSlat - 4} textAnchor="middle" fill={textColor} fontSize={3.5}
-                          transform={`rotate(-90 ${mid} ${dimYSlat - 4})`}>
-                          {inchesToDisplay(secEnd - secStart)}
-                        </text>
-                      )}
-                    </g>
-                  )
-                })
-              )}
+              {/* Slatwall tier — full strip, SW spans + gaps, 8' breaks on long panels */}
+              {hasSlatTier && slatTierSegs.map((seg, i) => {
+                const x1 = toX(seg.start), x2 = toX(seg.end), mid = (x1 + x2) / 2
+                const segPx = x2 - x1
+                const fitSize = Math.max(2, Math.min(fontSize, segPx * 0.55))
+                const color = TIER_COLOR[seg.kind]
+                const prefix = seg.kind === 'slat' ? 'SW ' : ''
+                return (
+                  <g key={`slt${i}`}>
+                    <line x1={x1} y1={dimYSlat} x2={x2} y2={dimYSlat} stroke={color} strokeWidth={0.5} />
+                    <line x1={x1} y1={dimYSlat - tickSz} x2={x1} y2={dimYSlat + tickSz} stroke={color} strokeWidth={0.5} />
+                    <line x1={x2} y1={dimYSlat - tickSz} x2={x2} y2={dimYSlat + tickSz} stroke={color} strokeWidth={0.5} />
+                    {segPx > 14 ? (
+                      <text x={mid} y={dimYSlat - 1} textAnchor="middle" fill={color} fontSize={fitSize}>
+                        {prefix}{inchesToDisplay(seg.end - seg.start)}
+                      </text>
+                    ) : (
+                      <text x={mid} y={dimYSlat - 1} textAnchor="middle" fill={color} fontSize={2}
+                        transform={`rotate(-90 ${mid} ${dimYSlat - 1})`}>
+                        {prefix}{inchesToDisplay(seg.end - seg.start)}
+                      </text>
+                    )}
+                  </g>
+                )
+              })}
 
               {/* Horizontal total — full wall width, outermost tier, bold */}
               {(hSorted.length > 3 || !hasHSegs) && (() => {
@@ -1435,11 +1528,11 @@ export default function WallElevationView() {
                 const x1 = toX(le), x2 = toX(re), mid = (x1 + x2) / 2
                 return (
                   <g>
-                    <line x1={x1} y1={dimYTotal} x2={x2} y2={dimYTotal} stroke={dimColor} strokeWidth={0.6} />
-                    <line x1={x1} y1={dimYTotal - tickSz} x2={x1} y2={dimYTotal + tickSz} stroke={dimColor} strokeWidth={0.5} />
-                    <line x1={x2} y1={dimYTotal - tickSz} x2={x2} y2={dimYTotal + tickSz} stroke={dimColor} strokeWidth={0.5} />
-                    <text x={mid} y={dimYTotal - 4} textAnchor="middle" fill={textColor} fontSize={fontSize} fontWeight="600">
-                      {inchesToDisplay(re - le)}
+                    <line x1={x1} y1={dimYTotal} x2={x2} y2={dimYTotal} stroke={TIER_COLOR.overall} strokeWidth={0.6} />
+                    <line x1={x1} y1={dimYTotal - tickSz} x2={x1} y2={dimYTotal + tickSz} stroke={TIER_COLOR.overall} strokeWidth={0.5} />
+                    <line x1={x2} y1={dimYTotal - tickSz} x2={x2} y2={dimYTotal + tickSz} stroke={TIER_COLOR.overall} strokeWidth={0.5} />
+                    <text x={mid} y={dimYTotal - 1} textAnchor="middle" fill={TIER_COLOR.overall} fontSize={fontSize} fontWeight="600">
+                      WALL {inchesToDisplay(re - le)}
                     </text>
                   </g>
                 )
@@ -1452,6 +1545,23 @@ export default function WallElevationView() {
 
       <div className="wall-elev-hint">
         Drag panels, cabinets &amp; countertops to reposition · Drag corners to resize · Changes sync to 3D view
+      </div>
+
+      {/* Snap toggle */}
+      <div className="shot-panel">
+        <div className="shot-btn-row">
+          <button
+            className={`shot-save-btn snap-toggle-btn${snappingEnabled ? '' : ' off'}`}
+            onClick={() => setSnappingEnabled(!snappingEnabled)}
+            title={snappingEnabled ? 'Snapping ON — click to disable' : 'Snapping OFF — click to enable'}
+            aria-pressed={!snappingEnabled}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" />
+            </svg>
+            Snap: {snappingEnabled ? 'On' : 'Off'}
+          </button>
+        </div>
       </div>
     </div>
   )

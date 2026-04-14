@@ -59,7 +59,7 @@ const STYLE_GROUPS: { label: string; style: string }[] = [
 ]
 
 function CabinetEditor({ cab }: { cab: PlacedCabinet }) {
-  const { selectedCabinetId, selectCabinet, updateCabinet, deleteCabinet } = useGarageStore()
+  const { selectedCabinetId, selectCabinet, updateCabinet, deleteCabinet, ceilingLights, addCeilingLight, deleteCeilingLight } = useGarageStore()
   const selected = selectedCabinetId === cab.id
   const [confirmDelete, setConfirmDelete] = useState(false)
   const scrollRef = useScrollToSelected<HTMLDivElement>(selected)
@@ -212,6 +212,53 @@ function CabinetEditor({ cab }: { cab: PlacedCabinet }) {
                 </button>
               )
             })()}
+            {cab.style === 'upper' && (() => {
+              // A ledbar is "under this cabinet" if its position matches the
+              // cabinet center within ~6" and y roughly equals the cabinet bottom.
+              const cabXFt = cab.x / 12, cabZFt = cab.z / 12
+              const bar = ceilingLights.find(l =>
+                l.kind === 'ledbar' &&
+                Math.abs(l.x - cabXFt) < 0.5 &&
+                Math.abs(l.z - cabZFt) < 0.5
+              )
+              const on = !!bar
+              return (
+                <button
+                  onClick={() => {
+                    if (on && bar) deleteCeilingLight(bar.id)
+                    else {
+                      selectCabinet(cab.id)
+                      addCeilingLight('ledbar')
+                    }
+                  }}
+                  style={{ fontSize: 11, padding: '3px 8px', cursor: 'pointer',
+                    background: on ? 'rgba(100,200,255,0.18)' : 'rgba(255,255,255,0.08)',
+                    border: `1px solid ${on ? 'rgba(100,200,255,0.4)' : 'rgba(255,255,255,0.15)'}`,
+                    borderRadius: 4, color: on ? '#8ad4ff' : '#ccc' }}
+                >
+                  LED bar: {on ? 'On' : 'Off'}
+                </button>
+              )
+            })()}
+          </div>
+          <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <label style={{ fontSize: 11, color: '#aaa' }}>Price</label>
+            <span style={{ fontSize: 11, color: '#aaa' }}>$</span>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={cab.price ?? ''}
+              placeholder="0"
+              onChange={e => {
+                const v = e.target.value.trim()
+                updateCabinet(cab.id, { price: v === '' ? undefined : Math.max(0, parseFloat(v) || 0) })
+              }}
+              onClick={e => e.stopPropagation()}
+              style={{ flex: 1, fontSize: 11, padding: '2px 6px', background: 'rgba(255,255,255,0.08)',
+                border: '1px solid rgba(255,255,255,0.15)', borderRadius: 3, color: '#eee' }}
+              aria-label="Cabinet price"
+            />
           </div>
           {cab.style === 'upper' && cab.underLight && (() => {
             const angle = cab.underLightAngle ?? (75 * Math.PI) / 180
