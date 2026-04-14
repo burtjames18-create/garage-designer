@@ -42,16 +42,26 @@ function isCabinetOnWall(cab: PlacedCabinet, w: GarageWall, side?: 'interior' | 
   const { along, perp } = projectCabinet(cab, w)
   if (perp > cab.d / 2 + w.thickness / 2 + 10) return false
   if (along <= -cab.w / 2 || along >= len + cab.w / 2) return false
-  // Cabinet must be facing this wall (within 45°) — prevents corner cabinets
-  // from perpendicular walls bleeding into the wrong elevation
+  // Cabinet must be facing roughly perpendicular to this wall (within 45° of
+  // either face direction). Wall draw direction is arbitrary per-wall, so we
+  // accept either +normal or -normal; the side filter below picks correct one.
   const [dx, dz] = wallDir(w)
-  // Interior-facing rotation: [-dz, dx] normal (same as addCabinetToWall)
-  const intRotY = Math.atan2(-dz, dx)
-  const extRotY = intRotY + Math.PI
-  const targetRotY = side === 'exterior' ? extRotY : intRotY
-  let diff = Math.abs(cab.rotY - targetRotY) % (Math.PI * 2)
-  if (diff > Math.PI) diff = Math.PI * 2 - diff
-  if (diff >= Math.PI / 4) return false
+  const rotA = Math.atan2(-dz, dx)
+  const rotB = rotA + Math.PI
+  const angDiff = (target: number) => {
+    let d = Math.abs(cab.rotY - target) % (Math.PI * 2)
+    if (d > Math.PI) d = Math.PI * 2 - d
+    return d
+  }
+  const facesA = angDiff(rotA) < Math.PI / 4
+  const facesB = angDiff(rotB) < Math.PI / 4
+  if (!facesA && !facesB) return false
+  if (side) {
+    // Side filter: 'interior' = side facing into garage (use cabinetWallSide
+    // which resolves it the same way for consistency).
+    const cabSide = cabinetWallSide(cab, w)
+    if (cabSide !== side) return false
+  }
   return true
 }
 
@@ -1533,7 +1543,7 @@ export default function WallElevationView() {
                 const kind = classifySeg(start, end)
                 const color = TIER_COLOR[kind]
                 const prefix = kind === 'cab' ? 'CAB ' : ''
-                const showLabel = kind === 'cab'
+                const showLabel = true
                 return (
                   <g key={`hs${i}`}>
                     <line x1={x1} y1={dimY1} x2={x2} y2={dimY1} stroke={color} strokeWidth={0.5} />

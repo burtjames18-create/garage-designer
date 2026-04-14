@@ -581,7 +581,7 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
         const kind = classifySeg(start, end)
         const color = TIER_COLOR[kind]
         const prefix = kind === 'cab' ? 'CAB ' : ''
-        const showLabel = kind === 'cab' && (x2 - x1) > 14
+        const showLabel = (x2 - x1) > 14
         return (
           <g key={`hs${i}`}>
             <line x1={x1} y1={dimY1} x2={x2} y2={dimY1} stroke={color} strokeWidth={0.45} />

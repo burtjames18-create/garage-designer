@@ -2936,12 +2936,14 @@ function computeMiteredOutlines(walls: GarageWall[]): Map<string, {
 }
 
 // ─── Individual wall mesh ─────────────────────────────────────────────────────
-const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, onClick, onPointerDown, startTrim, endTrim, outline, baseTex }: {
+const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, onClick, onPointerDown, startTrim, endTrim, outline, baseTex, interiorNormal }: {
   wall: GarageWall; wireframe: boolean; blueprint?: boolean; selected: boolean; onClick: () => void
   onPointerDown: (e: ThreeEvent<PointerEvent>) => void
   startTrim: number; endTrim: number
   outline: { p0x: number; p0z: number; p1x: number; p1z: number; n0x: number; n0z: number; n1x: number; n1z: number } | null
   baseTex: THREE.Texture | null
+  /** Unit normal pointing INTO the garage (resolved via floor polygon) */
+  interiorNormal: { nx: number; nz: number }
 }) {
   const dx = wall.x2 - wall.x1, dz = wall.z2 - wall.z1
   const lengthIn = wallLengthIn(wall.x1, wall.z1, wall.x2, wall.z2)
@@ -3182,6 +3184,38 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
         />
       ))}
     </group>
+
+    {/* Selection face overlays — interior face = blue, exterior = red, so the
+       user can tell which side of the wall they're working on. */}
+    {selected && !blueprint && !wireframe && (() => {
+      const lenFt = FT(lengthIn)
+      const hFt = FT(wall.height)
+      const halfT = thickFt / 2
+      const cxFt = FT((wall.x1 + wall.x2) / 2)
+      const czFt = FT((wall.z1 + wall.z2) / 2)
+      const ux = (wall.x2 - wall.x1) / Math.max(0.0001, lengthIn)
+      const uz = (wall.z2 - wall.z1) / Math.max(0.0001, lengthIn)
+      const inX = interiorNormal.nx, inZ = interiorNormal.nz
+      // Push overlays slightly past the wall face so they don't z-fight.
+      const off = halfT + 0.005
+      const intCenter: [number, number, number] = [cxFt + inX * off, hFt / 2, czFt + inZ * off]
+      const extCenter: [number, number, number] = [cxFt - inX * off, hFt / 2, czFt - inZ * off]
+      const rotInt = Math.atan2(inX, inZ)
+      const rotExt = Math.atan2(-inX, -inZ)
+      void ux; void uz
+      return (
+        <>
+          <mesh position={intCenter} rotation={[0, rotInt, 0]}>
+            <planeGeometry args={[lenFt, hFt]} />
+            <meshBasicMaterial color="#3b82f6" transparent opacity={0.35} side={THREE.DoubleSide} depthWrite={false} />
+          </mesh>
+          <mesh position={extCenter} rotation={[0, rotExt, 0]}>
+            <planeGeometry args={[lenFt, hFt]} />
+            <meshBasicMaterial color="#ef4444" transparent opacity={0.35} side={THREE.DoubleSide} depthWrite={false} />
+          </mesh>
+        </>
+      )
+    })()}
     </>
   )
 })
@@ -5963,7 +5997,19 @@ export default function GarageShell() {
               onPointerDown={handleWallDown}
               startTrim={startTrim} endTrim={endTrim}
               outline={outlineMap.get(wall.id) ?? null}
-              baseTex={detileFloorTex} />
+              baseTex={detileFloorTex}
+              interiorNormal={(() => {
+                const wdx = wall.x2 - wall.x1, wdz = wall.z2 - wall.z1
+                const wlen = Math.hypot(wdx, wdz) || 1
+                const ux = wdx / wlen, uz = wdz / wlen
+                let nx = -uz, nz = ux
+                const midX = (wall.x1 + wall.x2) / 2
+                const midZ = (wall.z1 + wall.z2) / 2
+                if (!pointInPolygon(midX + nx * 6, midZ + nz * 6, effectiveFloorPts)) {
+                  nx = -nx; nz = -nz
+                }
+                return { nx, nz }
+              })()} />
             {isSel && !selectedSlatwallPanelId && !selectedStainlessBacksplashPanelId && <>
               <DragHandle
                 position={[FT(wall.x1), 0.08, FT(wall.z1)]}
