@@ -283,15 +283,44 @@ export interface StainlessBacksplashPanel {
   texture?: BacksplashTexture  // defaults to 'stainless' when omitted
 }
 
-/** A raised floor step/platform — sits on the floor surface, uses floor texture. */
+/** A raised floor step/platform — arbitrary quadrilateral, sits on the floor surface.
+ *  `corners` is an array of 4 [x, z] pairs (inches from garage center), ordered
+ *  counter-clockwise when viewed from above: [NW, NE, SE, SW] by default.
+ *  Legacy saves without `corners` are migrated from the old center+width+depth rect. */
 export interface FloorStep {
   id: string
   label: string
-  x: number      // center X in inches from garage center
-  z: number      // center Z in inches from garage center
-  width: number  // inches (X dimension, typically spans full garage width)
-  depth: number  // inches (Z dimension)
-  height: number // inches (step rise height, default 4)
+  corners: [number, number][]  // 4 corner points [x, z] in inches
+  height: number               // inches (step rise height, default 4)
+  // Legacy fields — kept for backward compat during migration, not used at runtime:
+  x?: number
+  z?: number
+  width?: number
+  depth?: number
+}
+
+/** Derive center + bounding dims from corners (for snapping, sidebar display, etc.) */
+export function stepBounds(step: FloorStep) {
+  const xs = step.corners.map(c => c[0])
+  const zs = step.corners.map(c => c[1])
+  const minX = Math.min(...xs), maxX = Math.max(...xs)
+  const minZ = Math.min(...zs), maxZ = Math.max(...zs)
+  return {
+    x: (minX + maxX) / 2, z: (minZ + maxZ) / 2,
+    width: maxX - minX, depth: maxZ - minZ,
+    minX, maxX, minZ, maxZ,
+  }
+}
+
+/** Migrate a legacy rect FloorStep to the new corners format. */
+export function migrateFloorStep(step: any): FloorStep {
+  if (step.corners) return step as FloorStep
+  const x = step.x ?? 0, z = step.z ?? 0
+  const hw = (step.width ?? 48) / 2, hd = (step.depth ?? 24) / 2
+  return {
+    id: step.id, label: step.label, height: step.height ?? 4,
+    corners: [[x - hw, z - hd], [x + hw, z - hd], [x + hw, z + hd], [x - hw, z + hd]],
+  }
 }
 
 /** A slatwall-mounted accessory — positioned relative to its parent panel. */
@@ -943,13 +972,12 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
 
   addFloorStep: () => {
     const { garageWidth, garageDepth } = get()
+    const hw = garageWidth / 2, hd = 24
+    const cz = -(garageDepth / 2 - 24) // near back wall
     const step: FloorStep = {
       id: uid(),
       label: `Step ${get().floorSteps.length + 1}`,
-      x: 0,
-      z: -(garageDepth / 2 - 24),   // near back wall, 24" from back
-      width: garageWidth,
-      depth: 48,
+      corners: [[-hw, cz - hd], [hw, cz - hd], [hw, cz + hd], [-hw, cz + hd]],
       height: 4,
     }
     set(s => ({ floorSteps: [...s.floorSteps, step], selectedFloorStepId: step.id }))
@@ -1487,7 +1515,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       walls:            ((d.walls as GarageWall[]) ?? []).map(w => ({ ...w, visible: w.visible ?? true })),
       slatwallPanels:   (d.slatwallPanels as SlatwallPanel[]) ?? [],
       stainlessBacksplashPanels: (d.stainlessBacksplashPanels as StainlessBacksplashPanel[]) ?? [],
-      floorSteps:       (d.floorSteps as FloorStep[])   ?? [],
+      floorSteps:       ((d.floorSteps as any[]) ?? []).map(migrateFloorStep),
       shapes:           (d.shapes as GarageShape[])     ?? [],
       cabinets:         ((d.cabinets as PlacedCabinet[]) ?? []).map(c => ({ ...c, line: c.line ?? 'technica' as const })),
       countertops:      (d.countertops as Countertop[]) ?? [],

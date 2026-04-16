@@ -449,12 +449,9 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
 
       {/* Floor steps */}
       {floorSteps.map(step => (
-        <rect
+        <polygon
           key={step.id}
-          x={sx(step.x - step.width / 2)}
-          y={sz(step.z - step.depth / 2)}
-          width={step.width * scale}
-          height={step.depth * scale}
+          points={step.corners.map(([cx, cz]) => `${sx(cx)},${sz(cz)}`).join(' ')}
           fill="#e0ddd8"
           stroke="#999"
           strokeWidth={0.6}

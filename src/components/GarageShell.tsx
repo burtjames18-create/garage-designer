@@ -5,6 +5,7 @@ import { useThree, useFrame } from '@react-three/fiber'
 import type { ThreeEvent } from '@react-three/fiber'
 import { useGarageStore, COUNTERTOP_DEPTH, COUNTERTOP_THICKNESS, CEILING_LIGHT_W, CEILING_LIGHT_L, CEILING_LIGHT_TH, RACK_DECK_THICKNESS, RACK_LEG_SIZE } from '../store/garageStore'
 import type { GarageWall, GarageShape, FloorPoint, SlatwallPanel, StainlessBacksplashPanel, SlatwallAccessory, PlacedCabinet, Countertop, CeilingLight, PlacedItem, FloorStep, OverheadRack, WallOpening } from '../store/garageStore'
+import { stepBounds } from '../store/garageStore'
 import { slatwallColors } from '../data/slatwallColors'
 import { getTextureById, texturePath } from '../data/textureCatalog'
 import { flooringTexturePathById } from '../data/flooringColors'
@@ -84,13 +85,7 @@ function getStepWallOverlaps(
   const ux = dx / len, uz = dz / len
   const nx = -uz, nz = ux   // wall normal
 
-  const halfW = step.width / 2, halfD = step.depth / 2
-  const corners: [number, number][] = [
-    [step.x - halfW, step.z - halfD],
-    [step.x + halfW, step.z - halfD],
-    [step.x + halfW, step.z + halfD],
-    [step.x - halfW, step.z + halfD],
-  ]
+  const corners = step.corners
 
   let minU = Infinity, maxU = -Infinity
   let minV = Infinity, maxV = -Infinity
@@ -547,6 +542,17 @@ function pointInPolygon(x: number, z: number, pts: FloorPoint[]): boolean {
   for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
     const xi = pts[i].x, zi = pts[i].z
     const xj = pts[j].x, zj = pts[j].z
+    const intersect = ((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)
+    if (intersect) inside = !inside
+  }
+  return inside
+}
+
+/** Point-in-polygon test for [x,z] tuples (used by floor steps). */
+function pointInPoly(x: number, z: number, corners: [number, number][]): boolean {
+  let inside = false
+  for (let i = 0, j = corners.length - 1; i < corners.length; j = i++) {
+    const [xi, zi] = corners[i], [xj, zj] = corners[j]
     const intersect = ((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)
     if (intersect) inside = !inside
   }
@@ -2916,7 +2922,8 @@ function DragHandle({ position, color, size = 0.2, onPointerDown }: {
   onPointerDown: (e: ThreeEvent<PointerEvent>) => void
 }) {
   return (
-    <group position={position} onPointerDown={onPointerDown}>
+    <group position={position} onPointerDown={onPointerDown}
+      onClick={e => { e.stopPropagation() }}>
       {/* Solid fill — one mesh, one material */}
       <mesh renderOrder={100} frustumCulled={false}>
         <sphereGeometry args={[size * 1.5, 18, 14]} />
@@ -3191,85 +3198,115 @@ const SlatwallAccessoryMesh = memo(function SlatwallAccessoryMesh({ acc, panel, 
 })
 
 // ─── Floor step mesh — textured top face, solid concrete sides, sphere corner handles ──
-const FloorStepMesh = memo(function FloorStepMesh({ step, baseTex, wireframe, selected, onClick, onPointerDown, onCornerDown }: {
+const FloorStepMesh = memo(function FloorStepMesh({ step, baseTex, wireframe, selected, onClick, onPointerDown, onCornerDown, onAddCorner, onRemoveCorner }: {
   step: FloorStep
   baseTex: THREE.Texture
   wireframe: boolean
   selected: boolean
   onClick: (e: ThreeEvent<MouseEvent>) => void
   onPointerDown: (e: ThreeEvent<PointerEvent>) => void
-  onCornerDown: (corner: 0 | 1 | 2 | 3, e: ThreeEvent<PointerEvent>) => void
+  onCornerDown: (corner: number, e: ThreeEvent<PointerEvent>) => void
+  onAddCorner: (afterIdx: number) => void
+  onRemoveCorner: (idx: number) => void
 }) {
-  const w = FT(step.width), d = FT(step.depth), h = FT(step.height)
+  const h = FT(step.height)
+  const { width: bw, depth: bd } = stepBounds(step)
+  const w = FT(bw), d = FT(bd)
 
-  // Clone each texture once (only when baseTex changes) — avoids re-creating WebGL textures
-  // every drag frame. Repeat is a plain Vector2; mutating it here during render is safe because
-  // Three.js reads it when building material uniforms, which happens after React renders.
-  // BoxGeometry material order: +X(0), -X(1), +Y/top(2), -Y/bottom(3), +Z(4), -Z(5)
-  const stepTex  = useMemo(() => { const t = baseTex.clone(); t.needsUpdate = true; return t }, [baseTex])
-  const sideXTex = useMemo(() => { const t = baseTex.clone(); t.needsUpdate = true; return t }, [baseTex])
-  const sideZTex = useMemo(() => { const t = baseTex.clone(); t.needsUpdate = true; return t }, [baseTex])
+  // Build extruded geometry from polygon corners. Shape is in X-Z plane
+  // (using shape-x → world X, shape-y → world Z), extruded along +Y by h.
+  const cornersKey = step.corners.map(c => `${c[0]},${c[1]}`).join('|')
+  const geom = useMemo(() => {
+    const s = new THREE.Shape()
+    const c = step.corners
+    // Shape coords: shape-x → world X, shape-y → world Z (after rotation
+    // we negate shape-y, so feed -Z here to cancel the flip).
+    s.moveTo(FT(c[0][0]), -FT(c[0][1]))
+    for (let i = 1; i < c.length; i++) s.lineTo(FT(c[i][0]), -FT(c[i][1]))
+    s.lineTo(FT(c[0][0]), -FT(c[0][1]))
+    const g = new THREE.ExtrudeGeometry(s, {
+      depth: h, bevelEnabled: false, steps: 1, curveSegments: 1,
+    })
+    // rotateX(-π/2): world-x = shape-x, world-y = z_extrude (0..h),
+    // world-z = -shape-y. Since shape-y = -FT(cornerZ), world-z = FT(cornerZ).
+    g.rotateX(-Math.PI / 2)
+    return g
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cornersKey, h])
+  useEffect(() => () => geom.dispose(), [geom])
 
-  // Synchronously update repeat during render — no useEffect lag
-  stepTex.repeat.set(w * baseTex.repeat.x,  d * baseTex.repeat.y)   // top: width × depth
-  sideXTex.repeat.set(d * baseTex.repeat.x, h * baseTex.repeat.y)   // ±X sides: depth × height
-  sideZTex.repeat.set(w * baseTex.repeat.x, h * baseTex.repeat.y)   // ±Z sides: width × height
-
-  const HANDLE_R = FT(5)
-  const corners: [number, number, number, 0 | 1 | 2 | 3][] = [
-    [-w / 2, h + HANDLE_R, -d / 2, 0],
-    [ w / 2, h + HANDLE_R, -d / 2, 1],
-    [ w / 2, h + HANDLE_R,  d / 2, 2],
-    [-w / 2, h + HANDLE_R,  d / 2, 3],
-  ]
+  // Use the same repeat as the floor so the step texture matches seamlessly.
+  // ExtrudeGeometry default UVs map shape coords (in feet) to UV space; with
+  // repeat = baseTex.repeat (repeats-per-foot), the density matches the floor.
+  const stepTex = useMemo(() => { const t = baseTex.clone(); t.needsUpdate = true; return t }, [baseTex])
+  stepTex.repeat.set(baseTex.repeat.x, baseTex.repeat.y)
 
   const wfColor = selected ? '#00e5ff' : '#1a2a3a'
-
-  // Sink the step group 0.025" below y=0 so the bottom face is hidden under the floor
-  // surface — eliminates floor/step z-fighting without any visual difference on top.
   const SINK = FT(0.025)
+  const HANDLE_Y = h + 0.08  // just above step surface, same as wall handles
 
   return (
-    <group position={[FT(step.x), -SINK, FT(step.z)]}>
+    <group position={[0, -SINK, 0]}>
       <mesh
-        position={[0, h / 2, 0]}
+        geometry={geom}
         receiveShadow castShadow
         onClick={onClick}
         onPointerDown={onPointerDown}
       >
-        <boxGeometry args={[w, h, d]} />
-        {/* +X/-X sides (depth×height), +Y top (width×depth), -Y bottom, +Z/-Z sides (width×height) */}
-        {/* Side faces get a slight positive polygonOffset so baseboard risers (with negative offset) always render in front */}
-        <meshStandardMaterial attach="material-0" map={wireframe ? null : sideXTex} color={wireframe ? wfColor : '#ffffff'} wireframe={wireframe} roughness={0.85} polygonOffset polygonOffsetFactor={3} polygonOffsetUnits={6} />
-        <meshStandardMaterial attach="material-1" map={wireframe ? null : sideXTex} color={wireframe ? wfColor : '#ffffff'} wireframe={wireframe} roughness={0.85} polygonOffset polygonOffsetFactor={3} polygonOffsetUnits={6} />
-        <meshStandardMaterial attach="material-2"
+        <meshStandardMaterial
           map={wireframe ? null : stepTex}
           color={wireframe ? wfColor : '#ffffff'}
           wireframe={wireframe}
-          roughness={wireframe ? 1 : 0.15}
+          roughness={wireframe ? 1 : 0.45}
           metalness={wireframe ? 0 : 0.05}
           emissive={selected && !wireframe ? '#004466' : '#000000'}
           emissiveIntensity={selected && !wireframe ? 0.08 : 0}
         />
-        {/* Bottom face: pushed further from camera so the floor always wins */}
-        <meshStandardMaterial attach="material-3" color={wireframe ? wfColor : '#888'} wireframe={wireframe} roughness={0.9} polygonOffset polygonOffsetFactor={6} polygonOffsetUnits={12} />
-        <meshStandardMaterial attach="material-4" map={wireframe ? null : sideZTex} color={wireframe ? wfColor : '#ffffff'} wireframe={wireframe} roughness={0.85} polygonOffset polygonOffsetFactor={3} polygonOffsetUnits={6} />
-        <meshStandardMaterial attach="material-5" map={wireframe ? null : sideZTex} color={wireframe ? wfColor : '#ffffff'} wireframe={wireframe} roughness={0.85} polygonOffset polygonOffsetFactor={3} polygonOffsetUnits={6} />
       </mesh>
 
-      {/* Sphere corner handles — elevated above the step so they're always clickable
-          from any camera angle. depthTest=false ensures visibility through the step. */}
-      {selected && !wireframe && corners.map(([cx, cy, cz, corner]) => (
-        <mesh
-          key={corner}
-          position={[cx, cy, cz]}
-          onPointerDown={e => { e.stopPropagation(); onCornerDown(corner, e) }}
+      {/* Corner handles — same style as wall corners (orange, size 0.18) */}
+      {selected && !wireframe && step.corners.map(([cx, cz], i) => (
+        <group key={`c${i}`}
+          onPointerDown={e => {
+            e.stopPropagation()
+            if (e.nativeEvent.button === 2 && step.corners.length > 3) {
+              onRemoveCorner(i)
+            } else {
+              onCornerDown(i, e)
+            }
+          }}
           onClick={e => e.stopPropagation()}
+          onContextMenu={(e: any) => e.nativeEvent?.preventDefault?.()}
         >
-          <sphereGeometry args={[HANDLE_R, 10, 7]} />
-          <meshBasicMaterial color="#00aaff" depthTest={false} />
-        </mesh>
+          <DragHandle
+            position={[FT(cx), HANDLE_Y, FT(cz)]}
+            color="#ff8800"
+            size={0.18}
+            onPointerDown={e => {
+              e.stopPropagation()
+              if (e.nativeEvent.button === 2 && step.corners.length > 3) {
+                onRemoveCorner(i)
+              } else {
+                onCornerDown(i, e)
+              }
+            }}
+          />
+        </group>
       ))}
+      {/* Midpoint handles — smaller green, click to add a new corner */}
+      {selected && !wireframe && step.corners.map(([cx, cz], i) => {
+        const [nx, nz] = step.corners[(i + 1) % step.corners.length]
+        const mx = (cx + nx) / 2, mz = (cz + nz) / 2
+        return (
+          <DragHandle
+            key={`m${i}`}
+            position={[FT(mx), HANDLE_Y, FT(mz)]}
+            color="#44ff88"
+            size={0.12}
+            onPointerDown={e => { e.stopPropagation(); onAddCorner(i) }}
+          />
+        )
+      })}
     </group>
   )
 })
@@ -3693,16 +3730,14 @@ interface CountertopDragState {
 /** Dragging a floor step along the floor plane */
 interface FloorStepDragState {
   stepId: string
-  hitX: number; hitZ: number   // floor hit at drag start (feet)
-  initX: number; initZ: number // step center at drag start (inches)
+  hitX: number; hitZ: number              // floor hit at drag start (feet)
+  initCorners: [number, number][]         // corners at drag start (inches)
 }
 
-/** Dragging one corner of a floor step to resize it on the floor plane */
+/** Dragging one corner of a floor step to reshape it on the floor plane */
 interface FloorStepCornerDragState {
   stepId: string
-  corner: 0 | 1 | 2 | 3  // 0=NW(-X,-Z), 1=NE(+X,-Z), 2=SE(+X,+Z), 3=SW(-X,+Z)
-  fixedX: number           // inches — opposite corner X (stays anchored)
-  fixedZ: number           // inches — opposite corner Z (stays anchored)
+  cornerIdx: number  // index into corners[]
 }
 
 /** Dragging the body of a slatwall panel to slide it along and up/down the wall */
@@ -4275,30 +4310,40 @@ export default function GarageShell() {
     floorStepDragRef.current = {
       stepId,
       hitX: hit.x, hitZ: hit.z,
-      initX: step.x, initZ: step.z,
+      initCorners: step.corners.map(c => [...c] as [number, number]),
     }
     beginDrag()
   }, [floorHit, beginDrag, selectFloorStep])
 
   // ── Start floor step corner drag ────────────────────��───────────────────
   const startFloorStepCornerDrag = useCallback((
-    stepId: string, corner: 0 | 1 | 2 | 3,
+    stepId: string, corner: number,
     e: ThreeEvent<PointerEvent>,
   ) => {
     if (e.nativeEvent.button !== 0) return
     e.stopPropagation()
     e.nativeEvent.stopImmediatePropagation()
-    const step = floorStepsRef.current.find(s => s.id === stepId)
-    if (!step) return
-    const halfW = step.width / 2, halfD = step.depth / 2
-    // Corner positions: 0=NW, 1=NE, 2=SE, 3=SW
-    const cxs = [step.x - halfW, step.x + halfW, step.x + halfW, step.x - halfW]
-    const czs = [step.z - halfD, step.z - halfD, step.z + halfD, step.z + halfD]
-    const opp = ((corner + 2) % 4) as 0 | 1 | 2 | 3
-    floorStepCornerDragRef.current = { stepId, corner, fixedX: cxs[opp], fixedZ: czs[opp] }
+    floorStepCornerDragRef.current = { stepId, cornerIdx: corner }
     selectFloorStep(stepId)
     beginDrag()
   }, [selectFloorStep, beginDrag])
+
+  const addFloorStepCorner = useCallback((stepId: string, afterIdx: number) => {
+    const step = floorStepsRef.current.find(s => s.id === stepId)
+    if (!step) return
+    const [ax, az] = step.corners[afterIdx]
+    const [bx, bz] = step.corners[(afterIdx + 1) % step.corners.length]
+    const newCorners = [...step.corners]
+    newCorners.splice(afterIdx + 1, 0, [(ax + bx) / 2, (az + bz) / 2])
+    updateFloorStepRef.current(stepId, { corners: newCorners })
+  }, [])
+
+  const removeFloorStepCorner = useCallback((stepId: string, idx: number) => {
+    const step = floorStepsRef.current.find(s => s.id === stepId)
+    if (!step || step.corners.length <= 3) return
+    const newCorners = step.corners.filter((_, i) => i !== idx)
+    updateFloorStepRef.current(stepId, { corners: newCorners })
+  }, [])
 
   // ── Start slatwall body drag ─────────────────────────────────────────────
   const startSlatwallBodyDrag = useCallback((panelId: string, e: ThreeEvent<PointerEvent>) => {
@@ -5422,9 +5467,7 @@ export default function GarageShell() {
               // When on the floor, sit on top of any step the cabinet is over
               let floorY = 0
               for (const step of floorStepsRef.current) {
-                const halfW = step.width / 2, halfD = step.depth / 2
-                if (rawX > step.x - halfW && rawX < step.x + halfW &&
-                    rawZ > step.z - halfD && rawZ < step.z + halfD) {
+                if (pointInPoly(rawX, rawZ, step.corners)) {
                   floorY = Math.max(floorY, step.height)
                 }
               }
@@ -5481,82 +5524,129 @@ export default function GarageShell() {
         return
       }
 
-      // Floor step corner drag — resize by dragging corners on the floor plane
+      // Floor step corner drag — move single corner independently
       const fscd = floorStepCornerDragRef.current
       if (fscd) {
         const hit = floorHit(e.clientX, e.clientY)
         if (hit) {
-          let hx = hit.x * 12, hz = hit.z * 12
-          // Snap dragged corner to wall interior faces (axis-aligned walls only)
-          const SNAP = 2  // inches
-          for (const wall of wallsRef.current) {
-            if (Math.abs(wall.z1 - wall.z2) < 2) {
-              // Horizontal wall — snap Z
-              const wz = (wall.z1 + wall.z2) / 2
-              const faceZ = wz + (wz < 0 ? 1 : -1) * wall.thickness / 2
-              if (Math.abs(hz - faceZ) < SNAP) hz = faceZ
+          let hx = snapToGrid(hit.x * 12), hz = snapToGrid(hit.z * 12)
+          const SNAP = 4
+          let snapped = false
+          // 1. Snap to wall corner points (both X and Z together — highest
+          //    priority so the step corner locks onto the wall junction).
+          //    Also collect interior face corners (wall endpoint offset by
+          //    half-thickness along the interior normal).
+          if (!snapped) {
+            let bestDist = Infinity, bestX = hx, bestZ = hz
+            for (const wall of wallsRef.current) {
+              const pts = [
+                [wall.x1, wall.z1],
+                [wall.x2, wall.z2],
+              ]
+              // Interior face corners: offset each endpoint by ±halfThick
+              // along the wall normal (both sides, closest wins).
+              const dx = wall.x2 - wall.x1, dz = wall.z2 - wall.z1
+              const len = Math.hypot(dx, dz)
+              if (len > 0.1) {
+                const nx = -dz / len * wall.thickness / 2
+                const nz =  dx / len * wall.thickness / 2
+                pts.push(
+                  [wall.x1 + nx, wall.z1 + nz], [wall.x1 - nx, wall.z1 - nz],
+                  [wall.x2 + nx, wall.z2 + nz], [wall.x2 - nx, wall.z2 - nz],
+                )
+              }
+              for (const [px, pz] of pts) {
+                const d = Math.hypot(hx - px, hz - pz)
+                if (d < SNAP && d < bestDist) { bestDist = d; bestX = px; bestZ = pz }
+              }
             }
-            if (Math.abs(wall.x1 - wall.x2) < 2) {
-              // Vertical wall — snap X
-              const wx = (wall.x1 + wall.x2) / 2
-              const faceX = wx + (wx < 0 ? 1 : -1) * wall.thickness / 2
-              if (Math.abs(hx - faceX) < SNAP) hx = faceX
-            }
+            if (bestDist < SNAP) { hx = bestX; hz = bestZ; snapped = true }
           }
-          const newX = (hx + fscd.fixedX) / 2
-          const newZ = (hz + fscd.fixedZ) / 2
-          const newW = Math.max(12, Math.abs(hx - fscd.fixedX))
-          const newD = Math.max(6,  Math.abs(hz - fscd.fixedZ))
-          updateFloorStepRef.current(fscd.stepId, { x: newX, z: newZ, width: newW, depth: newD })
-        }
-        return
-      }
-
-      // Floor step body drag (floor plane) — snap step edges to wall interior faces
-      const fsd = floorStepDragRef.current
-      if (fsd) {
-        const hit = floorHit(e.clientX, e.clientY)
-        if (hit) {
-          const step = floorStepsRef.current.find(s => s.id === fsd.stepId)
-          const dx = hit.x - fsd.hitX, dz = hit.z - fsd.hitZ
-          let newX = snapToGrid(fsd.initX + dx * 12)
-          let newZ = snapToGrid(fsd.initZ + dz * 12)
-          if (step) {
-            const SNAP = 2
-            const halfW = step.width / 2, halfD = step.depth / 2
+          // 2. Snap to other step-up corners (both axes together)
+          if (!snapped) {
+            let bestDist = Infinity, bestX = hx, bestZ = hz
+            for (const other of floorStepsRef.current) {
+              if (other.id === fscd.stepId) continue
+              for (const [ox, oz] of other.corners) {
+                const d = Math.hypot(hx - ox, hz - oz)
+                if (d < SNAP && d < bestDist) { bestDist = d; bestX = ox; bestZ = oz }
+              }
+            }
+            if (bestDist < SNAP) { hx = bestX; hz = bestZ; snapped = true }
+          }
+          // 3. Single-axis snap to wall interior faces (axis-aligned walls)
+          if (!snapped) {
             for (const wall of wallsRef.current) {
               if (Math.abs(wall.z1 - wall.z2) < 2) {
                 const wz = (wall.z1 + wall.z2) / 2
                 const faceZ = wz + (wz < 0 ? 1 : -1) * wall.thickness / 2
-                if (Math.abs(newZ - halfD - faceZ) < SNAP) newZ = faceZ + halfD
-                if (Math.abs(newZ + halfD - faceZ) < SNAP) newZ = faceZ - halfD
+                if (Math.abs(hz - faceZ) < SNAP) hz = faceZ
               }
               if (Math.abs(wall.x1 - wall.x2) < 2) {
                 const wx = (wall.x1 + wall.x2) / 2
                 const faceX = wx + (wx < 0 ? 1 : -1) * wall.thickness / 2
-                if (Math.abs(newX - halfW - faceX) < SNAP) newX = faceX + halfW
-                if (Math.abs(newX + halfW - faceX) < SNAP) newX = faceX - halfW
+                if (Math.abs(hx - faceX) < SNAP) hx = faceX
               }
             }
-            // Snap to other steps' edges (step-to-step).
-            for (const other of floorStepsRef.current) {
-              if (other.id === step.id) continue
-              const oHalfW = other.width / 2, oHalfD = other.depth / 2
-              const oLeft = other.x - oHalfW, oRight = other.x + oHalfW
-              const oFront = other.z - oHalfD, oBack = other.z + oHalfD
-              // X-axis edge snaps
-              if (Math.abs((newX - halfW) - oRight) < SNAP) newX = oRight + halfW  // my left ↔ other right
-              if (Math.abs((newX + halfW) - oLeft)  < SNAP) newX = oLeft  - halfW  // my right ↔ other left
-              if (Math.abs((newX - halfW) - oLeft)  < SNAP) newX = oLeft  + halfW  // left-align
-              if (Math.abs((newX + halfW) - oRight) < SNAP) newX = oRight - halfW  // right-align
-              // Z-axis edge snaps
-              if (Math.abs((newZ - halfD) - oBack)  < SNAP) newZ = oBack  + halfD  // my front ↔ other back
-              if (Math.abs((newZ + halfD) - oFront) < SNAP) newZ = oFront - halfD  // my back ↔ other front
-              if (Math.abs((newZ - halfD) - oFront) < SNAP) newZ = oFront + halfD  // front-align
-              if (Math.abs((newZ + halfD) - oBack)  < SNAP) newZ = oBack  - halfD  // back-align
+          }
+          const step = floorStepsRef.current.find(s => s.id === fscd.stepId)
+          if (step) {
+            const newCorners = step.corners.map((c, i) =>
+              i === fscd.cornerIdx ? [hx, hz] as [number, number] : [...c] as [number, number]
+            )
+            updateFloorStepRef.current(fscd.stepId, { corners: newCorners })
+          }
+        }
+        return
+      }
+
+      // Floor step body drag — translate ALL corners by the drag delta
+      const fsd = floorStepDragRef.current
+      if (fsd) {
+        const hit = floorHit(e.clientX, e.clientY)
+        if (hit) {
+          const dxIn = snapToGrid((hit.x - fsd.hitX) * 12)
+          const dzIn = snapToGrid((hit.z - fsd.hitZ) * 12)
+          const newCorners = fsd.initCorners.map(([cx, cz]) =>
+            [cx + dxIn, cz + dzIn] as [number, number]
+          )
+          // Snap bounding box edges to walls and other steps
+          const SNAP = 2
+          const xs = newCorners.map(c => c[0]), zs = newCorners.map(c => c[1])
+          const minX = Math.min(...xs), maxX = Math.max(...xs)
+          const minZ = Math.min(...zs), maxZ = Math.max(...zs)
+          let snapDx = 0, snapDz = 0
+          for (const wall of wallsRef.current) {
+            if (Math.abs(wall.z1 - wall.z2) < 2) {
+              const wz = (wall.z1 + wall.z2) / 2
+              const faceZ = wz + (wz < 0 ? 1 : -1) * wall.thickness / 2
+              if (Math.abs(minZ - faceZ) < SNAP) snapDz = faceZ - minZ
+              else if (Math.abs(maxZ - faceZ) < SNAP) snapDz = faceZ - maxZ
+            }
+            if (Math.abs(wall.x1 - wall.x2) < 2) {
+              const wx = (wall.x1 + wall.x2) / 2
+              const faceX = wx + (wx < 0 ? 1 : -1) * wall.thickness / 2
+              if (Math.abs(minX - faceX) < SNAP) snapDx = faceX - minX
+              else if (Math.abs(maxX - faceX) < SNAP) snapDx = faceX - maxX
             }
           }
-          updateFloorStepRef.current(fsd.stepId, { x: newX, z: newZ })
+          // Snap to other steps' bounding edges
+          for (const other of floorStepsRef.current) {
+            if (other.id === fsd.stepId) continue
+            const ob = stepBounds(other)
+            if (!snapDx && Math.abs(minX - ob.maxX) < SNAP) snapDx = ob.maxX - minX
+            if (!snapDx && Math.abs(maxX - ob.minX) < SNAP) snapDx = ob.minX - maxX
+            if (!snapDx && Math.abs(minX - ob.minX) < SNAP) snapDx = ob.minX - minX
+            if (!snapDx && Math.abs(maxX - ob.maxX) < SNAP) snapDx = ob.maxX - maxX
+            if (!snapDz && Math.abs(minZ - ob.maxZ) < SNAP) snapDz = ob.maxZ - minZ
+            if (!snapDz && Math.abs(maxZ - ob.minZ) < SNAP) snapDz = ob.minZ - maxZ
+            if (!snapDz && Math.abs(minZ - ob.minZ) < SNAP) snapDz = ob.minZ - minZ
+            if (!snapDz && Math.abs(maxZ - ob.maxZ) < SNAP) snapDz = ob.maxZ - maxZ
+          }
+          if (snapDx || snapDz) {
+            for (const c of newCorners) { c[0] += snapDx; c[1] += snapDz }
+          }
+          updateFloorStepRef.current(fsd.stepId, { corners: newCorners })
         }
         return
       }
@@ -5769,6 +5859,8 @@ export default function GarageShell() {
           onClick={e => { e.stopPropagation(); if (suppressNextClick.current) { suppressNextClick.current = false; return }; selectFloorStep(step.id) }}
           onPointerDown={e => { e.stopPropagation(); startFloorStepDrag(step.id, e) }}
           onCornerDown={(corner, e) => startFloorStepCornerDrag(step.id, corner, e)}
+          onAddCorner={afterIdx => addFloorStepCorner(step.id, afterIdx)}
+          onRemoveCorner={idx => removeFloorStepCorner(step.id, idx)}
         />
       ))}
 

@@ -222,39 +222,25 @@ export default function Sidebar() {
     let stepFaceSqIn = 0
     const TOUCH_TOL = 2  // inches: edge is "against wall" if within this
     for (const step of floorSteps) {
-      const halfW = step.width / 2, halfD = step.depth / 2
-      // Four edges as {along-axis length, and the midpoint / direction of that edge}
-      const edges = [
-        { len: step.width, // top edge (towards -Z if +Z is rear)
-          mid: { x: step.x, z: step.z - halfD }, axis: 'h' as const },
-        { len: step.width, // bottom edge
-          mid: { x: step.x, z: step.z + halfD }, axis: 'h' as const },
-        { len: step.depth, // left edge
-          mid: { x: step.x - halfW, z: step.z }, axis: 'v' as const },
-        { len: step.depth, // right edge
-          mid: { x: step.x + halfW, z: step.z }, axis: 'v' as const },
-      ]
-      for (const e of edges) {
-        // Is this edge against any wall interior face? Project edge midpoint
-        // onto wall; if perp distance ≈ wall thickness/2 + TOUCH_TOL AND the
-        // midpoint falls within the wall span, count it as touching.
+      const c = step.corners
+      for (let i = 0; i < c.length; i++) {
+        const [x1, z1] = c[i], [x2, z2] = c[(i + 1) % c.length]
+        const edgeLen = Math.hypot(x2 - x1, z2 - z1)
+        if (edgeLen < 0.1) continue
+        const mx = (x1 + x2) / 2, mz = (z1 + z2) / 2
         let touching = false
         for (const w of walls) {
           const wdx = w.x2 - w.x1, wdz = w.z2 - w.z1
           const wlen = Math.hypot(wdx, wdz)
           if (wlen < 1) continue
           const ux = wdx / wlen, uz = wdz / wlen
-          // Wall must be oriented parallel to the edge axis to "touch" it
-          const wallHoriz = Math.abs(wdz) < Math.abs(wdx)
-          if (e.axis === 'h' && !wallHoriz) continue
-          if (e.axis === 'v' && wallHoriz) continue
-          const vx = e.mid.x - w.x1, vz = e.mid.z - w.z1
+          const vx = mx - w.x1, vz = mz - w.z1
           const along = vx * ux + vz * uz
           const perp = Math.abs(vx * (-uz) + vz * ux)
           if (along < -1 || along > wlen + 1) continue
           if (perp <= w.thickness / 2 + TOUCH_TOL) { touching = true; break }
         }
-        if (!touching) stepFaceSqIn += e.len * step.height
+        if (!touching) stepFaceSqIn += edgeLen * step.height
       }
     }
     return (shoelaceSqIn + stemSqIn + bbFaceSqIn + stepFaceSqIn) / 144
@@ -347,11 +333,8 @@ export default function Sidebar() {
                 if (!step) return null
                 return (
                   <div className="field-group" style={{ marginTop: 8 }}>
-                    <MeasureInput label="Width" inches={step.width} onChange={v => updateFloorStep(step.id, { width: Math.max(12, v) })} min={12} max={1200} />
-                    <MeasureInput label="Depth" inches={step.depth} onChange={v => updateFloorStep(step.id, { depth: Math.max(6, v) })} min={6} max={600} />
                     <MeasureInput label="Height" inches={step.height} onChange={v => updateFloorStep(step.id, { height: Math.max(0.5, v) })} min={0.5} max={48} />
-                    <MeasureInput label="Position X" inches={step.x} onChange={v => updateFloorStep(step.id, { x: v })} min={-600} max={600} />
-                    <MeasureInput label="Position Z (depth)" inches={step.z} onChange={v => updateFloorStep(step.id, { z: v })} min={-600} max={600} />
+                    <p className="field-hint">Drag corners in the 3D view to reshape</p>
                   </div>
                 )
               })()}

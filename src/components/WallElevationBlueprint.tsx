@@ -77,13 +77,7 @@ function getStepWallProjection(
   if (len < 0.01) return null
   const [ux, uz] = wallDir(w)
   const nx = -uz, nz = ux
-  const halfW = step.width / 2, halfD = step.depth / 2
-  const corners: [number, number][] = [
-    [step.x - halfW, step.z - halfD],
-    [step.x + halfW, step.z - halfD],
-    [step.x + halfW, step.z + halfD],
-    [step.x - halfW, step.z + halfD],
-  ]
+  const corners = step.corners
   let minU = Infinity, maxU = -Infinity
   let minV = Infinity, maxV = -Infinity
   for (const [px, pz] of corners) {
