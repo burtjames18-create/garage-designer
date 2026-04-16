@@ -130,7 +130,7 @@ function countertopOnWall(ct: Countertop, w: GarageWall) {
 export default function ExportModal({ onClose, onCapturesReady }: ExportModalProps) {
   const { customerName, siteAddress, consultantName,
     walls, slatwallPanels, stainlessBacksplashPanels, cabinets, countertops, floorPoints, floorSteps,
-    overheadRacks, exportShots } = useGarageStore()
+    overheadRacks, baseboards, stemWalls, exportShots } = useGarageStore()
   const [captures, setCaptures] = useState<string[]>([])
   const [status, setStatus] = useState<'capturing' | 'ready' | 'no-shots'>('capturing')
   const [progress, setProgress] = useState(0)
@@ -482,6 +482,8 @@ export default function ExportModal({ onClose, onCapturesReady }: ExportModalPro
                   slatwallPanels={slatwallPanels}
                   stainlessBacksplashPanels={stainlessBacksplashPanels}
                   overheadRacks={overheadRacks}
+                  baseboards={baseboards}
+                  stemWalls={stemWalls}
                 />
               </div>
               <Footer />

@@ -1,5 +1,5 @@
 import { useRef, useCallback, useState } from 'react'
-import type { GarageWall, PlacedCabinet, Countertop, FloorPoint, FloorStep, SlatwallPanel, StainlessBacksplashPanel, OverheadRack } from '../store/garageStore'
+import type { GarageWall, PlacedCabinet, Countertop, FloorPoint, FloorStep, SlatwallPanel, StainlessBacksplashPanel, OverheadRack, Baseboard, StemWall } from '../store/garageStore'
 import { COUNTERTOP_DEPTH, useGarageStore } from '../store/garageStore'
 import { inchesToDisplay, snapToGrid, snapRackToWalls, type RackSnapResult } from '../utils/measurements'
 
@@ -25,12 +25,14 @@ interface Props {
   slatwallPanels?: SlatwallPanel[]
   stainlessBacksplashPanels?: StainlessBacksplashPanel[]
   overheadRacks?: OverheadRack[]
+  baseboards?: Baseboard[]
+  stemWalls?: StemWall[]
 }
 
 const PAD = 40  // compact padding to keep dim tiers close to wall edges
 const SLATWALL_DEPTH = 3  // visual depth of slatwall on floor plan (inches)
 
-export default function FloorPlanBlueprint({ walls, cabinets, countertops, floorPoints, floorSteps = [], slatwallPanels = [], stainlessBacksplashPanels = [], overheadRacks = [] }: Props) {
+export default function FloorPlanBlueprint({ walls, cabinets, countertops, floorPoints, floorSteps = [], slatwallPanels = [], stainlessBacksplashPanels = [], overheadRacks = [], baseboards = [], stemWalls = [] }: Props) {
   const { selectRack, updateRack, selectedRackId,
     selectCabinet, updateCabinet, selectedCabinetId, snappingEnabled } = useGarageStore()
   const svgRef = useRef<SVGSVGElement>(null)
@@ -652,6 +654,33 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
           <g key={ct.id} transform={`translate(${sx(ct.x)},${sz(ct.z)}) rotate(${deg})`}>
             <rect x={-hw} y={-hd} width={ct.width * scale} height={COUNTERTOP_DEPTH * scale}
               fill="#ddd8cc" stroke="#666" strokeWidth={0.4} opacity={0.7} />
+          </g>
+        )
+      })}
+
+      {/* Baseboard footprints — thin rectangles along walls */}
+      {baseboards.map(bb => {
+        const hw = (bb.length * scale) / 2
+        const hd = (bb.thickness * scale) / 2
+        const deg = -(bb.rotY * 180) / Math.PI
+        return (
+          <g key={bb.id} transform={`translate(${sx(bb.x)},${sz(bb.z)}) rotate(${deg})`}>
+            <rect x={-hw} y={-hd} width={bb.length * scale} height={bb.thickness * scale}
+              fill={bb.color} stroke="#444" strokeWidth={0.3} opacity={0.85} />
+          </g>
+        )
+      })}
+
+      {/* Stem wall footprints — slightly inset into wall, dashed outline */}
+      {stemWalls.map(sw => {
+        const hw = (sw.length * scale) / 2
+        const hd = (sw.thickness * scale) / 2
+        const deg = -(sw.rotY * 180) / Math.PI
+        return (
+          <g key={sw.id} transform={`translate(${sx(sw.x)},${sz(sw.z)}) rotate(${deg})`}>
+            <rect x={-hw} y={-hd} width={sw.length * scale} height={sw.thickness * scale}
+              fill={sw.color} stroke="#444" strokeWidth={0.3}
+              strokeDasharray="2 1" opacity={0.7} />
           </g>
         )
       })}

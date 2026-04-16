@@ -159,11 +159,12 @@ export function cabinetFrontPaths({ w, h, doors, drawers: drawersProp, style, li
             fill={handleHex} rx={0.15} />
         )
       } else {
-        // Inner edges of each door (touching center stile)
+        // Inner edges of each door (touching center seam — Signature has no
+        // center stile; doors are separated by doorGap, not fr).
         elements.push(
           <rect key="sh0" x={fr + door2W - chW - 0.15} y={chY} width={chW} height={chH}
             fill={handleHex} rx={0.15} />,
-          <rect key="sh1" x={fr + door2W + fr + 0.15} y={chY} width={chW} height={chH}
+          <rect key="sh1" x={fr + door2W + doorGap + 0.15} y={chY} width={chW} height={chH}
             fill={handleHex} rx={0.15} />
         )
       }

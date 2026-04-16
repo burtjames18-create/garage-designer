@@ -3,6 +3,7 @@ import { useRef } from 'react'
 import { useScrollToSelected } from '../hooks/useScrollToSelected'
 import { useGarageStore } from '../store/garageStore'
 import { flooringColors, flooringTexturePath } from '../data/flooringColors'
+import { effectiveFloorPolygon } from '../utils/floorPolygon'
 import WallPanel from './WallPanel'
 import ShapePanel from './ShapePanel'
 import CabinetsPanel from './CabinetsPanel'
@@ -95,14 +96,15 @@ const IconProject = () => (
 )
 
 const TAB_ICONS: Record<SidebarTab, ReactNode> = {
-  walls:    <IconWalls />,
-  flooring: <IconFloor />,
-  shapes:   <IconShapes />,
-  cabinets: <IconCabinets />,
-  overhead: <IconOverhead />,
-  lighting: <IconLighting />,
-  vehicles: <IconVehicles />,
-  info:     <IconProject />,
+  walls:      <IconWalls />,
+  flooring:   <IconFloor />,
+  shapes:     <IconShapes />,
+  ceiling:    <IconCeiling />,
+  cabinets:   <IconCabinets />,
+  overhead:   <IconOverhead />,
+  lighting:   <IconLighting />,
+  vehicles:   <IconVehicles />,
+  info:       <IconProject />,
 }
 
 const TABS: { id: SidebarTab; label: string }[] = [
@@ -110,7 +112,7 @@ const TABS: { id: SidebarTab; label: string }[] = [
   { id: 'flooring', label: 'Flooring' },
   { id: 'shapes',   label: 'Shapes'   },
   { id: 'cabinets', label: 'Cabinets' },
-  { id: 'overhead', label: 'Overhead'  },
+  { id: 'overhead', label: 'Overhead' },
   { id: 'lighting', label: 'Lighting' },
   { id: 'vehicles', label: 'Vehicles' },
   { id: 'info',     label: 'Project'  },
@@ -150,7 +152,113 @@ export default function Sidebar() {
     customerName, siteAddress, consultantName, setCustomerInfo,
     floorSteps, selectedFloorStepId, addFloorStep, updateFloorStep, deleteFloorStep, selectFloorStep,
     importedAssets,
+    walls, floorPoints, baseboards, stemWalls,
   } = useGarageStore()
+
+  // Total flooring square footage = every surface that flake coating will
+  // actually be applied to:
+  //   floor polygon (step-up top is same footprint — not double-counted)
+  //   + stem wall footprint (only walls with stemWall=true)
+  //   + baseboard front face (only walls with baseboardTexture=true, length × height)
+  //   + step-up exposed vertical faces (edges not touching a wall × step height)
+  const flooringSqFt = (() => {
+    // Use the LIVE polygon derived from walls — stored floorPoints can be
+    // stale after resizing the room. The polygon vertices are wall CENTERLINE
+    // intersections, so the raw shoelace would over-count by half the wall
+    // thickness on every edge. Inset each polygon edge inward by half the
+    // wall's thickness and recompute area to get the true INTERIOR floor.
+    const livePts = effectiveFloorPolygon(walls, floorPoints)
+    let shoelaceSqIn = 0
+    const n = livePts.length
+    if (n >= 3) {
+      // Centerline shoelace (signed — sign tells us winding order).
+      let signed = 0
+      for (let i = 0; i < n; i++) {
+        const a = livePts[i]
+        const b = livePts[(i + 1) % n]
+        signed += a.x * b.z - b.x * a.z
+      }
+      const ccw = signed > 0  // counter-clockwise winding?
+      // For each edge, inward normal is the perpendicular pointing INTO the
+      // polygon. Approximate per-edge inset using perimeter * avg thickness/2.
+      // (Exact inset would require offsetting each edge and re-intersecting,
+      // which gets messy at non-90° corners — perimeter approximation is
+      // accurate to ~0.1% for typical rooms.)
+      let perimeter = 0
+      for (let i = 0; i < n; i++) {
+        const a = livePts[i]
+        const b = livePts[(i + 1) % n]
+        perimeter += Math.hypot(b.x - a.x, b.z - a.z)
+      }
+      // Average wall thickness (use 3.5" if no walls — won't happen here).
+      const avgT = walls.length > 0
+        ? walls.reduce((s, w) => s + w.thickness, 0) / walls.length
+        : 3.5
+      const halfT = avgT / 2
+      const centerlineArea = Math.abs(signed) / 2
+      // Subtract a thin band of (halfT × perimeter) — area lost when insetting.
+      shoelaceSqIn = Math.max(0, centerlineArea - halfT * perimeter)
+      void ccw
+    }
+    // Stem wall front face — only when the piece has flake enabled.
+    // (Footprint isn't double-counted because a stem wall is recessed INTO the
+    // wall; the floor under it is already part of the polygon.)
+    let stemSqIn = 0
+    for (const sw of stemWalls) {
+      if (!sw.flake) continue
+      stemSqIn += sw.length * sw.height
+    }
+    // Baseboard front face — only when the piece has flake enabled.
+    // Length × height of the front (interior-facing) face only.
+    let bbFaceSqIn = 0
+    for (const bb of baseboards) {
+      if (!bb.flake) continue
+      bbFaceSqIn += bb.length * bb.height
+    }
+    // Step-up exposed vertical faces. Each step-up is a rectangle (width × depth
+    // × height). For each of the four edges, if it is NOT touching a wall face
+    // (within a small tolerance), count it as exposed. Exposed face area =
+    // edge length × step height.
+    let stepFaceSqIn = 0
+    const TOUCH_TOL = 2  // inches: edge is "against wall" if within this
+    for (const step of floorSteps) {
+      const halfW = step.width / 2, halfD = step.depth / 2
+      // Four edges as {along-axis length, and the midpoint / direction of that edge}
+      const edges = [
+        { len: step.width, // top edge (towards -Z if +Z is rear)
+          mid: { x: step.x, z: step.z - halfD }, axis: 'h' as const },
+        { len: step.width, // bottom edge
+          mid: { x: step.x, z: step.z + halfD }, axis: 'h' as const },
+        { len: step.depth, // left edge
+          mid: { x: step.x - halfW, z: step.z }, axis: 'v' as const },
+        { len: step.depth, // right edge
+          mid: { x: step.x + halfW, z: step.z }, axis: 'v' as const },
+      ]
+      for (const e of edges) {
+        // Is this edge against any wall interior face? Project edge midpoint
+        // onto wall; if perp distance ≈ wall thickness/2 + TOUCH_TOL AND the
+        // midpoint falls within the wall span, count it as touching.
+        let touching = false
+        for (const w of walls) {
+          const wdx = w.x2 - w.x1, wdz = w.z2 - w.z1
+          const wlen = Math.hypot(wdx, wdz)
+          if (wlen < 1) continue
+          const ux = wdx / wlen, uz = wdz / wlen
+          // Wall must be oriented parallel to the edge axis to "touch" it
+          const wallHoriz = Math.abs(wdz) < Math.abs(wdx)
+          if (e.axis === 'h' && !wallHoriz) continue
+          if (e.axis === 'v' && wallHoriz) continue
+          const vx = e.mid.x - w.x1, vz = e.mid.z - w.z1
+          const along = vx * ux + vz * uz
+          const perp = Math.abs(vx * (-uz) + vz * ux)
+          if (along < -1 || along > wlen + 1) continue
+          if (perp <= w.thickness / 2 + TOUCH_TOL) { touching = true; break }
+        }
+        if (!touching) stepFaceSqIn += e.len * step.height
+      }
+    }
+    return (shoelaceSqIn + stemSqIn + bbFaceSqIn + stepFaceSqIn) / 144
+  })()
 
   // All imported textures are available for flooring too (wall/floor/generic
   // are all equivalent once imported).
@@ -208,6 +316,19 @@ export default function Sidebar() {
 
           {tab === 'flooring' && (
             <div>
+              {/* ── Total flooring area ── */}
+              <div className="field-group" style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                padding: '8px 10px', marginBottom: 10,
+                background: 'rgba(255,255,255,0.05)', borderRadius: 4,
+                border: '1px solid rgba(255,255,255,0.1)',
+              }}>
+                <span style={{ fontSize: 11, color: '#aaa' }}>Total floor area</span>
+                <span style={{ fontSize: 14, fontWeight: 600, color: '#eee' }}>
+                  {flooringSqFt.toFixed(2)} sq ft
+                </span>
+              </div>
+
               {/* ── Step-Ups ── */}
               <div className="section-label">Step-Ups</div>
               <button className="add-btn" style={{ marginBottom: 8 }} onClick={addFloorStep}>

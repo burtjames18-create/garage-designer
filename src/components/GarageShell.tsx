@@ -19,6 +19,7 @@ import {
   cameraFloorPos,
 } from '../utils/measurements'
 import { createButcherBlockTexture } from '../utils/butcherBlockTexture'
+import { effectiveFloorPolygon } from '../utils/floorPolygon'
 import * as THREE from 'three'
 
 const FT = (inches: number) => inches / 12
@@ -111,47 +112,6 @@ function getStepWallOverlaps(
   return [{ u0, u1, stepHeight: step.height }]
 }
 
-// Splits a baseboard segment by step overlaps, returning sub-segments with elevation
-function splitSegmentBySteps(
-  seg: { x0: number; x1: number },
-  overlaps: { u0: number; u1: number; stepHeight: number }[],
-): { x0: number; x1: number; elevate: number }[] {
-  const events: number[] = [seg.x0, seg.x1]
-  for (const ov of overlaps) {
-    if (ov.u0 > seg.x0 && ov.u0 < seg.x1) events.push(ov.u0)
-    if (ov.u1 > seg.x0 && ov.u1 < seg.x1) events.push(ov.u1)
-  }
-  events.sort((a, b) => a - b)
-
-  const result: { x0: number; x1: number; elevate: number }[] = []
-  for (let i = 0; i < events.length - 1; i++) {
-    const x0 = events[i], x1 = events[i + 1]
-    if (x1 - x0 < 0.01) continue
-    const mid = (x0 + x1) / 2
-    let elevate = 0
-    for (const ov of overlaps) {
-      if (ov.u0 <= mid && ov.u1 >= mid) elevate = Math.max(elevate, ov.stepHeight)
-    }
-    result.push({ x0, x1, elevate })
-  }
-  return result
-}
-
-// ─── World-space seamless baseboard geometry ──────────────────────────────────
-/** How far the baseboard protrudes from the interior wall face (inches). */
-const BB_DEPTH = 0.5
-
-/** Interior-facing unit normal for a wall (points toward garage centroid). */
-function wallIntNorm(wall: GarageWall, cx: number, cz: number): [number, number] {
-  const dx = wall.x2 - wall.x1, dz = wall.z2 - wall.z1
-  const len = Math.hypot(dx, dz)
-  if (len < 1) return [0, 1]
-  const ux = dx / len, uz = dz / len
-  const n1x = -uz, n1z = ux
-  const mx = (wall.x1 + wall.x2) / 2, mz = (wall.z1 + wall.z2) / 2
-  return (n1x * (cx - mx) + n1z * (cz - mz)) >= 0 ? [n1x, n1z] : [uz, -ux]
-}
-
 /** Intersect 2D ray (ax,az)+(t*dx,t*dz) with (bx,bz)+(s*ex,s*ez). Returns t. */
 function lineIntersectT(
   ax: number, az: number, dx: number, dz: number,
@@ -215,317 +175,6 @@ function findWallChains(walls: GarageWall[], thresh = 6): ChainEntry[][] {
   return chains
 }
 
-/**
- * Build a single world-space BufferGeometry for all baseboards in a wall chain.
- * Uses mitre-cut corners so the geometry is one continuous piece, and arc-length
- * UVs so the texture tiles seamlessly around every corner.
- */
-function buildBaseboardChainGeo(
-  chain: ChainEntry[],
-  floorSteps: FloorStep[],
-  cx: number, cz: number,
-  side: 'interior' | 'exterior' = 'interior',
-): THREE.BufferGeometry {
-  const N = chain.length
-  if (N === 0) return new THREE.BufferGeometry()
-
-  // ── Per-wall derived data ──────────────────────────────────────────────────
-  interface WD {
-    entry: ChainEntry; wall: GarageWall
-    nx: number; nz: number   // interior normal
-    ux: number; uz: number   // along-chain unit vector
-    len: number
-    ffx1: number; ffz1: number  // front-face line start  (interior face + BB_DEPTH)
-    bfx1: number; bfz1: number  // back-face line start   (interior face exactly)
-  }
-  const wd: WD[] = chain.map(e => {
-    const dx = e.x2 - e.x1, dz = e.z2 - e.z1
-    const len = Math.hypot(dx, dz)
-    const ux = dx / len, uz = dz / len
-    const [inx, inz] = wallIntNorm(e.wall, cx, cz)
-    // Flip normal for exterior side
-    const nx = side === 'exterior' ? -inx : inx
-    const nz = side === 'exterior' ? -inz : inz
-    const ffOff = e.wall.thickness / 2 + BB_DEPTH
-    const bfOff = e.wall.thickness / 2
-    return {
-      entry: e, wall: e.wall, nx, nz, ux, uz, len,
-      ffx1: e.x1 + nx * ffOff, ffz1: e.z1 + nz * ffOff,
-      bfx1: e.x1 + nx * bfOff, bfz1: e.z1 + nz * bfOff,
-    }
-  })
-
-  // ── Mitre corner vertices ──────────────────────────────────────────────────
-  // ffPts[i] / bfPts[i] = front/back mitre point at junction BEFORE wall[i]
-  // (ffPts[0] = start of chain, ffPts[N] = end of chain)
-  const isClosed = Math.hypot(chain[N-1].x2 - chain[0].x1, chain[N-1].z2 - chain[0].z1) < 6
-  const ffPts: { x: number; z: number }[] = new Array(N + 1)
-  const bfPts: { x: number; z: number }[] = new Array(N + 1)
-
-  for (let i = 0; i <= N; i++) {
-    if ((i === 0 && !isClosed) || (i === N && !isClosed)) {
-      const w = wd[i === 0 ? 0 : N - 1]
-      if (i === 0) {
-        ffPts[0] = { x: w.ffx1, z: w.ffz1 }
-        bfPts[0] = { x: w.bfx1, z: w.bfz1 }
-      } else {
-        ffPts[N] = { x: w.ffx1 + w.len * w.ux, z: w.ffz1 + w.len * w.uz }
-        bfPts[N] = { x: w.bfx1 + w.len * w.ux, z: w.bfz1 + w.len * w.uz }
-      }
-      continue
-    }
-    const pi = (i === 0) ? N - 1 : i - 1
-    const ci = i % N
-    const prev = wd[pi], curr = wd[ci]
-    const tFF = lineIntersectT(prev.ffx1, prev.ffz1, prev.ux, prev.uz, curr.ffx1, curr.ffz1, curr.ux, curr.uz)
-    ffPts[i] = isNaN(tFF)
-      ? { x: curr.ffx1, z: curr.ffz1 }
-      : { x: prev.ffx1 + tFF * prev.ux, z: prev.ffz1 + tFF * prev.uz }
-    const tBF = lineIntersectT(prev.bfx1, prev.bfz1, prev.ux, prev.uz, curr.bfx1, curr.bfz1, curr.ux, curr.uz)
-    bfPts[i] = isNaN(tBF)
-      ? { x: curr.bfx1, z: curr.bfz1 }
-      : { x: prev.bfx1 + tBF * prev.ux, z: prev.bfz1 + tBF * prev.uz }
-  }
-  if (isClosed) { ffPts[N] = ffPts[0]; bfPts[N] = bfPts[0] }
-
-  // ── Cumulative arc lengths (inches, along front face) ─────────────────────
-  const arcLens = new Array(N + 1).fill(0)
-  for (let i = 0; i < N; i++) {
-    arcLens[i + 1] = arcLens[i] + Math.hypot(
-      ffPts[i + 1].x - ffPts[i].x,
-      ffPts[i + 1].z - ffPts[i].z,
-    )
-  }
-
-  // ── Geometry buffers ───────────────────────────────────────────────────────
-  const pos: number[] = [], uv: number[] = [], nor: number[] = [], idx: number[] = []
-  let base = 0
-
-  const pushQuad = (
-    p0x: number, p0y: number, p0z: number, u0: number, v0: number,
-    p1x: number, p1y: number, p1z: number, u1: number, v1: number,
-    p2x: number, p2y: number, p2z: number, u2: number, v2: number,
-    p3x: number, p3y: number, p3z: number, u3: number, v3: number,
-    fnx: number, fny: number, fnz: number,
-  ) => {
-    pos.push(p0x, p0y, p0z, p1x, p1y, p1z, p2x, p2y, p2z, p3x, p3y, p3z)
-    uv.push(u0, v0, u1, v1, u2, v2, u3, v3)
-    nor.push(fnx, fny, fnz, fnx, fny, fnz, fnx, fny, fnz, fnx, fny, fnz)
-    idx.push(base, base + 1, base + 2, base, base + 2, base + 3)
-    base += 4
-  }
-
-  // ── Build geometry per wall ────────────────────────────────────────────────
-  for (let i = 0; i < N; i++) {
-    const w = wd[i]
-    if (!w.wall.baseboard || w.wall.baseboardHeight <= 0) continue
-    const bbH = w.wall.baseboardHeight
-
-    // Parameters on this wall's front-face and back-face lines for the mitre corners
-    const tS = (ffPts[i].x   - w.ffx1) * w.ux + (ffPts[i].z   - w.ffz1) * w.uz
-    const tE = (ffPts[i+1].x - w.ffx1) * w.ux + (ffPts[i+1].z - w.ffz1) * w.uz
-    const btS = (bfPts[i].x   - w.bfx1) * w.ux + (bfPts[i].z   - w.bfz1) * w.uz
-    const btE = (bfPts[i+1].x - w.bfx1) * w.ux + (bfPts[i+1].z - w.bfz1) * w.uz
-
-    // Step overlaps in chain-local u space (same as along-wall distance)
-    const rawOverlaps = floorSteps.flatMap(step => getStepWallOverlaps(w.wall, step, w.len))
-    // If wall is reversed in chain, flip the overlap u values
-    const stepOverlaps = w.entry.reversed
-      ? rawOverlaps.map(ov => ({ u0: w.len - ov.u1, u1: w.len - ov.u0, stepHeight: ov.stepHeight }))
-      : rawOverlaps
-
-    // Garage-door openings in chain-local u space
-    const gdOpenings = w.wall.openings.filter(op => op.type === 'garage-door')
-    const effOpenings = w.entry.reversed
-      ? gdOpenings.map(op => ({ ...op, xOffset: w.len - op.xOffset - op.width }))
-      : gdOpenings
-
-    // Build continuous sub-ranges (skipping garage door gaps)
-    const ranges: { u0: number; u1: number }[] = []
-    if (effOpenings.length === 0) {
-      ranges.push({ u0: tS, u1: tE })
-    } else {
-      const sorted = [...effOpenings].sort((a, b) => a.xOffset - b.xOffset)
-      let cursor = tS
-      for (const op of sorted) {
-        const left  = Math.max(tS, op.xOffset)
-        const right = Math.min(tE, op.xOffset + op.width)
-        if (left > cursor + 0.01) ranges.push({ u0: cursor, u1: left })
-        cursor = Math.max(cursor, right)
-      }
-      if (cursor < tE - 0.01) ranges.push({ u0: cursor, u1: tE })
-    }
-
-    for (let ri = 0; ri < ranges.length; ri++) {
-      const rng = ranges[ri]
-      // Determine if this range starts/ends at a garage door gap (needs end cap)
-      // vs at a mitre corner (no end cap needed — adjacent wall continues)
-      const isFirstRange = ri === 0
-      const isLastRange  = ri === ranges.length - 1
-      const hasGapAtStart = !isFirstRange || Math.abs(rng.u0 - tS) > 0.1
-      const hasGapAtEnd   = !isLastRange  || Math.abs(rng.u1 - tE) > 0.1
-      const subsegs = splitSegmentBySteps({ x0: rng.u0, x1: rng.u1 }, stepOverlaps)
-
-      for (let k = 0; k < subsegs.length; k++) {
-        const sub = subsegs[k]
-        const u0 = sub.x0, u1 = sub.x1
-        const elev = sub.elevate, h = bbH
-
-        // Check neighbors for step transitions
-        const prev = subsegs[k - 1]
-        const next = subsegs[k + 1]
-
-        // Determine if this segment is the HIGHER one at each end
-        const higherAtStart = prev && (elev > prev.elevate + 0.1)
-        const higherAtEnd   = next && (elev > next.elevate + 0.1)
-
-        // If this is the higher segment, extend it over the lower one by the
-        // step height so the dropped front face forms a square edge
-        const stepAtStart = higherAtStart ? (elev - prev!.elevate) : 0
-        const stepAtEnd   = higherAtEnd   ? (elev - next!.elevate) : 0
-        const extU0 = higherAtStart ? u0 - stepAtStart : u0
-        const extU1 = higherAtEnd   ? u1 + stepAtEnd   : u1
-
-        // World positions on front-face and back-face lines (with extensions)
-        const fx0 = w.ffx1 + extU0 * w.ux, fz0 = w.ffz1 + extU0 * w.uz
-        const fx1 = w.ffx1 + extU1 * w.ux, fz1 = w.ffz1 + extU1 * w.uz
-        // Back-face uses mitre-adjusted parameter at chain corners
-        const bExtU0 = (isFirstRange && k === 0 && !higherAtStart && Math.abs(extU0 - tS) < 0.1) ? btS : extU0
-        const bExtU1 = (isLastRange && k === subsegs.length - 1 && !higherAtEnd && Math.abs(extU1 - tE) < 0.1) ? btE : extU1
-        const bx0 = w.bfx1 + bExtU0 * w.ux, bz0 = w.bfz1 + bExtU0 * w.uz
-        const bx1 = w.bfx1 + bExtU1 * w.ux, bz1 = w.bfz1 + bExtU1 * w.uz
-
-        // The front face drops down to the lower baseboard top at the extended ends
-        const elev0 = higherAtStart ? (prev!.elevate + bbH) : elev
-        const elev1 = higherAtEnd   ? (next!.elevate + bbH) : elev
-
-        // Arc-length based UVs (in feet — texture.repeat handles tile scale)
-        const uvX0 = (arcLens[i] + extU0 - tS) / 12
-        const uvX1 = (arcLens[i] + extU1 - tS) / 12
-        const uvY0L = elev0 / 12   // bottom-left (may be lower at step)
-        const uvY0R = elev1 / 12   // bottom-right
-        const uvY1 = (elev + h) / 12
-
-        // Front face (facing garage interior)
-        // At step transitions the bottom edge drops down on the extended side
-        pushQuad(
-          FT(fx0), FT(elev0),  FT(fz0), uvX0, uvY0L,
-          FT(fx1), FT(elev1),  FT(fz1), uvX1, uvY0R,
-          FT(fx1), FT(elev+h), FT(fz1), uvX1, uvY1,
-          FT(fx0), FT(elev+h), FT(fz0), uvX0, uvY1,
-          w.nx, 0, w.nz,
-        )
-        // Top face (facing up) — V spans the baseboard depth so texture isn't stretched
-        const uvYback  = uvY1
-        const uvYfront = uvY1 + BB_DEPTH / 12
-        pushQuad(
-          FT(bx0), FT(elev+h), FT(bz0), uvX0, uvYback,
-          FT(bx1), FT(elev+h), FT(bz1), uvX1, uvYback,
-          FT(fx1), FT(elev+h), FT(fz1), uvX1, uvYfront,
-          FT(fx0), FT(elev+h), FT(fz0), uvX0, uvYfront,
-          0, 1, 0,
-        )
-        // Back face against wall (same drop-down as front)
-        pushQuad(
-          FT(bx0), FT(elev0),  FT(bz0), uvX0, uvY0L,
-          FT(bx1), FT(elev1),  FT(bz1), uvX1, uvY0R,
-          FT(bx1), FT(elev+h), FT(bz1), uvX1, uvY1,
-          FT(bx0), FT(elev+h), FT(bz0), uvX0, uvY1,
-          -w.nx, 0, -w.nz,
-        )
-        // End-cap faces only at garage door gaps — NOT at mitre corners
-        // Left end cap
-        if (k === 0 && hasGapAtStart) {
-          pushQuad(
-            FT(fx0), FT(elev0), FT(fz0), 0,             elev0 / 12,
-            FT(fx0), FT(elev+h), FT(fz0), 0,            uvY1,
-            FT(bx0), FT(elev+h), FT(bz0), BB_DEPTH / 12, uvY1,
-            FT(bx0), FT(elev0), FT(bz0), BB_DEPTH / 12, elev0 / 12,
-            -w.ux, 0, -w.uz,
-          )
-        }
-        // Right end cap
-        if (k === subsegs.length - 1 && hasGapAtEnd) {
-          pushQuad(
-            FT(fx1), FT(elev1), FT(fz1), 0,             elev1 / 12,
-            FT(bx1), FT(elev1), FT(bz1), BB_DEPTH / 12, elev1 / 12,
-            FT(bx1), FT(elev+h), FT(bz1), BB_DEPTH / 12, uvY1,
-            FT(fx1), FT(elev+h), FT(fz1), 0,            uvY1,
-            w.ux, 0, w.uz,
-          )
-        }
-
-        // Overhang faces: bottom + end cap at each step transition
-        if (higherAtStart) {
-          const underY = prev!.elevate + bbH
-          const topY = elev + h
-          // Front/back positions at the overhang edge
-          const efx = w.ffx1 + extU0 * w.ux, efz = w.ffz1 + extU0 * w.uz
-          const ebx = w.bfx1 + extU0 * w.ux, ebz = w.bfz1 + extU0 * w.uz
-          // Front/back at the step edge
-          const sfx = w.ffx1 + u0 * w.ux, sfz = w.ffz1 + u0 * w.uz
-          const sbx = w.bfx1 + u0 * w.ux, sbz = w.bfz1 + u0 * w.uz
-          const euvX = (arcLens[i] + extU0 - tS) / 12
-          const suvX = (arcLens[i] + u0 - tS) / 12
-
-          // Bottom face (underside of overhang)
-          pushQuad(
-            FT(efx), FT(underY), FT(efz), euvX, underY / 12,
-            FT(sfx), FT(underY), FT(sfz), suvX, underY / 12,
-            FT(sbx), FT(underY), FT(sbz), suvX, underY / 12 + BB_DEPTH / 12,
-            FT(ebx), FT(underY), FT(ebz), euvX, underY / 12 + BB_DEPTH / 12,
-            0, -1, 0,
-          )
-          // End cap (perpendicular to wall, closes the overhang edge)
-          pushQuad(
-            FT(efx), FT(underY), FT(efz), 0,             underY / 12,
-            FT(ebx), FT(underY), FT(ebz), BB_DEPTH / 12, underY / 12,
-            FT(ebx), FT(topY),   FT(ebz), BB_DEPTH / 12, topY / 12,
-            FT(efx), FT(topY),   FT(efz), 0,             topY / 12,
-            -w.ux, 0, -w.uz,
-          )
-        }
-        if (higherAtEnd) {
-          const underY = next!.elevate + bbH
-          const topY = elev + h
-          // Front/back positions at the overhang edge
-          const efx = w.ffx1 + extU1 * w.ux, efz = w.ffz1 + extU1 * w.uz
-          const ebx = w.bfx1 + extU1 * w.ux, ebz = w.bfz1 + extU1 * w.uz
-          // Front/back at the step edge
-          const sfx = w.ffx1 + u1 * w.ux, sfz = w.ffz1 + u1 * w.uz
-          const sbx = w.bfx1 + u1 * w.ux, sbz = w.bfz1 + u1 * w.uz
-          const euvX = (arcLens[i] + extU1 - tS) / 12
-          const suvX = (arcLens[i] + u1 - tS) / 12
-
-          // Bottom face (underside of overhang)
-          pushQuad(
-            FT(sfx), FT(underY), FT(sfz), suvX, underY / 12,
-            FT(efx), FT(underY), FT(efz), euvX, underY / 12,
-            FT(ebx), FT(underY), FT(ebz), euvX, underY / 12 + BB_DEPTH / 12,
-            FT(sbx), FT(underY), FT(sbz), suvX, underY / 12 + BB_DEPTH / 12,
-            0, -1, 0,
-          )
-          // End cap (perpendicular to wall, closes the overhang edge)
-          pushQuad(
-            FT(efx), FT(underY), FT(efz), 0,             underY / 12,
-            FT(ebx), FT(underY), FT(ebz), BB_DEPTH / 12, underY / 12,
-            FT(ebx), FT(topY),   FT(ebz), BB_DEPTH / 12, topY / 12,
-            FT(efx), FT(topY),   FT(efz), 0,             topY / 12,
-            w.ux, 0, w.uz,
-          )
-        }
-      }
-    }
-  }
-
-  if (pos.length === 0) return new THREE.BufferGeometry()
-  const geo = new THREE.BufferGeometry()
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
-  geo.setAttribute('uv',       new THREE.Float32BufferAttribute(uv,  2))
-  geo.setAttribute('normal',   new THREE.Float32BufferAttribute(nor, 3))
-  geo.setIndex(idx)
-  return geo
-}
 
 // ─── Snap: wall endpoints + shape centers + floor edges ──────────────────────
 function snapToTargets(
@@ -624,8 +273,7 @@ function snapShapeToWalls(
 
       const snapX = wall.x1 + snappedAlong * ux + targetPerp * nx
       const snapZ = wall.z1 + snappedAlong * uz + targetPerp * nz
-      const baseY = wall.baseboard && wall.baseboardHeight > 0 ? wall.baseboardHeight : 0
-      best = { x: snapX, z: snapZ, baseY }
+      best = { x: snapX, z: snapZ, baseY: 0 }
     }
   }
 
@@ -910,77 +558,6 @@ function pointInPolygon(x: number, z: number, pts: FloorPoint[]): boolean {
 // ─── Derive floor polygon from wall footprint ────────────────────────────────
 // Traces walls as a connected chain to produce a stable polygon — vertex order
 // follows wall topology so dragging a wall never scrambles the polygon.
-function wallsToFloorPolygon(walls: GarageWall[]): FloorPoint[] | null {
-  if (walls.length < 3) return null
-
-  // Build unique nodes by merging endpoints within 6" of each other
-  const nodes: { x: number; z: number }[] = []
-  function nodeIdx(x: number, z: number): number {
-    const i = nodes.findIndex(n => Math.hypot(n.x - x, n.z - z) < 6)
-    if (i >= 0) return i
-    nodes.push({ x, z })
-    return nodes.length - 1
-  }
-
-  // Build adjacency graph
-  const adj = new Map<number, number[]>()
-  for (const w of walls) {
-    const a = nodeIdx(w.x1, w.z1)
-    const b = nodeIdx(w.x2, w.z2)
-    if (a === b) continue
-    if (!adj.has(a)) adj.set(a, [])
-    if (!adj.has(b)) adj.set(b, [])
-    adj.get(a)!.push(b)
-    adj.get(b)!.push(a)
-  }
-
-  if (nodes.length < 3) return null
-
-  // All nodes must have exactly 2 connections — a simple closed loop
-  for (const neighbors of adj.values()) {
-    if (neighbors.length !== 2) return null
-  }
-
-  // Walk the chain starting from node 0
-  const polygon: FloorPoint[] = []
-  let prev = -1, cur = 0
-  for (let i = 0; i < nodes.length; i++) {
-    polygon.push({ x: nodes[cur].x, z: nodes[cur].z })
-    const next = (adj.get(cur) ?? []).find(n => n !== prev)
-    if (next === undefined || next === 0) break
-    prev = cur
-    cur = next
-  }
-
-  return polygon.length >= 3 ? polygon : null
-}
-
-// Convex hull fallback — always produces a valid polygon from any set of wall endpoints
-function convexHullFromWalls(walls: GarageWall[]): FloorPoint[] {
-  const pts: { x: number; z: number }[] = []
-  for (const w of walls) {
-    pts.push({ x: w.x1, z: w.z1 }, { x: w.x2, z: w.z2 })
-  }
-  if (pts.length < 3) return pts
-  // Sort by x then z
-  pts.sort((a, b) => a.x !== b.x ? a.x - b.x : a.z - b.z)
-  const cross = (o: typeof pts[0], a: typeof pts[0], b: typeof pts[0]) =>
-    (a.x - o.x) * (b.z - o.z) - (a.z - o.z) * (b.x - o.x)
-  const lower: typeof pts = []
-  for (const p of pts) {
-    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop()
-    lower.push(p)
-  }
-  const upper: typeof pts = []
-  for (let i = pts.length - 1; i >= 0; i--) {
-    const p = pts[i]
-    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop()
-    upper.push(p)
-  }
-  upper.pop(); lower.pop()
-  return [...lower, ...upper]
-}
-
 // Build floor ShapeGeometry in NORMALIZED object-space coordinates, plus the
 // uniform scale factor needed to restore world size. The normalized vertices
 // keep drei's MeshReflectorMaterial shader math well-conditioned on large
@@ -1147,6 +724,192 @@ function getPowderCoatTextures(): { normalMap: THREE.Texture; roughnessMap: THRE
   return { normalMap: _powderNormal, roughnessMap: _powderRough }
 }
 
+/** Signature door panel — extruded geometry with a chamfered inner edge and
+ *  an integrated aluminum finger-pull lip sitting on the chamfer face.
+ *
+ *  The cross-section is defined in the door's local X-Z plane (X = width
+ *  axis, Z = thickness axis with +Z pointing out of the cabinet). Extrusion
+ *  runs along local Y (door height). The door is modeled with its center
+ *  at local origin (spans X∈[-W/2, W/2], Y∈[-H/2, H/2], Z∈[-t/2, t/2]).
+ *
+ *  `handleOnPlusX`: which side the chamfer/lip is on. true → inner edge at
+ *  +X, false → -X.
+ */
+const SIG_BEVEL    = 0.6 / 12   // 0.6" chamfer (in feet) — front-inner corner of door
+// U-channel sits INSIDE the chamfer gap. Its opening faces the chamfer face
+// (back of the chamfer), and its closed back wraps around where the chamfer
+// would have ended (the outer corner), with each leg sitting flush to the
+// door's front face extension and the door's inner-side face extension.
+const SIG_U_SPAN   = 0.55 / 12  // span between the two legs (along chamfer slope)
+const SIG_U_DEPTH  = 0.18 / 12  // how deep the U reaches from chamfer face outward
+const SIG_U_LEGWL  = 0.09 / 12  // thickness of each leg (seen as a line on front/side face)
+const SIG_U_BACKWL = 0.06 / 12  // back wall thickness (thinner — less visible)
+
+function SignatureDoorPanel({
+  width, height, thickness, handleOnPlusX, doorMat, lipMat,
+}: {
+  width: number
+  height: number
+  thickness: number
+  handleOnPlusX: boolean
+  doorMat: JSX.Element
+  lipMat: JSX.Element
+}) {
+  const W = width, H = height, t = thickness
+  const b = Math.min(SIG_BEVEL, t * 0.9, W * 0.3)
+
+  // Build door cross-section in shape-local X-Z. We'll build it with the
+  // chamfer on +X; flip via scale for -X. Shape uses 2D coords (x, y) where
+  // shape-x = door-X and shape-y = door-Z.
+  // Cross-section: shape-x → world X (door width), shape-y → world Y (door
+  // height, via rotation below). Extrusion axis +Z → world Z (door thickness).
+  // We build the cross-section as a front-view silhouette of the door's
+  // chamfered corner — but since a door seen from the front is a plain
+  // rectangle, we instead build the cross-section as the PROFILE (side view)
+  // and extrude along the door height direction.
+  //
+  // Approach: build the profile (X = width, Y = thickness, looking along
+  // door height), extrude by door height H. Then no rotation needed — the
+  // shape's X maps to world X, Y maps to world Z (after +π/2 X-rotation),
+  // extrusion maps to world Y.
+  const doorGeom = useMemo(() => {
+    const s = new THREE.Shape()
+    // Profile in (X=width, Y=thickness). Back at -Y, front at +Y.
+    s.moveTo(-W / 2, -t / 2)        // back-hinge
+    s.lineTo( W / 2, -t / 2)        // back-inner
+    s.lineTo( W / 2,  t / 2 - b)    // up inner side to chamfer base
+    s.lineTo( W / 2 - b,  t / 2)    // 45° chamfer
+    s.lineTo(-W / 2,  t / 2)        // front-hinge
+    s.lineTo(-W / 2, -t / 2)        // close
+    const g = new THREE.ExtrudeGeometry(s, {
+      depth: H, bevelEnabled: false, steps: 1, curveSegments: 1,
+    })
+    // Center extrusion along Y: default extrudes from 0 to H along +Z.
+    // Translate so extrusion is centered at 0.
+    g.translate(0, 0, -H / 2)
+    return g
+  }, [W, H, t, b])
+  useEffect(() => () => doorGeom.dispose(), [doorGeom])
+
+  // Aluminum lip: extruded U-channel that sits on the chamfer face with its
+  // open side facing the door (so the two walls and the back of the U are
+  // what's visible). Cross-section is in (U, V) where U = along the chamfer
+  // slope (outer span = SIG_LIP_W), V = outward from the chamfer (depth =
+  // SIG_LIP_D). Open side of the U is at V = 0 (touching the chamfer).
+  // U-channel mounted to the door's INNER SIDE face (X = W/2). The two legs
+  // of the U stick outward in +X (away from the door), and the open side of
+  // the U faces +Z (toward the door front / chamfer). The back of the U sits
+  // against the door's inner side face.
+  //
+  // Cross-section in (U, V) where:
+  //   U (shape-x) = outward from door inner face (depth of the U's legs)
+  //   V (shape-y) = along door thickness axis (span across the U opening)
+  // Open side at U = 0 would mean opening faces the door body. We want the
+  // opening to face +Z (front). So: place the open side at V = +span/2 side.
+  // Easier: build the U as a span-vs-depth shape and rotate the whole thing.
+  //
+  // Simplest: build the shape so that the "open" side of the U is at
+  //   V = 0  (span runs from V=0 to V=span)
+  // and the two walls are at U=0..depth (wall near door) and extending out.
+  // Actually cleanest: just build an open-top rectangle and pick axes later.
+  const lipGeom = useMemo(() => {
+    const span  = SIG_U_SPAN     // distance along chamfer slope between the two legs
+    const depth = SIG_U_DEPTH    // how far out from chamfer face to the back wall
+    const lwl   = SIG_U_LEGWL    // leg thickness
+    const bwl   = SIG_U_BACKWL   // back wall thickness
+
+    // Cross-section in (u, v): u = along chamfer slope, v = outward from
+    // chamfer face. U opens toward v=0 (the chamfer face).
+    //   Outer rect: (0, 0) → (span, 0) → (span, depth) → (0, depth)
+    //   Inner pocket cut from v=0: (lwl, 0) → (lwl, depth - bwl) →
+    //                              (span - lwl, depth - bwl) → (span - lwl, 0)
+    // Build the U outline directly as a single CCW simply-connected polygon.
+    // Traversal zig-zags into the pocket so it stays non-self-intersecting.
+    const s = new THREE.Shape()
+    s.moveTo(0, 0)                     // outer-bottom of front leg (at chamfer face)
+    s.lineTo(lwl, 0)                   // step in along chamfer face
+    s.lineTo(lwl, depth - bwl)         // up the inner face of the front leg
+    s.lineTo(span - lwl, depth - bwl)  // across the back wall (inner face)
+    s.lineTo(span - lwl, 0)            // down the inner face of the back leg
+    s.lineTo(span, 0)                  // step out along chamfer face
+    s.lineTo(span, depth)              // up outer face of back leg
+    s.lineTo(0, depth)                 // across outer face of back wall
+    s.lineTo(0, 0)                     // down outer face of front leg → close
+
+    const len = H
+    const g = new THREE.ExtrudeGeometry(s, {
+      depth: len, bevelEnabled: false, steps: 1, curveSegments: 1,
+    })
+    // Center span around origin, and extrusion around origin.
+    g.translate(-span / 2, 0, -len / 2)
+    // Bake the axis mapping so the 2D cross-section lies in the door's X-Z
+    // plane rotated 45° (aligned to the chamfer), and extrusion runs along
+    // world Y (door height).
+    //   local u (shape-X) should map to chamfer-slope direction:
+    //     chamfer slope on +X side runs from (W/2 - b, t/2) → (W/2, t/2 - b),
+    //     direction (+X, -Z)/√2.
+    //   local v (shape-Y) should map to outward-from-chamfer direction:
+    //     chamfer normal (+X, +Z)/√2.
+    //   local extrusion (shape-Z) should map to world +Y (door height).
+    //
+    // We apply rotations in geometry-local order so that the resulting
+    // basis is a proper rotation (det = +1), avoiding normal inversion.
+    // Start: X=(1,0,0), Y=(0,1,0), Z=(0,0,1).
+    // Step 1 — rotateX(-π/2): X stays, Y→Z, Z→-Y. New basis:
+    //   X=(1,0,0), Y=(0,0,1), Z=(0,-1,0).  (det = +1 ✓)
+    // Step 2 — rotateY(-π/4): spins X and Z in XZ plane.
+    //   Previous X=(1,0,0) → (cos(-π/4), 0, -sin(-π/4))=(√2/2, 0, √2/2)?
+    //   Actually rotateY(θ) sends (x,y,z) → (x cosθ + z sinθ, y, -x sinθ + z cosθ).
+    //   At θ=-π/4: (1,0,0) → (√2/2, 0, √2/2). That's (+X,+Z)/√2 — the chamfer NORMAL.
+    //   We want u (shape-X after step 1 is still world-X basis vector) to map
+    //   to the slope (+X,-Z)/√2 instead. So use θ = +π/4:
+    //   (1,0,0) → (√2/2, 0, -√2/2) = (+X, 0, -Z)/√2 ✓ slope
+    //   (0,0,1) → (sin(π/4), 0, cos(π/4)) = (√2/2, 0, √2/2) = chamfer normal ✓
+    //   (0,1,0) → (0,1,0) unchanged.
+    //
+    // So: rotateX(+π/2), then rotateY(+π/4). (+π/2 about X puts shape-Y on
+    // world +Z; rotateY(+π/4) tilts the X-Z pair into the chamfer frame.)
+    g.rotateX(Math.PI / 2)
+    g.rotateY(Math.PI / 4)
+    return g
+  }, [H])
+  useEffect(() => () => lipGeom.dispose(), [lipGeom])
+
+  // Mount the U so its opening (shape-v=0) lies ON the chamfer face, with the
+  // back of the U sitting at the outer corner of the chamfer gap.
+  // Chamfer face midpoint in door-local X-Z:
+  const chamferMidX = W / 2 - b / 2
+  const chamferMidZ = t / 2 - b / 2
+
+  // If handleOnPlusX is false, mirror the entire group along X to flip both
+  // the chamfer and the U-channel to the -X side.
+  const sx = handleOnPlusX ? 1 : -1
+
+  return (
+    <group scale={[sx, 1, 1]}>
+      {/* Door panel — extruded profile. Profile is (width, thickness) with
+          front at +local-Y. Extrusion is along local +Z. Rotate +π/2 about X
+          so local Z (extrusion) → world Y (door height) and local Y (front)
+          → world Z (out of cabinet). */}
+      <mesh
+        geometry={doorGeom}
+        rotation={[Math.PI / 2, 0, 0]}
+        castShadow
+      >
+        {doorMat}
+      </mesh>
+      {/* Aluminum lip on the chamfer face */}
+      <mesh
+        geometry={lipGeom}
+        position={[chamferMidX, 0, chamferMidZ]}
+        castShadow
+      >
+        {lipMat}
+      </mesh>
+    </group>
+  )
+}
+
 /** Technica blade-style door handle: single extruded shape with feet at ends and elevated middle. */
 function technicaBladeHandle(
   prefix: string, hx: number, cy: number, doorFaceZ: number, totalH: number,
@@ -1264,9 +1027,13 @@ const CabinetMesh = memo(function CabinetMesh({ cabinet, selected, wireframe, bl
   const doorFrontZ = doorZ + doorThick / 2  // front face of the door panel
 
   // Door widths — Signature has no center stile (doors meet with a small gap);
-  // Technica has full overlay doors covering the frame
-  const doorGap = isSignature ? FT(0.15) : FT(0.1)  // Signature: thin reveal gap, Technica: minimal seam
-  const door1W = isSignature ? wFt - 2 * fr - 2 * reveal : wFt - FT(0.1) // Technica: nearly full width
+  // Technica has full overlay doors covering the frame.
+  // Signature U-channel handles protrude ~SIG_U_DEPTH / √2 past each door's
+  // inner edge; widen the gap so the two handles don't collide, and shorten
+  // the single-door width so the handle clears the side frame rail.
+  const sigHandleOut = SIG_U_DEPTH / Math.SQRT2
+  const doorGap = isSignature ? FT(0.15) + 2 * sigHandleOut : FT(0.1)
+  const door1W = isSignature ? wFt - 2 * fr - 2 * reveal - sigHandleOut : wFt - FT(0.1)
   const door2W = isSignature
     ? (wFt - 2 * fr - doorGap) / 2 - reveal
     : (wFt - doorGap) / 2                            // Technica: each door covers half, split by seam
@@ -1396,35 +1163,28 @@ const CabinetMesh = memo(function CabinetMesh({ cabinet, selected, wireframe, bl
   let handleL: JSX.Element[] = []   // left door handles (2-door)
   let handleR: JSX.Element[] = []   // right door handles (2-door)
 
+  // Signature aluminum-lip material for the chamfered door edge. Reused
+  // regardless of door count; the SignatureDoorPanel renders the lip.
+  const sigLipMat = blueprint
+    ? <meshBasicMaterial color="#666666" />
+    : handleIsBlack
+    ? <meshStandardMaterial color={handleHex} metalness={0.05} roughness={0.55} />
+    : (
+      <meshPhysicalMaterial
+        map={brushedHandleMaps?.map}
+        normalMap={brushedHandleMaps?.normalMap}
+        normalScale={[0.6, 0.6] as unknown as THREE.Vector2}
+        roughnessMap={brushedHandleMaps?.roughnessMap}
+        color="#ffffff"
+        metalness={0}
+        roughness={0.55}
+        envMapIntensity={0}
+      />
+    )
+
   if (isSignature && cabinet.doors > 0) {
-    const sigW  = FT(0.6)
-    const sigD  = FT(0.55)
-    const sigH  = doorH - FT(0.5)
-    const sigRelY = 0  // relative to door center Y
-    const sigRelZ = doorZ - doorThick / 2 + sigD / 2
-    const sigMat = blueprint
-      ? <meshBasicMaterial color="#666666" />
-      : handleIsBlack
-      ? <meshStandardMaterial color={handleHex} metalness={0.05} roughness={0.55} />
-      : (
-        <meshPhysicalMaterial
-          map={brushedHandleMaps?.map}
-          normalMap={brushedHandleMaps?.normalMap}
-          normalScale={[0.6, 0.6] as unknown as THREE.Vector2}
-          roughnessMap={brushedHandleMaps?.roughnessMap}
-          color="#ffffff"
-          metalness={0}
-          roughness={0.55}
-          envMapIntensity={0}
-        />
-      )
-    if (cabinet.doors === 1) {
-      const chX = handleRight ? (door1W / 2 - sigW / 2) : (-door1W / 2 + sigW / 2)
-      handle1.push(<mesh key="sig1" position={[chX, sigRelY, sigRelZ - doorZ]}>{sigMat}<boxGeometry args={[sigW, sigH, sigD]} /></mesh>)
-    } else {
-      handleL.push(<mesh key="sigL" position={[door2W / 2 - sigW / 2, sigRelY, sigRelZ - doorZ]}>{sigMat}<boxGeometry args={[sigW, sigH, sigD]} /></mesh>)
-      handleR.push(<mesh key="sigR" position={[-door2W / 2 + sigW / 2, sigRelY, sigRelZ - doorZ]}>{sigMat}<boxGeometry args={[sigW, sigH, sigD]} /></mesh>)
-    }
+    // Handle (chamfer + lip) lives inside SignatureDoorPanel — no separate
+    // handle mesh needed. Leave handle1/handleL/handleR empty for Signature.
   } else if (cabinet.doors > 0) {
     // Technica blade handles — compute relative to door center
     const bladeH = cabinet.style === 'locker' ? FT(19) : FT(8.5)
@@ -1505,26 +1265,56 @@ const CabinetMesh = memo(function CabinetMesh({ cabinet, selected, wireframe, bl
             const hingeSign = handleRight ? -1 : 1  // swing outward from hinge
             return (
               <group position={[hingeX, doorMY, doorZ]} rotation={[0, hingeSign * openAngle, 0]}>
-                <RoundedBox args={[door1W, doorH, doorThick]} radius={doorRadius} smoothness={4} position={[-hingeX, 0, 0]} castShadow>
-                  {doorMat}
-                </RoundedBox>
+                {isSignature ? (
+                  <group position={[-hingeX, 0, 0]}>
+                    <SignatureDoorPanel
+                      width={door1W} height={doorH} thickness={doorThick}
+                      handleOnPlusX={handleRight}
+                      doorMat={doorMat} lipMat={sigLipMat}
+                    />
+                  </group>
+                ) : (
+                  <RoundedBox args={[door1W, doorH, doorThick]} radius={doorRadius} smoothness={4} position={[-hingeX, 0, 0]} castShadow>
+                    {doorMat}
+                  </RoundedBox>
+                )}
                 {handle1.map((h, i) => <group key={`h1-${i}`} position={[-hingeX, 0, 0]}>{h}</group>)}
               </group>
             )
           })()}
           {cabinet.doors === 2 && doorH > 0 && (<>
-            {/* Left door — hinges on left edge, swings outward */}
+            {/* Left door — hinges on left edge, swings outward; seam at +X (inner edge) */}
             <group position={[lDX - door2W / 2, doorMY, doorZ]} rotation={[0, -openAngle, 0]}>
-              <RoundedBox args={[door2W, doorH, doorThick]} radius={doorRadius} smoothness={4} position={[door2W / 2, 0, 0]} castShadow>
-                {doorMat}
-              </RoundedBox>
+              {isSignature ? (
+                <group position={[door2W / 2, 0, 0]}>
+                  <SignatureDoorPanel
+                    width={door2W} height={doorH} thickness={doorThick}
+                    handleOnPlusX={true}
+                    doorMat={doorMat} lipMat={sigLipMat}
+                  />
+                </group>
+              ) : (
+                <RoundedBox args={[door2W, doorH, doorThick]} radius={doorRadius} smoothness={4} position={[door2W / 2, 0, 0]} castShadow>
+                  {doorMat}
+                </RoundedBox>
+              )}
               {handleL.map((h, i) => <group key={`hL-${i}`} position={[door2W / 2, 0, 0]}>{h}</group>)}
             </group>
-            {/* Right door — hinges on right edge, swings outward */}
+            {/* Right door — hinges on right edge, swings outward; seam at -X (inner edge) */}
             <group position={[rDX + door2W / 2, doorMY, doorZ]} rotation={[0, openAngle, 0]}>
-              <RoundedBox args={[door2W, doorH, doorThick]} radius={doorRadius} smoothness={4} position={[-door2W / 2, 0, 0]} castShadow>
-                {doorMat}
-              </RoundedBox>
+              {isSignature ? (
+                <group position={[-door2W / 2, 0, 0]}>
+                  <SignatureDoorPanel
+                    width={door2W} height={doorH} thickness={doorThick}
+                    handleOnPlusX={false}
+                    doorMat={doorMat} lipMat={sigLipMat}
+                  />
+                </group>
+              ) : (
+                <RoundedBox args={[door2W, doorH, doorThick]} radius={doorRadius} smoothness={4} position={[-door2W / 2, 0, 0]} castShadow>
+                  {doorMat}
+                </RoundedBox>
+              )}
               {handleR.map((h, i) => <group key={`hR-${i}`} position={[-door2W / 2, 0, 0]}>{h}</group>)}
             </group>
           </>)}
@@ -2217,91 +2007,6 @@ function slatRoughness(hex: string): number {
   return 0.75 - luminance * 0.40   // white→0.35, black→0.75
 }
 
-// ─── Per-chain baseboard mesh (world-space, seamless) ────────────────────────
-function BaseboardChain({ chain, floorSteps, cx, cz, baseTex, wireframe, side = 'interior' }: {
-  chain: ChainEntry[]
-  floorSteps: FloorStep[]
-  cx: number; cz: number
-  baseTex: THREE.Texture | null
-  wireframe: boolean
-  side?: 'interior' | 'exterior'
-}) {
-  const geo = useMemo(
-    () => buildBaseboardChainGeo(chain, floorSteps, cx, cz, side),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chain, floorSteps, cx, cz, side],
-  )
-  const bbWall = chain.find(e => e.wall.baseboard && e.wall.baseboardHeight > 0)?.wall
-  const bbColor  = wireframe ? '#2a6a9a' : (bbWall?.baseboardColor ?? '#cccccc')
-  // Only use flake texture if baseTex is loaded and valid (support multiple image types)
-  function isTextureLoaded(tex: any) {
-    if (!tex || !tex.image) return false;
-    const img = tex.image;
-    if (typeof window !== 'undefined' && window.Image && img instanceof window.Image) {
-      return img.naturalWidth > 0;
-    }
-    if (typeof ImageBitmap !== 'undefined' && img instanceof ImageBitmap) {
-      return img.width > 0;
-    }
-    if (img instanceof HTMLCanvasElement) {
-      return img.width > 0;
-    }
-    if (typeof img.width === 'number') {
-      return img.width > 0;
-    }
-    return false;
-  }
-  const isBaseTexValid = isTextureLoaded(baseTex);
-  const useFlake = !wireframe && chain.some(e => e.wall.baseboardTexture) && isBaseTexValid;
-  // Fallback color if both color and texture are missing
-  const fallbackColor = '#ff00ff' // bright magenta for debug
-  // Slight self-illumination so the exterior-side baseboard (which typically
-  // has no lights facing it) doesn't render visibly darker than the interior
-  // copy of the same baseboard. Keeps shading consistent across both sides
-  // without washing out the interior in well-lit scenes.
-  const emissiveColor = useFlake ? '#ffffff' : (bbColor || fallbackColor)
-  const emissiveIntensity = wireframe ? 0 : 0.18
-  return (
-    <mesh geometry={geo} frustumCulled={false}>
-      <meshStandardMaterial
-        key={`bb-mat-${useFlake}-${bbColor}-${wireframe}`}
-        color={useFlake ? '#ffffff' : (bbColor || fallbackColor)}
-        map={useFlake ? baseTex : null}
-        wireframe={wireframe}
-        roughness={0.85}
-        emissive={emissiveColor}
-        emissiveIntensity={emissiveIntensity}
-        side={THREE.DoubleSide}
-        depthWrite
-        polygonOffset polygonOffsetFactor={-1} polygonOffsetUnits={-1}
-      />
-    </mesh>
-  )
-}
-
-// ─── Scene-level seamless baseboard renderer ──────────────────────────────────
-function GarageBaseboards({ walls, floorSteps, baseTex, wireframe }: {
-  walls: GarageWall[]; floorSteps: FloorStep[]
-  baseTex: THREE.Texture | null; wireframe: boolean
-}) {
-  const cx = useMemo(() => walls.length > 0 ? walls.reduce((s, w) => s + (w.x1 + w.x2) / 2, 0) / walls.length : 0, [walls])
-  const cz = useMemo(() => walls.length > 0 ? walls.reduce((s, w) => s + (w.z1 + w.z2) / 2, 0) / walls.length : 0, [walls])
-  const chains = useMemo(() => findWallChains(walls), [walls])
-  if (!walls.some(w => w.baseboard && w.baseboardHeight > 0)) return null
-  return <>
-    {chains.flatMap((chain, ci) =>
-      chain.some(e => e.wall.baseboard && e.wall.baseboardHeight > 0)
-        ? [
-            <BaseboardChain key={`int-${ci}`} chain={chain} floorSteps={floorSteps}
-              cx={cx} cz={cz} baseTex={baseTex} wireframe={wireframe} side="interior" />,
-            <BaseboardChain key={`ext-${ci}`} chain={chain} floorSteps={floorSteps}
-              cx={cx} cz={cz} baseTex={baseTex} wireframe={wireframe} side="exterior" />,
-          ]
-        : []
-    )}
-  </>
-}
-
 // ─── Garage-door threshold ────────────────────────────────────────────────────
 // Two pieces:
 //  1. Floor patch  — thin textured box fills the floor gap under the wall opening
@@ -2752,112 +2457,6 @@ function OpeningGLBModel({ modelId, widthIn, heightIn }: {
     </group>
   )
 }
-
-// ─── Stem wall mesh (flush with wall, floor-matched flake texture) ────────────
-// Splits into horizontal segments that skip garage-door openings that reach the floor.
-function StemWallMesh({ lengthIn, heightIn, thickFt, texture, wallColor, baseTex, wireframe, blueprint, openings, onClick, onPointerDown }: {
-  lengthIn: number; heightIn: number; thickFt: number
-  texture: 'concrete' | 'flake' | 'none'; wallColor: string
-  baseTex: THREE.Texture | null; wireframe: boolean; blueprint: boolean
-  openings: WallOpening[]
-  onClick: () => void; onPointerDown: (e: ThreeEvent<PointerEvent>) => void
-}) {
-  const swH = FT(heightIn)
-  const concreteColor = '#a8a098'
-  const stemColor = wireframe ? '#6a8a6a' : (texture === 'none' ? wallColor : concreteColor)
-
-  // Build horizontal segments that skip openings whose bottom edge is at or below stem wall height
-  const segments = useMemo(() => {
-    const cuts = openings
-      .filter(op => op.yOffset < heightIn) // opening bottom is within stem wall range
-      .sort((a, b) => a.xOffset - b.xOffset)
-    if (cuts.length === 0) return [{ x0: 0, x1: lengthIn }]
-    const segs: { x0: number; x1: number }[] = []
-    let cursor = 0
-    for (const op of cuts) {
-      const left = Math.max(0, op.xOffset)
-      const right = Math.min(lengthIn, op.xOffset + op.width)
-      if (left > cursor) segs.push({ x0: cursor, x1: left })
-      cursor = Math.max(cursor, right)
-    }
-    if (cursor < lengthIn) segs.push({ x0: cursor, x1: lengthIn })
-    return segs
-  }, [openings, lengthIn, heightIn])
-
-  // Validate baseTex is loaded (support HTMLImageElement, ImageBitmap, HTMLCanvasElement)
-  function isTextureLoaded(tex: any) {
-    if (!tex || !tex.image) return false
-    const img = tex.image
-    if (typeof window !== 'undefined' && window.Image && img instanceof window.Image) return img.naturalWidth > 0
-    if (typeof ImageBitmap !== 'undefined' && img instanceof ImageBitmap) return img.width > 0
-    if (img instanceof HTMLCanvasElement) return img.width > 0
-    if (typeof img.width === 'number') return img.width > 0
-    return false
-  }
-
-  const useFlake = texture === 'flake' && !wireframe && isTextureLoaded(baseTex)
-  const rptPerFoot = baseTex?.repeat.x ?? 1
-
-  return (
-    <>
-      {segments.map((seg, i) => {
-        const segW = seg.x1 - seg.x0
-        const localX = FT(-lengthIn / 2 + seg.x0 + segW / 2)
-        const segWFt = FT(segW)
-        return (
-          <mesh key={i} position={[localX, swH / 2, 0]}
-            onClick={(e) => { e.stopPropagation(); onClick() }}
-            onPointerDown={onPointerDown}
-            receiveShadow castShadow
-          >
-            <boxGeometry args={[segWFt, swH, thickFt + FT(0.05)]} />
-            {blueprint ? (
-              <meshBasicMaterial key={`sw-${texture}-bp`} color={stemColor} />
-            ) : (
-              <StemWallMaterial
-                useFlake={useFlake} baseTex={baseTex}
-                segWidthIn={segW} heightIn={heightIn} rptPerFoot={rptPerFoot}
-                stemColor={stemColor} texture={texture} wireframe={wireframe}
-              />
-            )}
-          </mesh>
-        )
-      })}
-    </>
-  )
-}
-
-// Extracted material so each segment gets its own cloned texture with correct repeat
-function StemWallMaterial({ useFlake, baseTex, segWidthIn, heightIn, rptPerFoot, stemColor, texture, wireframe }: {
-  useFlake: boolean; baseTex: THREE.Texture | null
-  segWidthIn: number; heightIn: number; rptPerFoot: number
-  stemColor: string; texture: string; wireframe: boolean
-}) {
-  const stemTex = useMemo(() => {
-    if (!useFlake || !baseTex) return null
-    const t = baseTex.clone()
-    t.repeat.set(FT(segWidthIn) * rptPerFoot, FT(heightIn) * rptPerFoot)
-    t.needsUpdate = true
-    return t
-  }, [baseTex, useFlake, segWidthIn, heightIn, rptPerFoot])
-
-  return (
-    <meshStandardMaterial
-      key={`sw-${texture}-${useFlake}-${wireframe}`}
-      color={useFlake ? '#ffffff' : stemColor}
-      map={useFlake ? stemTex : null}
-      roughness={useFlake ? 0.7 : (texture === 'concrete' ? 0.95 : 0.7)}
-      wireframe={wireframe}
-    />
-  )
-}
-
-// ─── Per-wall mitered outlines ───────────────────────────────────────────────
-// Precomputes mitered outline points for each wall.  The outline of wall[i]
-// in the chain runs from pPts[i]→pPts[i+1] on the +side and
-// nPts[i]→nPts[i+1] on the −side.  Adjacent walls share the mitered corner
-// point so their geometries meet exactly — no gap, no overlap.
-// Returns a Map from wallId → { p0, p1, n0, n1 } (in inches, world XZ).
 function computeMiteredOutlines(walls: GarageWall[]): Map<string, {
   p0x: number; p0z: number; p1x: number; p1z: number   // +side start/end
   n0x: number; n0z: number; n1x: number; n1z: number   // −side start/end
@@ -2962,7 +2561,10 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
   }, [wall, lengthIn])
   const hFt         = FT(wall.height)
 
-  // Render 3D meshes for 'door' and 'window' openings
+  // Render 3D meshes for 'door' and 'window' openings. Doors without a GLB
+  // model are rendered as a pure cut-out (no door panel) so you can see
+  // through them like the garage door — a floor threshold is drawn below
+  // the opening via <GarageDoorThreshold> elsewhere in the render tree.
   const openingMeshes = wall.openings?.filter(op => op.type === 'door' || op.type === 'window').map((op, i) => {
     const opW = FT(op.width)
     const opH = FT(op.height)
@@ -2980,9 +2582,11 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
       )
     }
 
-    // Fallback: box geometry with optional texture
-    const isDoor = op.type === 'door'
-    const defaultColor = isDoor ? '#b8b4a8' : '#87CEEB'
+    // Doors with no model: render nothing in the opening — it stays a cut-out.
+    if (op.type === 'door') return null
+
+    // Windows: translucent pane + frame, unchanged.
+    const defaultColor = '#87CEEB'
     return (
       <group key={op.id || i}>
         <mesh position={[FT(along), FT(y), opD / 2]}>
@@ -2990,7 +2594,7 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
           {!wireframe && op.textureId && getTextureById(op.textureId)
             ? <TexturedDoorMaterial textureId={op.textureId} widthFt={opW} heightFt={opH} />
             : <meshLambertMaterial color={wireframe ? '#ffcc00' : defaultColor}
-                transparent={op.type === 'window'} opacity={op.type === 'window' ? 0.4 : 1} />
+                transparent={true} opacity={0.4} />
           }
         </mesh>
         {/* Window frame */}
@@ -3157,23 +2761,19 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
         )
       })}
 
-      {/* Stem wall — flush with wall face at the bottom, split around openings */}
-      {wall.stemWall && (wall.stemWallHeight ?? 0) > 0 && (
-        <StemWallMesh
-          lengthIn={lengthIn} heightIn={wall.stemWallHeight ?? 6} thickFt={thickFt}
-          texture={wall.stemWallTexture ?? 'concrete'} wallColor={wall.wallColor ?? '#e0dedd'}
-          baseTex={baseTex} wireframe={wireframe} blueprint={!!blueprint}
-          openings={wall.openings ?? []}
-          onClick={onClick} onPointerDown={onPointerDown}
-        />
-      )}
+      {/* Stem walls now standalone pieces (rendered globally below) */}
 
       {/* 3D Door & window meshes */}
       {!blueprint && openingMeshes}
 
 
-      {/* Garage-door thresholds — floor-textured patch across the wall thickness */}
-      {baseTex && wall.openings.filter(op => op.type === 'garage-door').map(op => (
+      {/* Thresholds — floor-textured patch across the wall thickness. Drawn
+         for garage doors AND for regular doors (cut-outs) that reach the
+         floor, so the gap underneath shows floor material, not void. */}
+      {baseTex && wall.openings.filter(op =>
+        op.type === 'garage-door' ||
+        (op.type === 'door' && op.yOffset <= 0.5 && !(op.modelId && getOpeningModelById(op.modelId)))
+      ).map(op => (
         <GarageDoorThreshold
           key={op.id}
           doorW={op.width}
@@ -3219,6 +2819,96 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
     </>
   )
 })
+
+// ─── Flaked box mesh — used by baseboards & stem walls ────────────────────────
+// Renders a box. When flake=true, the FRONT face (+Z local) gets a flooring
+// texture sized to width × height. The texture is either loaded from a
+// specific flooring catalog ID (per-piece override) or falls back to the
+// current floor's texture.
+function FlakedBoxMesh({ lenFt, hFt, tFt, color, wireframe, flake, floorTex, widthIn, heightIn, flakeTextureId, floorTextureScale }: {
+  lenFt: number; hFt: number; tFt: number
+  color: string; wireframe: boolean
+  flake: boolean
+  floorTex: THREE.Texture | null
+  widthIn: number; heightIn: number
+  flakeTextureId?: string
+  floorTextureScale: number
+}) {
+  // Load the override texture (if a per-piece flake texture ID is set).
+  // useTexture must run unconditionally so we always load *something* —
+  // a 1x1 transparent PNG data URL placeholder when no override is set.
+  // (Using a real flooring path as placeholder caused stale-cache bugs:
+  //  switching from "match floor" → that same texture as override produced
+  //  no visible change because useTexture returned the same instance.)
+  const PLACEHOLDER_1PX = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
+  const overridePath = flakeTextureId
+    ? `${import.meta.env.BASE_URL}${flooringTexturePathById(flakeTextureId)}`
+    : PLACEHOLDER_1PX
+  const overrideTex = useTexture(overridePath) as THREE.Texture
+
+  // Repeats-per-foot for the texture. Same value used on every face so all 6
+  // sides show the flake at identical density — UVs below span each face's
+  // real-world feet, so .repeat must NOT be pre-scaled by piece size.
+  const frontTex = useMemo(() => {
+    if (!flake) return null
+    if (!flakeTextureId) {
+      if (!floorTex) return null
+      const t = floorTex.clone()
+      t.needsUpdate = true
+      t.wrapS = t.wrapT = THREE.RepeatWrapping
+      // floorTex.repeat is already repeats-per-foot — copy as-is.
+      t.repeat.set(floorTex.repeat.x, floorTex.repeat.y)
+      return t
+    }
+    const t = overrideTex.clone()
+    t.needsUpdate = true
+    t.wrapS = t.wrapT = THREE.RepeatWrapping
+    const tilesPerFoot = 12 / floorTextureScale
+    t.repeat.set(tilesPerFoot, tilesPerFoot)
+    return t
+  }, [flake, flakeTextureId, floorTex, overrideTex, floorTextureScale])
+
+  // Build a box geometry with per-face UVs sized to each face's feet
+  // dimensions. Box face order from BoxGeometry: +X, -X, +Y, -Y, +Z, -Z.
+  // Face dims (width, height in feet):
+  //   +X / -X (sides):      tFt × hFt
+  //   +Y / -Y (top/bottom): lenFt × tFt
+  //   +Z / -Z (front/back): lenFt × hFt
+  const geom = useMemo(() => {
+    const g = new THREE.BoxGeometry(lenFt, hFt, tFt)
+    const uv = g.attributes.uv as THREE.BufferAttribute
+    const setFace = (faceIdx: number, w: number, h: number) => {
+      const base = faceIdx * 4
+      // BoxGeometry UVs per face: (0,1), (1,1), (0,0), (1,0)
+      uv.setXY(base + 0, 0, h)
+      uv.setXY(base + 1, w, h)
+      uv.setXY(base + 2, 0, 0)
+      uv.setXY(base + 3, w, 0)
+    }
+    setFace(0, tFt,   hFt)   // +X
+    setFace(1, tFt,   hFt)   // -X
+    setFace(2, lenFt, tFt)   // +Y
+    setFace(3, lenFt, tFt)   // -Y
+    setFace(4, lenFt, hFt)   // +Z
+    setFace(5, lenFt, hFt)   // -Z
+    uv.needsUpdate = true
+    return g
+  }, [lenFt, hFt, tFt])
+  useEffect(() => () => geom.dispose(), [geom])
+
+  if (!flake || !frontTex) {
+    return (
+      <mesh castShadow receiveShadow geometry={geom}>
+        <meshLambertMaterial key="plain" map={null} color={color} wireframe={wireframe} />
+      </mesh>
+    )
+  }
+  return (
+    <mesh castShadow receiveShadow geometry={geom}>
+      <meshLambertMaterial key="flaked" map={frontTex} color="#ffffff" />
+    </mesh>
+  )
+}
 
 // ─── Drag handle sphere ───────────────────────────────────────────────────────
 function DragHandle({ position, color, size = 0.2, onPointerDown }: {
@@ -4233,6 +3923,8 @@ export default function GarageShell() {
     deleteFloorStep,
     cabinets, selectedCabinetId, selectCabinet, updateCabinet,
     countertops, selectedCountertopId, selectCountertop, updateCountertop,
+    baseboards, selectedBaseboardId, selectBaseboard, updateBaseboard,
+    stemWalls, selectedStemWallId, selectStemWall, updateStemWall,
     sceneLights, updateSceneLight,
     ceilingLights, selectedCeilingLightId, selectCeilingLight, updateCeilingLight,
     viewMode, selectedWallId, selectWall, selectShape, selectedShapeId,
@@ -4331,7 +4023,7 @@ export default function GarageShell() {
 
   // Derive floor polygon from wall footprint — falls back to convex hull, then stored floorPoints
   const effectiveFloorPts = useMemo(
-    () => wallsToFloorPolygon(walls) ?? (walls.length >= 3 ? convexHullFromWalls(walls) : floorPoints),
+    () => effectiveFloorPolygon(walls, floorPoints),
     [walls, floorPoints],
   )
 
@@ -4351,6 +4043,10 @@ export default function GarageShell() {
   const updateCabRef    = useRef(updateCabinet);    useEffect(() => { updateCabRef.current = updateCabinet }, [updateCabinet])
   const countertopsRef  = useRef(countertops);       useEffect(() => { countertopsRef.current = countertops }, [countertops])
   const updateCtRef     = useRef(updateCountertop);  useEffect(() => { updateCtRef.current = updateCountertop }, [updateCountertop])
+  const baseboardsRef   = useRef(baseboards);        useEffect(() => { baseboardsRef.current = baseboards }, [baseboards])
+  const updateBbRef     = useRef(updateBaseboard);   useEffect(() => { updateBbRef.current = updateBaseboard }, [updateBaseboard])
+  const stemWallsRef    = useRef(stemWalls);         useEffect(() => { stemWallsRef.current = stemWalls }, [stemWalls])
+  const updateSwRef     = useRef(updateStemWall);    useEffect(() => { updateSwRef.current = updateStemWall }, [updateStemWall])
   const updateLightRef    = useRef(updateSceneLight);    useEffect(() => { updateLightRef.current = updateSceneLight }, [updateSceneLight])
   const ceilingLightsRef  = useRef(ceilingLights);       useEffect(() => { ceilingLightsRef.current = ceilingLights }, [ceilingLights])
   const updateCeilLtRef   = useRef(updateCeilingLight);  useEffect(() => { updateCeilLtRef.current = updateCeilingLight }, [updateCeilingLight])
@@ -4381,6 +4077,21 @@ export default function GarageShell() {
     else delete cabinetGroupRefs.current[id]
   }, [])
   const countertopDragRef   = useRef<CountertopDragState | null>(null)
+  // Baseboard / stem-wall drag: body move OR end-handle resize. Same shape
+  // because both are length-along-wall pieces with the same drag mechanics —
+  // the only difference is the snap target (interior face vs inset past it).
+  const baseboardDragRef    = useRef<{
+    bbId: string
+    kind: 'baseboard' | 'stemwall'
+    mode: 'move' | 'resize'
+    side?: 'left' | 'right'   // resize only
+    ux: number; uz: number    // along-axis unit vector (length axis)
+    // Move: original center + initial floor hit point (inches)
+    startX?: number; startZ?: number
+    startHitX?: number; startHitZ?: number
+    // Resize: fixed end (inches) opposite the dragging end
+    fixedX?: number; fixedZ?: number
+  } | null>(null)
   const lightDragRef        = useRef<LightDragState | null>(null)
   const ceilingLightDragRef = useRef<CeilingLightDragState | null>(null)
   const ledbarResizeRef     = useRef<{ lightId: string; side: 'left' | 'right'; ux: number; uz: number; fixedX: number; fixedZ: number } | null>(null)
@@ -4780,7 +4491,7 @@ export default function GarageShell() {
       const isDragging = wallDragRef.current || shapeDragRef.current || floorPointDragRef.current ||
         vertDragRef.current || slatBodyDragRef.current || slatCornerDragRef.current ||
         backsplashBodyDragRef.current || backsplashCornerDragRef.current ||
-        cabinetDragRef.current || countertopDragRef.current || lightDragRef.current ||
+        cabinetDragRef.current || countertopDragRef.current || baseboardDragRef.current || lightDragRef.current ||
         ceilingLightDragRef.current || itemDragRef.current || rackDragRef.current || floorStepDragRef.current || floorStepCornerDragRef.current
       if (isDragging && !hasCaptured) {
         try { canvas.setPointerCapture(e.pointerId); hasCaptured = true } catch (_) {}
@@ -4841,7 +4552,7 @@ export default function GarageShell() {
           // Look up wall live for ceiling + baseboard values
           const dragWall = wallsRef.current.find(w => w.id === sbd.wallId)
           const wallH    = dragWall?.height ?? 9999
-          const bbH      = (dragWall?.baseboard && dragWall.baseboardHeight > 0) ? dragWall.baseboardHeight : 0
+          const bbH      = 0
 
           let newBottom = snapToGrid(sbd.startYBottom + dHeight)
           // Snap to baseboard top within 3"
@@ -4886,7 +4597,7 @@ export default function GarageShell() {
 
           const dragWall = wallsRef.current.find(w => w.id === bbd.wallId)
           const wallH    = dragWall?.height ?? 9999
-          const bbH      = (dragWall?.baseboard && dragWall.baseboardHeight > 0) ? dragWall.baseboardHeight : 0
+          const bbH      = 0
 
           let newBottom = snapToGrid(bbd.startYBottom + dHeight)
           if (bbH > 0 && Math.abs(newBottom - bbH) <= 3) newBottom = bbH
@@ -4920,7 +4631,7 @@ export default function GarageShell() {
           const cWall = wallsRef.current.find(w => w.id === bsc.wallId)
           if (panel && cWall) {
             const wallH = cWall.height
-            const bbH   = cWall.baseboard ? cWall.baseboardHeight : 0
+            const bbH   = 0
             const changes: Partial<StainlessBacksplashPanel> = {}
             const minAlong = bsc.startTrimIn
             const maxAlong = bsc.wallLenIn - bsc.endTrimIn
@@ -4959,7 +4670,7 @@ export default function GarageShell() {
           const cWall = wallsRef.current.find(w => w.id === sc.wallId)
           if (panel && cWall) {
             const wallH = cWall.height
-            const bbH   = cWall.baseboard ? cWall.baseboardHeight : 0
+            const bbH   = 0
             const changes: Partial<SlatwallPanel> = {}
             const minAlong = sc.startTrimIn
             const maxAlong = sc.wallLenIn - sc.endTrimIn
@@ -5092,6 +4803,137 @@ export default function GarageShell() {
         return
       }
 
+      // Baseboard / Stem-wall drag (body move OR end-resize).
+      const bbDrag = baseboardDragRef.current
+      if (bbDrag) {
+        const piece = bbDrag.kind === 'stemwall'
+          ? stemWallsRef.current.find(p => p.id === bbDrag.bbId)
+          : baseboardsRef.current.find(p => p.id === bbDrag.bbId)
+        if (!piece) return
+        const updateRef = bbDrag.kind === 'stemwall' ? updateSwRef : updateBbRef
+
+        if (bbDrag.mode === 'move') {
+          // Try wall-face hit first — lets the piece slide UP the wall when the
+          // cursor is on a wall above the floor. Falls back to floor hit when
+          // the cursor is over open floor.
+          const wh = wallFaceHit(e.clientX, e.clientY, wallsRef.current)
+          const hitFloor = floorHit(e.clientX, e.clientY)
+          const floorDist = hitFloor
+            ? ray.ray.origin.distanceTo(new THREE.Vector3(hitFloor.x, 0, hitFloor.z))
+            : Infinity
+          const useWall = wh && wh.dist + 0.01 < floorDist
+
+          if (useWall) {
+            const wall = wh.wall
+            const dx = wall.x2 - wall.x1, dz = wall.z2 - wall.z1
+            const wlen = Math.hypot(dx, dz) || 1
+            const ux = dx / wlen, uz = dz / wlen
+            const nx = -uz * wh.side, nz = ux * wh.side
+            const targetPerp = bbDrag.kind === 'stemwall'
+              // Stem wall sits FLUSH on interior wall face (tiny 1/16" forward
+              // bump for z-fighting). Visually paints the bottom of the wall.
+              ? wall.thickness / 2 + piece.thickness / 2 + 0.0625
+              : wall.thickness / 2 + piece.thickness / 2 + 0.5
+            // Snap along-wall position to corners (piece edge flush with wall
+            // end) within 8" — corner snapping gives a clean fit.
+            const halfL = piece.length / 2
+            let snappedAlong = wh.along
+            const startTarget = halfL                  // left edge against start corner
+            const endTarget   = wlen - halfL          // right edge against end corner
+            const CORNER_SNAP = 8
+            if (Math.abs(snappedAlong - startTarget) < CORNER_SNAP) snappedAlong = startTarget
+            else if (Math.abs(snappedAlong - endTarget) < CORNER_SNAP) snappedAlong = endTarget
+            const newX = wall.x1 + snappedAlong * ux + nx * targetPerp
+            const newZ = wall.z1 + snappedAlong * uz + nz * targetPerp
+            // Snap Y to floor when within 4" of floor — common case for stem
+            // walls and baseboards.
+            let newY = Math.max(0, snapToGrid(wh.yIn - piece.height / 2))
+            if (newY < 4) newY = 0
+            const newRotY = -Math.atan2(uz, ux) + (wh.side === -1 ? Math.PI : 0)
+            updateRef.current(piece.id, { x: newX, z: newZ, y: newY, rotY: newRotY })
+          } else if (hitFloor) {
+            // Floor-plane drag: offset-based, find nearest wall to snap to.
+            const hxIn = hitFloor.x * 12, hzIn = hitFloor.z * 12
+            const dx = hxIn - (bbDrag.startHitX ?? hxIn)
+            const dz = hzIn - (bbDrag.startHitZ ?? hzIn)
+            let newX = (bbDrag.startX ?? piece.x) + dx
+            let newZ = (bbDrag.startZ ?? piece.z) + dz
+            const SNAP = 4
+            const CORNER_SNAP = 8
+            let snappedRotY: number | undefined
+            let bestPerp = SNAP
+            for (const w of wallsRef.current) {
+              const wdx = w.x2 - w.x1, wdz = w.z2 - w.z1
+              const wlen = Math.hypot(wdx, wdz) || 1
+              const ux = wdx / wlen, uz = wdz / wlen
+              let nx = -uz, nz = ux
+              if (!pointInPolygon((w.x1 + w.x2) / 2 + nx * 6, (w.z1 + w.z2) / 2 + nz * 6, floorPtsRef.current)) {
+                nx = -nx; nz = -nz
+              }
+              const vx = newX - w.x1, vz = newZ - w.z1
+              const along = vx * ux + vz * uz
+              const perp = vx * nx + vz * nz
+              if (along < -piece.length / 2 || along > wlen + piece.length / 2) continue
+              const targetPerp = bbDrag.kind === 'stemwall'
+                ? w.thickness / 2 + piece.thickness / 2 + 0.0625
+                : w.thickness / 2 + piece.thickness / 2 + 0.5
+              if (Math.abs(perp - targetPerp) <= bestPerp) {
+                bestPerp = Math.abs(perp - targetPerp)
+                // Corner snap on along-wall axis.
+                const halfL = piece.length / 2
+                let snappedAlong = along
+                if (Math.abs(snappedAlong - halfL) < CORNER_SNAP) snappedAlong = halfL
+                else if (Math.abs(snappedAlong - (wlen - halfL)) < CORNER_SNAP) snappedAlong = wlen - halfL
+                newX = w.x1 + snappedAlong * ux + nx * targetPerp
+                newZ = w.z1 + snappedAlong * uz + nz * targetPerp
+                snappedRotY = -Math.atan2(uz, ux)
+              }
+            }
+            // Snap Y back to floor when dragging on the floor plane.
+            updateRef.current(piece.id, { x: newX, z: newZ, y: 0, ...(snappedRotY !== undefined ? { rotY: snappedRotY } : {}) })
+          }
+        } else {
+          // Resize end — floor-plane only (length axis is horizontal).
+          const hitBb = floorHit(e.clientX, e.clientY)
+          if (!hitBb) return
+          const hxIn = hitBb.x * 12, hzIn = hitBb.z * 12
+          const fx = bbDrag.fixedX!, fz = bbDrag.fixedZ!
+          const ux = bbDrag.ux, uz = bbDrag.uz
+          const alongFromFixed = (hxIn - fx) * ux + (hzIn - fz) * uz
+          const newLen = Math.max(3, Math.abs(alongFromFixed))
+          const dir = Math.sign(alongFromFixed) || 1
+          // Quarter-inch base snap.
+          let snapLen = Math.round(newLen * 4) / 4
+          // Corner snap: if the moving end's resulting world position is
+          // within 8" of any wall endpoint, snap length so the moving end
+          // lands exactly at that corner.
+          const CORNER_SNAP = 8
+          let bestDist = CORNER_SNAP
+          for (const w of wallsRef.current) {
+            for (const corner of [[w.x1, w.z1], [w.x2, w.z2]] as [number, number][]) {
+              // Project corner onto the bar axis from the fixed point —
+              // candidate length to land the moving end on this corner.
+              const candAlong = (corner[0] - fx) * ux + (corner[1] - fz) * uz
+              if (Math.sign(candAlong) !== dir && candAlong !== 0) continue
+              const candLen = Math.abs(candAlong)
+              if (candLen < 3) continue
+              // Where would the moving end actually land at candLen?
+              const movingX = fx + ux * dir * candLen
+              const movingZ = fz + uz * dir * candLen
+              const distToCorner = Math.hypot(movingX - corner[0], movingZ - corner[1])
+              if (distToCorner < bestDist && Math.abs(candLen - newLen) < CORNER_SNAP) {
+                bestDist = distToCorner
+                snapLen = candLen
+              }
+            }
+          }
+          const cx = fx + ux * (dir * snapLen / 2)
+          const cz = fz + uz * (dir * snapLen / 2)
+          updateRef.current(piece.id, { length: snapLen, x: cx, z: cz })
+        }
+        return
+      }
+
       // Countertop drag (move or resize)
       const ctd = countertopDragRef.current
       if (ctd) {
@@ -5200,9 +5042,8 @@ export default function GarageShell() {
               const nz_ = wall.z1 + snappedAlong * uz + wh.side * perp * nzs
 
               const halfH = shape.h / 2
-              const baseboard = wall.baseboard && wall.baseboardHeight > 0 ? wall.baseboardHeight : 0
               const topY = wall.yOffset + wall.height
-              const candidates = [halfH, baseboard + halfH, topY - halfH]
+              const candidates = [halfH, topY - halfH]
               let newY = wh.yIn
               let bestDy = 8
               for (const c of candidates) {
@@ -5285,7 +5126,7 @@ export default function GarageShell() {
                 // cabinet tops (stacking) / bottoms (hanging under).
                 let cabY = Math.max(0, wh.yIn - cab.h / 2)
                 if (!skipSnap) {
-                  const bbH = wall.baseboard ? wall.baseboardHeight : 0
+                  const bbH = 0
                   const yTargets: number[] = [0]
                   if (bbH > 0) yTargets.push(bbH)
                   for (const step of floorStepsRef.current) {
@@ -5540,10 +5381,9 @@ export default function GarageShell() {
                 cabY = Math.max(0, snapToGrid(_tmpVec3b.y * 12))
               }
 
-              // Snap cabinet Y to step-up + baseboard heights
+              // Snap cabinet Y to step-up heights
               const Y_SNAP = 8  // inches threshold
-              const bbH = wall.baseboard ? wall.baseboardHeight : 0
-              // Build Y snap targets: floor, baseboard, step tops, baseboard-on-step
+              const bbH = 0
               const yTargets: number[] = [0]
               if (bbH > 0) yTargets.push(bbH)
               for (const step of floorStepsRef.current) {
@@ -5698,6 +5538,23 @@ export default function GarageShell() {
                 if (Math.abs(newX + halfW - faceX) < SNAP) newX = faceX - halfW
               }
             }
+            // Snap to other steps' edges (step-to-step).
+            for (const other of floorStepsRef.current) {
+              if (other.id === step.id) continue
+              const oHalfW = other.width / 2, oHalfD = other.depth / 2
+              const oLeft = other.x - oHalfW, oRight = other.x + oHalfW
+              const oFront = other.z - oHalfD, oBack = other.z + oHalfD
+              // X-axis edge snaps
+              if (Math.abs((newX - halfW) - oRight) < SNAP) newX = oRight + halfW  // my left ↔ other right
+              if (Math.abs((newX + halfW) - oLeft)  < SNAP) newX = oLeft  - halfW  // my right ↔ other left
+              if (Math.abs((newX - halfW) - oLeft)  < SNAP) newX = oLeft  + halfW  // left-align
+              if (Math.abs((newX + halfW) - oRight) < SNAP) newX = oRight - halfW  // right-align
+              // Z-axis edge snaps
+              if (Math.abs((newZ - halfD) - oBack)  < SNAP) newZ = oBack  + halfD  // my front ↔ other back
+              if (Math.abs((newZ + halfD) - oFront) < SNAP) newZ = oFront - halfD  // my back ↔ other front
+              if (Math.abs((newZ - halfD) - oFront) < SNAP) newZ = oFront + halfD  // front-align
+              if (Math.abs((newZ + halfD) - oBack)  < SNAP) newZ = oBack  - halfD  // back-align
+            }
           }
           updateFloorStepRef.current(fsd.stepId, { x: newX, z: newZ })
         }
@@ -5719,7 +5576,7 @@ export default function GarageShell() {
         updateCabRef.current(cd.cabinetId, { x: dragPos.x, z: dragPos.z, y: dragPos.y, rotY: dragPos.rotY })
         cabinetDragPosRef.current = null
       }
-      const wasDragging = wallDragRef.current || shapeDragRef.current || floorPointDragRef.current || vertDragRef.current || slatBodyDragRef.current || slatCornerDragRef.current || backsplashBodyDragRef.current || backsplashCornerDragRef.current || cabinetDragRef.current || countertopDragRef.current || lightDragRef.current || ceilingLightDragRef.current || ledbarResizeRef.current || itemDragRef.current || rackDragRef.current || floorStepDragRef.current || floorStepCornerDragRef.current
+      const wasDragging = wallDragRef.current || shapeDragRef.current || floorPointDragRef.current || vertDragRef.current || slatBodyDragRef.current || slatCornerDragRef.current || backsplashBodyDragRef.current || backsplashCornerDragRef.current || cabinetDragRef.current || countertopDragRef.current || baseboardDragRef.current || lightDragRef.current || ceilingLightDragRef.current || ledbarResizeRef.current || itemDragRef.current || rackDragRef.current || floorStepDragRef.current || floorStepCornerDragRef.current
       wallDragRef.current = null
       shapeDragRef.current = null
       floorPointDragRef.current = null
@@ -5730,6 +5587,7 @@ export default function GarageShell() {
       backsplashCornerDragRef.current = null
       cabinetDragRef.current = null
       countertopDragRef.current = null
+      baseboardDragRef.current = null
       lightDragRef.current = null
       ceilingLightDragRef.current = null
       ledbarResizeRef.current = null
@@ -6074,9 +5932,7 @@ export default function GarageShell() {
         return meshes
       })()}
 
-      {/* Seamless baseboards — hidden in blueprint view */}
-      {!blueprint && <GarageBaseboards walls={walls} floorSteps={floorSteps}
-        baseTex={detileFloorTex} wireframe={wireframe} />}
+      {/* Baseboards now render as standalone BaseboardMesh pieces below */}
 
       {/* Slatwall panels — hidden in blueprint view */}
       {!blueprint && slatwallPanels.map(panel => {
@@ -6288,6 +6144,157 @@ export default function GarageShell() {
               onPointerDown={(e) => startResizeDrag('left',  e)} />
             <DragHandle position={rightPos} color="#44aaff" size={0.14}
               onPointerDown={(e) => startResizeDrag('right', e)} />
+          </group>
+        )
+      })}
+
+      {/* Baseboards — standalone box pieces attached to a wall */}
+      {baseboards.map(bb => {
+        const isSel = selectedBaseboardId === bb.id
+        const lenFt = FT(bb.length), hFt = FT(bb.height), tFt = FT(bb.thickness)
+        const cxFt = FT(bb.x), czFt = FT(bb.z)
+        const startBodyDrag = (e: ThreeEvent<PointerEvent>) => {
+          if (e.nativeEvent.button !== 0) return
+          e.stopPropagation()
+          e.nativeEvent.stopImmediatePropagation()
+          selectBaseboard(bb.id)
+          if (bb.locked) return
+          const hit = floorHit(e.nativeEvent.clientX, e.nativeEvent.clientY)
+          baseboardDragRef.current = {
+            bbId: bb.id, kind: 'baseboard', mode: 'move',
+            ux: Math.cos(bb.rotY), uz: -Math.sin(bb.rotY),
+            startX: bb.x, startZ: bb.z,
+            startHitX: hit ? hit.x * 12 : bb.x,
+            startHitZ: hit ? hit.z * 12 : bb.z,
+          }
+          beginDrag()
+        }
+        return (
+          <group key={bb.id}
+            position={[cxFt, FT(bb.y) + hFt / 2, czFt]}
+            rotation={[0, bb.rotY, 0]}
+            onClick={(e) => { e.stopPropagation(); selectBaseboard(bb.id) }}
+            onPointerDown={startBodyDrag}
+          >
+            <FlakedBoxMesh lenFt={lenFt} hFt={hFt} tFt={tFt}
+              flake={!!bb.flake && !blueprint && !wireframe}
+              floorTex={detileFloorTex}
+              color={blueprint ? (isSel ? '#555' : '#444') : wireframe ? (isSel ? '#ffcc00' : '#88cc88') : (isSel ? '#d0e8ff' : bb.color)}
+              wireframe={wireframe}
+              widthIn={bb.length} heightIn={bb.height}
+              flakeTextureId={bb.flakeTextureId}
+              floorTextureScale={floorTextureScale} />
+          </group>
+        )
+      })}
+
+      {/* Baseboard end resize handles */}
+      {baseboards.filter(bb => bb.id === selectedBaseboardId).map(bb => {
+        const ux = Math.cos(bb.rotY), uz = -Math.sin(bb.rotY)
+        const halfL = bb.length / 2
+        const handleY = FT(bb.y) + FT(bb.height) / 2
+        const leftPos:  [number, number, number] = [FT(bb.x - ux * halfL), handleY, FT(bb.z - uz * halfL)]
+        const rightPos: [number, number, number] = [FT(bb.x + ux * halfL), handleY, FT(bb.z + uz * halfL)]
+        const startResize = (side: 'left' | 'right', e: ThreeEvent<PointerEvent>) => {
+          if (e.nativeEvent.button !== 0) return
+          if (bb.locked) return
+          e.stopPropagation()
+          e.nativeEvent.stopImmediatePropagation()
+          // Fixed end is OPPOSITE the dragged side.
+          const fixedX = side === 'left' ? bb.x + ux * halfL : bb.x - ux * halfL
+          const fixedZ = side === 'left' ? bb.z + uz * halfL : bb.z - uz * halfL
+          // Direction from fixed → moving end (so along projection is positive
+          // when cursor is on the dragged side).
+          const dirX = side === 'left' ? -ux : ux
+          const dirZ = side === 'left' ? -uz : uz
+          baseboardDragRef.current = {
+            bbId: bb.id, kind: 'baseboard', mode: 'resize', side,
+            ux: dirX, uz: dirZ,
+            fixedX, fixedZ,
+          }
+          beginDrag()
+        }
+        return (
+          <group key={bb.id + '-handles'}>
+            <DragHandle position={leftPos}  color="#44aaff" size={0.10}
+              onPointerDown={(e) => startResize('left', e)} />
+            <DragHandle position={rightPos} color="#44aaff" size={0.10}
+              onPointerDown={(e) => startResize('right', e)} />
+          </group>
+        )
+      })}
+
+      {/* Stem walls — same box as baseboards, but recessed 1" into wall.
+         When flake is enabled, the front face uses the floor flake texture;
+         all other faces stay solid color. */}
+      {stemWalls.map(sw => {
+        const isSel = selectedStemWallId === sw.id
+        const lenFt = FT(sw.length), hFt = FT(sw.height), tFt = FT(sw.thickness)
+        const cxFt = FT(sw.x), czFt = FT(sw.z)
+        const startBodyDrag = (e: ThreeEvent<PointerEvent>) => {
+          if (e.nativeEvent.button !== 0) return
+          e.stopPropagation()
+          e.nativeEvent.stopImmediatePropagation()
+          selectStemWall(sw.id)
+          if (sw.locked) return
+          const hit = floorHit(e.nativeEvent.clientX, e.nativeEvent.clientY)
+          baseboardDragRef.current = {
+            bbId: sw.id, kind: 'stemwall', mode: 'move',
+            ux: Math.cos(sw.rotY), uz: -Math.sin(sw.rotY),
+            startX: sw.x, startZ: sw.z,
+            startHitX: hit ? hit.x * 12 : sw.x,
+            startHitZ: hit ? hit.z * 12 : sw.z,
+          }
+          beginDrag()
+        }
+        const baseColor = blueprint ? (isSel ? '#555' : '#444') : wireframe ? (isSel ? '#ffcc00' : '#88aacc') : (isSel ? '#d0e8ff' : sw.color)
+        return (
+          <group key={sw.id}
+            position={[cxFt, FT(sw.y) + hFt / 2, czFt]}
+            rotation={[0, sw.rotY, 0]}
+            onClick={(e) => { e.stopPropagation(); selectStemWall(sw.id) }}
+            onPointerDown={startBodyDrag}
+          >
+            <FlakedBoxMesh lenFt={lenFt} hFt={hFt} tFt={tFt}
+              flake={!!sw.flake && !blueprint && !wireframe}
+              floorTex={detileFloorTex}
+              color={baseColor} wireframe={wireframe}
+              widthIn={sw.length} heightIn={sw.height}
+              flakeTextureId={sw.flakeTextureId}
+              floorTextureScale={floorTextureScale} />
+          </group>
+        )
+      })}
+
+      {/* Stem wall end resize handles */}
+      {stemWalls.filter(sw => sw.id === selectedStemWallId).map(sw => {
+        const ux = Math.cos(sw.rotY), uz = -Math.sin(sw.rotY)
+        const halfL = sw.length / 2
+        const handleY = FT(sw.y) + FT(sw.height) / 2
+        const leftPos:  [number, number, number] = [FT(sw.x - ux * halfL), handleY, FT(sw.z - uz * halfL)]
+        const rightPos: [number, number, number] = [FT(sw.x + ux * halfL), handleY, FT(sw.z + uz * halfL)]
+        const startResize = (side: 'left' | 'right', e: ThreeEvent<PointerEvent>) => {
+          if (e.nativeEvent.button !== 0) return
+          if (sw.locked) return
+          e.stopPropagation()
+          e.nativeEvent.stopImmediatePropagation()
+          const fixedX = side === 'left' ? sw.x + ux * halfL : sw.x - ux * halfL
+          const fixedZ = side === 'left' ? sw.z + uz * halfL : sw.z - uz * halfL
+          const dirX = side === 'left' ? -ux : ux
+          const dirZ = side === 'left' ? -uz : uz
+          baseboardDragRef.current = {
+            bbId: sw.id, kind: 'stemwall', mode: 'resize', side,
+            ux: dirX, uz: dirZ,
+            fixedX, fixedZ,
+          }
+          beginDrag()
+        }
+        return (
+          <group key={sw.id + '-handles'}>
+            <DragHandle position={leftPos}  color="#44aaff" size={0.10}
+              onPointerDown={(e) => startResize('left', e)} />
+            <DragHandle position={rightPos} color="#44aaff" size={0.10}
+              onPointerDown={(e) => startResize('right', e)} />
           </group>
         )
       })}

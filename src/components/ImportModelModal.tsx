@@ -189,6 +189,15 @@ export default function ImportModelModal({ onClose }: Props) {
           </button>
         </div>
 
+        <a
+          href="https://sketchfab.com/3d-models/categories/cars-vehicles?date=week&features=downloadable&sort_by=-likeCount"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ display: 'block', padding: '8px 16px', fontSize: 13, color: '#6cb4ee', textAlign: 'center' }}
+        >
+          Browse models on Sketchfab →
+        </a>
+
         {/* Asset type selector */}
         <div className="import-section">
           <label className="import-label">Asset Type</label>

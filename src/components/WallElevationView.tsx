@@ -195,7 +195,7 @@ export default function WallElevationView() {
 
   const wLen = wallLen(wall)
   const wH = wall.height
-  const bbH = wall.baseboard ? wall.baseboardHeight : 0
+  const bbH = 0  // baseboards are now standalone pieces, not per-wall
   const svgW = wLen + 2 * PAD
   const hasAnySlatwall = slatwallPanels.some(p => p.wallId === wall.id && (p.alongEnd - p.alongStart) >= 1)
   const svgH = wH + 2 * PAD + (hasAnySlatwall ? 20 : 0)
@@ -1000,49 +1000,9 @@ export default function WallElevationView() {
             )
           })}
 
-          {/* Baseboard — elevated on top of floor steps where they overlap */}
-          {wall.baseboard && bbH > 0 && (() => {
-            const bbFill = wall.baseboardColor ?? '#cccccc'
-            // Compute step overlaps for this wall
-            const stepOverlaps: { u0: number; u1: number; stepHeight: number }[] = []
-            for (const step of floorSteps) {
-              const proj = getStepWallProjection(step, wall)
-              if (proj) stepOverlaps.push({ u0: proj.alongStart, u1: proj.alongEnd, stepHeight: proj.height })
-            }
-            if (stepOverlaps.length === 0) {
-              // No steps — single baseboard rect at floor level
-              return (
-                <rect x={PAD} y={toY(bbH)} width={wLen} height={bbH}
-                  fill={bbFill} opacity={0.95}
-                  stroke="#333" strokeWidth={0.6} />
-              )
-            }
-            // Split baseboard into segments, each elevated by the step height underneath
-            const events: number[] = [0, wLen]
-            for (const ov of stepOverlaps) {
-              if (ov.u0 > 0 && ov.u0 < wLen) events.push(ov.u0)
-              if (ov.u1 > 0 && ov.u1 < wLen) events.push(ov.u1)
-            }
-            events.sort((a, b) => a - b)
-            const segs: { x0: number; x1: number; elevate: number }[] = []
-            for (let i = 0; i < events.length - 1; i++) {
-              const x0 = events[i], x1 = events[i + 1]
-              if (x1 - x0 < 0.01) continue
-              const mid = (x0 + x1) / 2
-              let elevate = 0
-              for (const ov of stepOverlaps) {
-                if (ov.u0 <= mid && ov.u1 >= mid) elevate = Math.max(elevate, ov.stepHeight)
-              }
-              segs.push({ x0, x1, elevate })
-            }
-            return segs.map((seg, i) => (
-              <rect key={`bb${i}`}
-                x={toX(seg.x0)} y={toY(seg.elevate + bbH)}
-                width={seg.x1 - seg.x0} height={bbH}
-                fill={bbFill} opacity={0.95}
-                stroke="#333" strokeWidth={0.6} />
-            ))
-          })()}
+          {/* Baseboards now render as standalone Baseboard pieces (3D side
+             only). The wall elevation no longer shows them since they can be
+             placed anywhere along the wall and would clutter the dim tiers. */}
 
           {/* Openings */}
           {wall.openings.map(op => (

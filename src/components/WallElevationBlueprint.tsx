@@ -114,7 +114,7 @@ const PAD = 40  // padding for stacked dim tiers + corner stubs
 export default function WallElevationBlueprint({ wall, slatwallPanels, stainlessBacksplashPanels = [], cabinets, countertops, allWalls, floorSteps = [] }: Props) {
   const wLen = wallLen(wall)
   const wH = wall.height
-  const bbH = wall.baseboard ? wall.baseboardHeight : 0
+  const bbH = 0  // baseboards now standalone
   const svgW = wLen + 2 * PAD
 
   const toX = (a: number) => PAD + a
@@ -343,40 +343,7 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
         )
       })}
 
-      {/* Baseboard — elevated on top of floor steps */}
-      {wall.baseboard && bbH > 0 && (() => {
-        const stepOverlaps: { u0: number; u1: number; stepHeight: number }[] = []
-        for (const step of floorSteps) {
-          const proj = getStepWallProjection(step, wall)
-          if (proj) stepOverlaps.push({ u0: proj.alongStart, u1: proj.alongEnd, stepHeight: proj.height })
-        }
-        if (stepOverlaps.length === 0) {
-          return <rect x={PAD} y={toY(bbH)} width={wLen} height={bbH} fill={wall.baseboardColor ?? '#cccccc'} opacity={0.3} />
-        }
-        const events: number[] = [0, wLen]
-        for (const ov of stepOverlaps) {
-          if (ov.u0 > 0 && ov.u0 < wLen) events.push(ov.u0)
-          if (ov.u1 > 0 && ov.u1 < wLen) events.push(ov.u1)
-        }
-        events.sort((a, b) => a - b)
-        const segs: { x0: number; x1: number; elevate: number }[] = []
-        for (let i = 0; i < events.length - 1; i++) {
-          const x0 = events[i], x1 = events[i + 1]
-          if (x1 - x0 < 0.01) continue
-          const mid = (x0 + x1) / 2
-          let elevate = 0
-          for (const ov of stepOverlaps) {
-            if (ov.u0 <= mid && ov.u1 >= mid) elevate = Math.max(elevate, ov.stepHeight)
-          }
-          segs.push({ x0, x1, elevate })
-        }
-        return segs.map((seg, i) => (
-          <rect key={`bb${i}`}
-            x={toX(seg.x0)} y={toY(seg.elevate + bbH)}
-            width={seg.x1 - seg.x0} height={bbH}
-            fill={wall.baseboardColor ?? '#cccccc'} opacity={0.3} />
-        ))
-      })()}
+      {/* Baseboards now standalone — not rendered in wall elevation. */}
 
       {/* Openings */}
       {wall.openings.map(op => (

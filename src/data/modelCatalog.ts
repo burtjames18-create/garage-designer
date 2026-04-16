@@ -12,61 +12,7 @@ export interface ModelDef {
   downloadUrl?: string  // where to get the GLB
 }
 
-export const MODEL_CATALOG: ModelDef[] = [
-  // ── Wildfire Car Lifts ────────────────────────────────────────────────────
-  // All are 4-post storage/parking lifts. Dimensions in inches.
-  // Footprint: w = overall width (side-to-side), d = overall depth (front-to-back incl. ramps),
-  // h = post height. Source: wildfirelifts.com + install manuals.
-  {
-    type: 'wildfire-standard',
-    label: 'Wildfire Standard (WF9000)',
-    category: 'car-lift',
-    w: 114, h: 92, d: 183,
-    // 9,000 lb capacity | 6'0" clearance under deck | 19" runways | 36" ramps
-  },
-  {
-    type: 'wildfire-xlt',
-    label: 'Wildfire XLT (WF9000 XLT)',
-    category: 'car-lift',
-    w: 121, h: 102, d: 204,
-    // 9,000 lb | 6'10" clearance | 19" runways | 36" ramps | extra length for long wheelbase
-  },
-  {
-    type: 'wildfire-exotic',
-    label: 'Wildfire Exotic (WF9000EXW)',
-    category: 'car-lift',
-    w: 121, h: 92, d: 183,
-    // 9,000 lb | 6'0" clearance | 23" wide runways | 48" ramps | low-slung exotics
-  },
-  {
-    type: 'wildfire-exotic-tall',
-    label: 'Wildfire Exotic Tall (WF9000EXW-T)',
-    category: 'car-lift',
-    w: 121, h: 102, d: 183,
-    // 9,000 lb | 6'9" clearance | 23" wide runways | 48" ramps | taller post version
-  },
-  {
-    type: 'wildfire-truck',
-    label: 'Wildfire Truck Lift (WF12000)',
-    category: 'car-lift',
-    w: 132, h: 102, d: 226,
-    // 12,000 lb | 6'9" clearance | 19" runways | 48" ramps | extended trucks/dualies
-  },
-  {
-    type: 'wildfire-double-wide',
-    label: 'Wildfire Double Wide (WF10000DW)',
-    category: 'car-lift',
-    w: 213, h: 100, d: 204,
-    // 10,000 lb total | 6'9" clearance | 4 runways | 2 cars side-by-side
-  },
-  {
-    type: 'wildfire-trailer',
-    label: 'Wildfire Trailer Lift (WF7500)',
-    category: 'car-lift',
-    w: 107, h: 96, d: 213,
-    // 7,500 lb | 6'10" clearance | adjustable-width runways | boats/trailers/vehicles
-  },
-]
+export const MODEL_CATALOG: ModelDef[] = []
 
 export const CATEGORY_LABELS: Record<ModelCategory, string> = {
   car:        'Cars',

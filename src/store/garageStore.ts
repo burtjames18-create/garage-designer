@@ -99,9 +99,9 @@ export const CABINET_PRESETS: CabinetPreset[] = [
   { key: 's-lower-36-5dr',  label: '36" 5-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 5, w: 36, d: 24, h: 30.5, sku: 'GL-SIG-BASE-36-5DR', price: 619 },
   { key: 's-lower-28-5dr',  label: '28" 5-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 5, w: 28, d: 24, h: 30.5, sku: 'GL-SIG-BASE-28-5DR', price: 569 },
   { key: 's-lower-20-5dr',  label: '20" 5-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 5, w: 20, d: 24, h: 30.5, sku: 'GL-SIG-BASE-20-5DR', price: 519 },
-  { key: 's-locker-36-2',   label: '36" 2-Door Locker',         line: 'signature', style: 'locker', doors: 2, w: 36, d: 24, h: 84, sku: 'GL-SIG-TALL-36', price: 799 },
-  { key: 's-locker-28-2',   label: '28" 2-Door Locker',         line: 'signature', style: 'locker', doors: 2, w: 28, d: 24, h: 84, sku: 'GL-SIG-TALL-28', price: 749 },
-  { key: 's-locker-20-1',   label: '20" 1-Door Locker',         line: 'signature', style: 'locker', doors: 1, w: 20, d: 24, h: 84, sku: 'GL-SIG-TALL-20', price: 699 },
+  { key: 's-locker-36-2',   label: '36" 2-Door Locker',         line: 'signature', style: 'locker', doors: 2, w: 36, d: 24, h: 80, sku: 'GL-SIG-TALL-36', price: 799 },
+  { key: 's-locker-28-2',   label: '28" 2-Door Locker',         line: 'signature', style: 'locker', doors: 2, w: 28, d: 24, h: 80, sku: 'GL-SIG-TALL-28', price: 749 },
+  { key: 's-locker-20-1',   label: '20" 1-Door Locker',         line: 'signature', style: 'locker', doors: 1, w: 20, d: 24, h: 80, sku: 'GL-SIG-TALL-20', price: 699 },
   { key: 's-upper-36-2',    label: '36" 2-Door Upper',          line: 'signature', style: 'upper',  doors: 2, w: 36, d: 18, h: 30.5, sku: 'GL-SIG-WALL-36', price: 359 },
   { key: 's-upper-28-2',    label: '28" 2-Door Upper',          line: 'signature', style: 'upper',  doors: 2, w: 28, d: 18, h: 30.5, sku: 'GL-SIG-WALL-28', price: 319 },
   { key: 's-upper-20-1',    label: '20" 1-Door Upper',          line: 'signature', style: 'upper',  doors: 1, w: 20, d: 18, h: 30.5, sku: 'GL-SIG-WALL-20', price: 279 },
@@ -140,6 +140,49 @@ export interface PlacedCabinet {
 export const COUNTERTOP_DEPTH = 25      // inches, fixed
 export const COUNTERTOP_THICKNESS = 1.75  // 1¾ inches
 
+/** A standalone baseboard piece. Sits on the floor against a wall, but stored
+ *  as free-floating world-space geometry (not per-wall) so users can place
+ *  multiple short pieces, leave gaps, or have unique colors per piece. */
+export interface Baseboard {
+  id: string
+  label: string
+  x: number          // center X in inches (world space)
+  z: number          // center Z in inches
+  y: number          // bottom face height off floor (default 0)
+  rotY: number       // radians; 0 = length along +X
+  length: number     // inches (default 36)
+  height: number     // inches (default 4)
+  thickness: number  // inches (default 1)
+  color: string      // hex (default '#cccccc')
+  flake: boolean     // when true, contributes front face area to flooring sqft
+  /** When flake=true, ID of a flooring texture to render on the front face.
+   *  Empty / undefined = match current floor. */
+  flakeTextureId?: string
+  locked?: boolean
+}
+
+/** A standalone stem wall piece. Visually identical box geometry to a baseboard
+ *  but offset 1" INTO the wall thickness so it appears recessed into the wall
+ *  face. (Position is computed at drag time — center sits inside wall thickness,
+ *  with only the front face visible.) */
+export interface StemWall {
+  id: string
+  label: string
+  x: number          // center X in inches (world space)
+  z: number          // center Z in inches
+  y: number          // bottom face height (default 0)
+  rotY: number       // radians; 0 = length along +X
+  length: number     // inches (default 36)
+  height: number     // inches (default 4 — same as baseboard default)
+  thickness: number  // inches (default 1 — same as baseboard)
+  color: string      // hex
+  flake: boolean     // contributes front face to flooring sqft when true
+  /** When flake=true, ID of a flooring texture to render on the front face.
+   *  Empty / undefined = match current floor. */
+  flakeTextureId?: string
+  locked?: boolean
+}
+
 export interface Countertop {
   id: string
   label: string
@@ -177,13 +220,11 @@ export interface GarageWall {
   openings: WallOpening[]
   wallColor: string       // hex color (default '#e0dedd')
   wallTextureId?: string  // texture id from textureCatalog (overrides wallColor when set)
-  baseboard: boolean
-  baseboardHeight: number // inches (default 3.5)
-  baseboardColor: string  // hex color (default '#cccccc')
-  baseboardTexture: boolean // apply floor flake texture to baseboard (default false)
-  stemWall: boolean          // stem wall at bottom of wall, flush with wall face (default false)
-  stemWallHeight: number     // inches (default 4)
-  stemWallTexture: 'concrete' | 'flake' | 'none' // texture style (default 'concrete')
+  // Baseboards are now standalone Baseboard pieces (see Baseboard interface),
+  // not per-wall flags. Removed: baseboard, baseboardHeight, baseboardColor,
+  // baseboardTexture.
+  // Stem walls are now standalone StemWall pieces (see interface). Removed:
+  // stemWall, stemWallHeight, stemWallTexture.
   visible: boolean          // whether wall is rendered (default true)
 }
 
@@ -350,8 +391,8 @@ function makeDefaultWalls(widthIn: number, depthIn: number, heightIn: number): G
   const hd = depthIn / 2
   const base: Omit<GarageWall, 'id' | 'label' | 'x1' | 'z1' | 'x2' | 'z2'> = {
     height: heightIn, yOffset: 0, thickness: 3.5, locked: false,
-    wallColor: '#f0ede4', openings: [], baseboard: true, baseboardHeight: 4, baseboardColor: '#cccccc', baseboardTexture: false,
-    stemWall: false, stemWallHeight: 4, stemWallTexture: 'concrete' as const, visible: true,
+    wallColor: '#f0ede4', openings: [],
+    visible: true,
   }
   return [
     { id: uid(), label: 'Back Wall',  x1: -hw, z1: -hd, x2:  hw, z2: -hd, ...base },
@@ -509,6 +550,22 @@ interface GarageStore {
   deleteCountertop: (id: string) => void
   selectCountertop: (id: string | null) => void
 
+  // Baseboards (standalone pieces)
+  baseboards: Baseboard[]
+  selectedBaseboardId: string | null
+  addBaseboard: (overrides?: Partial<Baseboard>) => void
+  updateBaseboard: (id: string, changes: Partial<Baseboard>) => void
+  deleteBaseboard: (id: string) => void
+  selectBaseboard: (id: string | null) => void
+
+  // Stem walls (standalone pieces, recessed into wall)
+  stemWalls: StemWall[]
+  selectedStemWallId: string | null
+  addStemWall: (overrides?: Partial<StemWall>) => void
+  updateStemWall: (id: string, changes: Partial<StemWall>) => void
+  deleteStemWall: (id: string) => void
+  selectStemWall: (id: string | null) => void
+
   // Slatwall accessories
   slatwallAccessories: SlatwallAccessory[]
   selectedAccessoryId: string | null
@@ -641,6 +698,12 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
   countertops: [],
   selectedCountertopId: null,
 
+  baseboards: [],
+  selectedBaseboardId: null,
+
+  stemWalls: [],
+  selectedStemWallId: null,
+
   importedAssets: [],
 
   overheadRacks: [],
@@ -743,8 +806,8 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       x1: 0, z1: 0, x2: 60, z2: 0,
       height: ch, yOffset: 0, thickness: 3.5,
       locked: false,
-      wallColor: '#f0ede4', openings: [], baseboard: true, baseboardHeight: 4, baseboardColor: '#cccccc', baseboardTexture: false,
-      stemWall: false, stemWallHeight: 4, stemWallTexture: 'concrete' as const, visible: true,
+      wallColor: '#f0ede4', openings: [],
+      visible: true,
       ...overrides,
     }
     set(s => ({ walls: [...s.walls, wall], selectedWallId: wall.id }))
@@ -816,7 +879,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
     const lenIn = Math.hypot(wall.x2 - wall.x1, wall.z2 - wall.z1)
     // Trim corners by half-thickness so panel doesn't clip into perpendicular walls
     const trim = wall.thickness / 2
-    const yBottom = wall.baseboard ? wall.baseboardHeight : 0
+    const yBottom = 0
     const panel: SlatwallPanel = {
       id: uid(), wallId,
       side,
@@ -847,7 +910,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
     const wall = get().walls.find(w => w.id === wallId)
     if (!wall) return
     const trim = wall.thickness / 2
-    const yBottom = wall.baseboard ? wall.baseboardHeight : 0
+    const yBottom = 0
     const panel: StainlessBacksplashPanel = {
       id: uid(), wallId,
       side,
@@ -1019,6 +1082,107 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       selectedCountertopId: s.selectedCountertopId === id ? null : s.selectedCountertopId,
     })),
   selectCountertop: (id) => set({ selectedCountertopId: id, selectedWallId: null, selectedShapeId: null, selectedSlatwallPanelId: null, selectedStainlessBacksplashPanelId: null, selectedCabinetId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'cabinets' as SidebarTab } : {}) }),
+
+  addBaseboard: (overrides = {}) => {
+    const { walls, baseboards } = get()
+    // Default placement: against the back-most wall, centered along it.
+    // Pick the wall whose midpoint has the most negative Z (closest to back).
+    let target = walls[0]
+    let bestZ = Infinity
+    for (const w of walls) {
+      const mz = (w.z1 + w.z2) / 2
+      if (mz < bestZ) { bestZ = mz; target = w }
+    }
+    let x = 0, z = 0, rotY = 0
+    if (target) {
+      const dx = target.x2 - target.x1, dz = target.z2 - target.z1
+      const len = Math.hypot(dx, dz) || 1
+      const ux = dx / len, uz = dz / len
+      // Interior normal (towards garage center). Use (-uz, ux) and flip if needed.
+      const cx = (target.x1 + target.x2) / 2
+      const cz = (target.z1 + target.z2) / 2
+      let nx = -uz, nz = ux
+      // Flip toward origin (assumes garage straddles 0,0)
+      if (cx * nx + cz * nz > 0) { nx = -nx; nz = -nz }
+      // Sit flush against the wall's interior face: offset by half the wall
+      // thickness + half the baseboard thickness (0.25" for a 0.5" board).
+      const inset = target.thickness / 2 + 0.25
+      x = cx + nx * inset
+      z = cz + nz * inset
+      // Rotation: baseboard length axis = wall along axis.
+      rotY = Math.atan2(uz, ux) * -1
+    }
+    const bb: Baseboard = {
+      id: uid(),
+      label: `Baseboard ${baseboards.length + 1}`,
+      x, z, y: 0, rotY,
+      length: 36, height: 4, thickness: 0.5,
+      color: '#cccccc',
+      flake: false,
+      ...overrides,
+    }
+    set(s => ({ baseboards: [...s.baseboards, bb], selectedBaseboardId: bb.id }))
+  },
+  updateBaseboard: (id, changes) =>
+    set(s => ({ baseboards: s.baseboards.map(b => b.id === id ? { ...b, ...changes } : b) })),
+  deleteBaseboard: (id) =>
+    set(s => ({
+      baseboards: s.baseboards.filter(b => b.id !== id),
+      selectedBaseboardId: s.selectedBaseboardId === id ? null : s.selectedBaseboardId,
+    })),
+  selectBaseboard: (id) => set({ selectedBaseboardId: id, selectedWallId: null, selectedShapeId: null, selectedSlatwallPanelId: null, selectedStainlessBacksplashPanelId: null, selectedCabinetId: null, selectedCountertopId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'walls' as SidebarTab } : {}) }),
+
+  addStemWall: (overrides = {}) => {
+    const { walls, stemWalls } = get()
+    // Default placement: against the back-most wall, recessed 1" into wall.
+    let target = walls[0]
+    let bestZ = Infinity
+    for (const w of walls) {
+      const mz = (w.z1 + w.z2) / 2
+      if (mz < bestZ) { bestZ = mz; target = w }
+    }
+    let x = 0, z = 0, rotY = 0
+    if (target) {
+      const dx = target.x2 - target.x1, dz = target.z2 - target.z1
+      const len = Math.hypot(dx, dz) || 1
+      const ux = dx / len, uz = dz / len
+      const cx = (target.x1 + target.x2) / 2
+      const cz = (target.z1 + target.z2) / 2
+      let nx = -uz, nz = ux
+      if (cx * nx + cz * nz > 0) { nx = -nx; nz = -nz }
+      // Stem wall sits INSET 1" past the interior wall face. Center is at
+      // (wall.thickness/2 - 1") from the wall centerline, on the interior side.
+      // Interior face = wall.thickness/2 from centerline. Inset 1" deeper
+      // means center sits at (wall.thickness/2 - 1") - thickness/2 from the
+      // centerline. With default piece thickness 1", the front face ends up
+      // flush with the interior wall face minus 1".
+      // Stem wall sits FLUSH on the interior wall face (slight 1/16" forward
+       // bump to avoid z-fighting). Visual = wall surface painted with stem
+       // wall color/texture.
+      const inset = target.thickness / 2 + 0.0625
+      x = cx + nx * inset
+      z = cz + nz * inset
+      rotY = -Math.atan2(uz, ux)
+    }
+    const sw: StemWall = {
+      id: uid(),
+      label: `Stem Wall ${stemWalls.length + 1}`,
+      x, z, y: 0, rotY,
+      length: 36, height: 4, thickness: 0.5,
+      color: '#a8a098',
+      flake: false,
+      ...overrides,
+    }
+    set(s => ({ stemWalls: [...s.stemWalls, sw], selectedStemWallId: sw.id }))
+  },
+  updateStemWall: (id, changes) =>
+    set(s => ({ stemWalls: s.stemWalls.map(w => w.id === id ? { ...w, ...changes } : w) })),
+  deleteStemWall: (id) =>
+    set(s => ({
+      stemWalls: s.stemWalls.filter(w => w.id !== id),
+      selectedStemWallId: s.selectedStemWallId === id ? null : s.selectedStemWallId,
+    })),
+  selectStemWall: (id) => set({ selectedStemWallId: id, selectedWallId: null, selectedShapeId: null, selectedSlatwallPanelId: null, selectedStainlessBacksplashPanelId: null, selectedCabinetId: null, selectedCountertopId: null, selectedBaseboardId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'walls' as SidebarTab } : {}) }),
 
   slatwallAccessories: [],
   selectedAccessoryId: null,
@@ -1264,6 +1428,8 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       shapes: s.shapes,
       cabinets: s.cabinets,
       countertops: s.countertops,
+      baseboards: s.baseboards,
+      stemWalls: s.stemWalls,
       items: s.items,
       overheadRacks: s.overheadRacks,
       importedAssets: encodedAssets,
@@ -1318,13 +1484,17 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       garageDepth:      (d.garageDepth as number)       ?? 264,
       ceilingHeight:    (d.ceilingHeight as number)     ?? 108,
       floorPoints:      (d.floorPoints as FloorPoint[]) ?? [],
-      walls:            ((d.walls as GarageWall[]) ?? []).map(w => ({ ...w, visible: w.visible ?? true, stemWall: w.stemWall ?? false, stemWallHeight: w.stemWallHeight ?? 6, stemWallTexture: w.stemWallTexture ?? 'concrete' as const })),
+      walls:            ((d.walls as GarageWall[]) ?? []).map(w => ({ ...w, visible: w.visible ?? true })),
       slatwallPanels:   (d.slatwallPanels as SlatwallPanel[]) ?? [],
       stainlessBacksplashPanels: (d.stainlessBacksplashPanels as StainlessBacksplashPanel[]) ?? [],
       floorSteps:       (d.floorSteps as FloorStep[])   ?? [],
       shapes:           (d.shapes as GarageShape[])     ?? [],
       cabinets:         ((d.cabinets as PlacedCabinet[]) ?? []).map(c => ({ ...c, line: c.line ?? 'technica' as const })),
       countertops:      (d.countertops as Countertop[]) ?? [],
+      baseboards:       (d.baseboards as Baseboard[]) ?? [],
+      selectedBaseboardId: null,
+      stemWalls:        (d.stemWalls as StemWall[]) ?? [],
+      selectedStemWallId: null,
       items:            (d.items as PlacedItem[])       ?? [],
       overheadRacks:    (d.overheadRacks as OverheadRack[]) ?? [],
       importedAssets:   (() => {

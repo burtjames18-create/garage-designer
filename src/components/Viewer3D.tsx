@@ -411,8 +411,9 @@ function uid(): string { return `shot_${Date.now()}_${++_uidCounter}` }
 
 export default function Viewer3D() {
   const { viewMode, cameraAngle, setCameraAngle, setFloorSelected, selectWall, selectShape, selectSlatwallPanel, selectItem,
+    selectBaseboard, selectStemWall,
     exportShots, addExportShot, updateExportShot, deleteExportShot, reorderExportShots,
-    walls, cabinets, countertops, floorPoints, floorSteps, slatwallPanels, overheadRacks,
+    walls, cabinets, countertops, floorPoints, floorSteps, slatwallPanels, overheadRacks, baseboards, stemWalls,
     qualityPreset, snappingEnabled, setSnappingEnabled } = useGarageStore()
   const isWireframe  = viewMode === 'wireframe'
   const isPerspective = viewMode === 'perspective' || viewMode === 'wireframe'
@@ -514,6 +515,8 @@ export default function Viewer3D() {
               floorSteps={floorSteps}
               slatwallPanels={slatwallPanels}
               overheadRacks={overheadRacks}
+              baseboards={baseboards}
+              stemWalls={stemWalls}
             />
           </div>
         </div>
@@ -551,7 +554,7 @@ export default function Viewer3D() {
           powerPreference: qualityPreset === 'low' ? 'low-power' : 'high-performance',
         }}
         style={{ background: bgColor }}
-        onPointerMissed={() => { setFloorSelected(false); selectWall(null); selectShape(null); selectSlatwallPanel(null); selectItem(null) }}
+        onPointerMissed={() => { setFloorSelected(false); selectWall(null); selectShape(null); selectSlatwallPanel(null); selectItem(null); selectBaseboard(null); selectStemWall(null) }}
       >
         <SceneBackground />
         <RectAreaLightInit />

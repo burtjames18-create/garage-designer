@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, type ReactNode } from 'react'
 import { useGarageStore } from '../store/garageStore'
 import { useScrollToSelected } from '../hooks/useScrollToSelected'
 import type { GarageWall } from '../store/garageStore'
@@ -6,6 +6,7 @@ import MeasureInput from './MeasureInput'
 import { wallLengthIn, inchesToDisplay } from '../utils/measurements'
 import { slatwallColors } from '../data/slatwallColors'
 import { wallTextures, doorTextures, texturePath } from '../data/textureCatalog'
+import { flooringColors, flooringTexturePath } from '../data/flooringColors'
 import type { ImportedAsset } from '../store/garageStore'
 import { getModelsForType } from '../data/openingModels'
 import type { OpeningModelType } from '../data/openingModels'
@@ -47,19 +48,6 @@ const WALL_COLORS = [
   { name: 'Charcoal',       hex: '#606060' },
 ]
 
-const BASEBOARD_COLORS = [
-  { name: 'White',          hex: '#f5f5f5' },
-  { name: 'Light Grey',     hex: '#cccccc' },
-  { name: 'Medium Grey',    hex: '#999999' },
-  { name: 'Charcoal',       hex: '#555555' },
-  { name: 'Black',          hex: '#2a2a2a' },
-  { name: 'Cream',          hex: '#e8dcc8' },
-  { name: 'Tan',            hex: '#c8aa88' },
-  { name: 'Warm Brown',     hex: '#8a6040' },
-  { name: 'Concrete',       hex: '#a8a098' },
-  { name: 'Slate Blue',     hex: '#6a7a8a' },
-]
-
 const OPENING_LABELS: Record<string, string> = {
   'garage-door': 'Garage Door',
   'door': 'Door',
@@ -74,7 +62,47 @@ function WallEditor({ wall }: { wall: GarageWall }) {
     slatwallAccessories, addSlatwallAccessory, deleteSlatwallAccessory,
     stainlessBacksplashPanels, addStainlessBacksplashPanel, updateStainlessBacksplashPanel, deleteStainlessBacksplashPanel, selectStainlessBacksplashPanel, selectedStainlessBacksplashPanelId,
     importedAssets,
+    addBaseboard, addStemWall, walls,
   } = useGarageStore()
+  // Spawn a default baseboard piece centered against the given wall's interior face.
+  const addBaseboardForWall = (wallId: string) => {
+    const w = walls.find(ww => ww.id === wallId)
+    if (!w) return addBaseboard()
+    const dx = w.x2 - w.x1, dz = w.z2 - w.z1
+    const len = Math.hypot(dx, dz) || 1
+    const ux = dx / len, uz = dz / len
+    const cx = (w.x1 + w.x2) / 2, cz = (w.z1 + w.z2) / 2
+    let nx = -uz, nz = ux
+    if (cx * nx + cz * nz > 0) { nx = -nx; nz = -nz }
+    const inset = w.thickness / 2 + 0.5
+    addBaseboard({
+      x: cx + nx * inset,
+      z: cz + nz * inset,
+      rotY: -Math.atan2(uz, ux),
+      length: Math.min(36, len),
+    })
+  }
+  // Spawn a stem wall piece against the selected wall. Same axis as baseboard
+  // but RECESSED 1" past the interior wall face (sits inside wall thickness).
+  const addStemWallForWall = (wallId: string) => {
+    const w = walls.find(ww => ww.id === wallId)
+    if (!w) return addStemWall()
+    const dx = w.x2 - w.x1, dz = w.z2 - w.z1
+    const len = Math.hypot(dx, dz) || 1
+    const ux = dx / len, uz = dz / len
+    const cx = (w.x1 + w.x2) / 2, cz = (w.z1 + w.z2) / 2
+    let nx = -uz, nz = ux
+    if (cx * nx + cz * nz > 0) { nx = -nx; nz = -nz }
+    // Inset 1" PAST the interior face — center sits behind the wall surface.
+    // Flush with interior wall face (tiny 1/16" forward bump to avoid z-fight).
+    const inset = w.thickness / 2 + 0.0625
+    addStemWall({
+      x: cx + nx * inset,
+      z: cz + nz * inset,
+      rotY: -Math.atan2(uz, ux),
+      length: Math.min(36, len),
+    })
+  }
   // All imported textures are available across every surface; the legacy
   // wall-texture / floor-texture / texture types are all treated as equivalent.
   const importedWallTextures = importedAssets.filter((a: ImportedAsset) =>
@@ -146,14 +174,26 @@ function WallEditor({ wall }: { wall: GarageWall }) {
       {selected && (
         <div className="wall-detail" onClick={e => e.stopPropagation()}>
 
-          {/* Dimensions */}
-          <Section title="Dimensions" defaultOpen>
-            <div className="dim-grid">
-              <MeasureInput label="Length" inches={len} onChange={handleLengthChange} min={1} max={9999} />
-              <MeasureInput label="Height" inches={wall.height} onChange={v => updateWall(wall.id, { height: v })} min={12} max={360} />
-              <MeasureInput label="Thickness" inches={wall.thickness} onChange={v => updateWall(wall.id, { thickness: v })} min={1} max={24} />
-            </div>
-          </Section>
+          {/* Dimensions — always visible at the top of the wall card. */}
+          <div className="dim-grid" style={{ marginBottom: 10 }}>
+            <MeasureInput label="Length" inches={len} onChange={handleLengthChange} min={1} max={9999} />
+            <MeasureInput label="Height" inches={wall.height} onChange={v => updateWall(wall.id, { height: v })} min={12} max={360} />
+            <MeasureInput label="Thickness" inches={wall.thickness} onChange={v => updateWall(wall.id, { thickness: v })} min={1} max={24} />
+          </div>
+
+          {/* Quick-add buttons for baseboard / stem wall pieces. Always visible
+             under the dimensions. The piece list / editor lives at the bottom
+             of the Walls tab so it works regardless of which wall is open. */}
+          <div className="stem-wall-texture-row" style={{ marginBottom: 10, gap: 6, flexWrap: 'wrap' }}>
+            <button
+              className="stem-wall-tex-btn"
+              onClick={() => addBaseboardForWall(wall.id)}
+            >+ Baseboard</button>
+            <button
+              className="stem-wall-tex-btn"
+              onClick={() => addStemWallForWall(wall.id)}
+            >+ Stem Wall</button>
+          </div>
 
           {/* Appearance */}
           <Section title="Color / Texture">
@@ -223,68 +263,6 @@ function WallEditor({ wall }: { wall: GarageWall }) {
             </div>
           </Section>
 
-          {/* Baseboard / Stem Wall */}
-          <Section title="Baseboard / Stem Wall">
-            <div className="stem-wall-texture-row" style={{ marginBottom: 8 }}>
-              <button
-                className={`stem-wall-tex-btn${!wall.baseboard && !wall.stemWall ? ' active' : ''}`}
-                onClick={() => updateWall(wall.id, { baseboard: false, stemWall: false })}
-              >None</button>
-              <button
-                className={`stem-wall-tex-btn${wall.baseboard ? ' active' : ''}`}
-                onClick={() => updateWall(wall.id, { baseboard: true, stemWall: false })}
-              >Baseboard</button>
-              <button
-                className={`stem-wall-tex-btn${wall.stemWall ? ' active' : ''}`}
-                onClick={() => updateWall(wall.id, { stemWall: true, baseboard: false })}
-              >Stem Wall</button>
-            </div>
-
-            {wall.baseboard && (<div className="wall-toggles">
-              <MeasureInput label="Baseboard Height" inches={wall.baseboardHeight}
-                onChange={v => updateWall(wall.id, { baseboardHeight: v })} min={1} max={48} />
-              <div style={{ marginTop: 6 }}>
-                <span className="coord-label">Baseboard Color</span>
-                <div className="slat-color-row" role="radiogroup" aria-label="Baseboard color">
-                  {BASEBOARD_COLORS.map(c => (
-                    <button
-                      key={c.hex}
-                      role="radio"
-                      aria-checked={wall.baseboardColor === c.hex}
-                      className={`slat-color-swatch${wall.baseboardColor === c.hex ? ' active' : ''}`}
-                      style={{ background: c.hex }}
-                      aria-label={c.name}
-                      onClick={() => updateWall(wall.id, { baseboardColor: c.hex })}
-                    />
-                  ))}
-                </div>
-              </div>
-              <label className="toggle-row" style={{ marginTop: 6 }}>
-                <span>Flake Texture on Baseboard</span>
-                <input type="checkbox" checked={wall.baseboardTexture ?? false}
-                  onChange={e => updateWall(wall.id, { baseboardTexture: e.target.checked })} />
-              </label>
-            </div>)}
-
-            {wall.stemWall && (<div className="wall-toggles">
-              <MeasureInput label="Stem Wall Height" inches={wall.stemWallHeight ?? 6}
-                onChange={v => updateWall(wall.id, { stemWallHeight: v })} min={1} max={48} />
-              <div style={{ marginTop: 6 }}>
-                <span className="coord-label">Stem Wall Texture</span>
-                <div className="stem-wall-texture-row">
-                  {(['none', 'concrete', 'flake'] as const).map(t => (
-                    <button
-                      key={t}
-                      className={`stem-wall-tex-btn${(wall.stemWallTexture ?? 'concrete') === t ? ' active' : ''}`}
-                      onClick={() => updateWall(wall.id, { stemWallTexture: t })}
-                    >
-                      {t === 'none' ? 'Solid Color' : t === 'concrete' ? 'Concrete' : 'Floor Flake'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>)}
-          </Section>
 
           {/* Options */}
           <Section title="Options">
@@ -620,6 +598,186 @@ function SelectedPanelColorPicker() {
   )
 }
 
+// Inline list + per-piece editor for baseboards and stem walls. Lives inside
+// the Wall details panel; selecting a row reveals fields for that piece.
+function BaseboardStemWallList() {
+  const { baseboards, stemWalls, selectedBaseboardId, selectedStemWallId,
+    selectBaseboard, selectStemWall, updateBaseboard, updateStemWall,
+    deleteBaseboard, deleteStemWall, flooringColor } = useGarageStore()
+  const items = [
+    ...baseboards.map(b => ({ ...b, kind: 'bb' as const })),
+    ...stemWalls.map(s => ({ ...s, kind: 'sw' as const })),
+  ]
+  if (items.length === 0) {
+    return (
+      <p style={{ fontSize: 11, color: '#888', margin: '6px 0 0' }}>
+        No pieces yet. Click + above to add one.
+      </p>
+    )
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
+      {items.map(item => {
+        const isSel = item.kind === 'bb'
+          ? selectedBaseboardId === item.id
+          : selectedStemWallId === item.id
+        const onClick = () => {
+          if (item.kind === 'bb') selectBaseboard(isSel ? null : item.id)
+          else selectStemWall(isSel ? null : item.id)
+        }
+        const onDelete = () => {
+          if (item.kind === 'bb') deleteBaseboard(item.id)
+          else deleteStemWall(item.id)
+        }
+        const update = (changes: Partial<typeof item>) => {
+          if (item.kind === 'bb') updateBaseboard(item.id, changes)
+          else updateStemWall(item.id, changes)
+        }
+        const labelPrefix = item.kind === 'sw' ? 'Stem' : 'BB'
+        return (
+          <BBSWRow key={item.kind + item.id}
+            isSel={isSel} onClick={onClick}>
+            <div className="cab-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span className="cab-label" style={{ fontSize: 11 }}>
+                <span style={{ color: item.kind === 'sw' ? '#88aacc' : '#88cc88', fontWeight: 600 }}>{labelPrefix}</span>
+                {' '}{item.label}
+              </span>
+              <button className="cab-del-btn" onClick={e => { e.stopPropagation(); onDelete() }}
+                style={{ fontSize: 12, padding: '0 6px' }}>×</button>
+            </div>
+            {isSel && (
+              <div onClick={e => e.stopPropagation()} style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <label style={{ fontSize: 10, color: '#aaa' }}>Length (in)
+                  <input type="number" min={1} step={0.25} value={item.length}
+                    onChange={e => update({ length: Math.max(1, parseFloat(e.target.value) || 0) })}
+                    style={{ width: '100%', marginTop: 2, fontSize: 11, padding: '2px 6px',
+                      background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)',
+                      borderRadius: 3, color: '#eee' }} />
+                </label>
+                <label style={{ fontSize: 10, color: '#aaa' }}>Height (in)
+                  <input type="number" min={0.5} step={0.25} value={item.height}
+                    onChange={e => update({ height: Math.max(0.5, parseFloat(e.target.value) || 0) })}
+                    style={{ width: '100%', marginTop: 2, fontSize: 11, padding: '2px 6px',
+                      background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)',
+                      borderRadius: 3, color: '#eee' }} />
+                </label>
+                <label style={{ fontSize: 10, color: '#aaa' }}>Thickness (in)
+                  <input type="number" min={0.25} step={0.125} value={item.thickness}
+                    onChange={e => update({ thickness: Math.max(0.25, parseFloat(e.target.value) || 0) })}
+                    style={{ width: '100%', marginTop: 2, fontSize: 11, padding: '2px 6px',
+                      background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)',
+                      borderRadius: 3, color: '#eee' }} />
+                </label>
+                <div>
+                  <span className="coord-label">Color</span>
+                  <div className="slat-color-row" role="radiogroup" aria-label="Piece color">
+                    {WALL_COLORS.map(c => (
+                      <button
+                        key={c.hex}
+                        role="radio"
+                        aria-checked={item.color === c.hex}
+                        className={`slat-color-swatch${item.color === c.hex ? ' active' : ''}`}
+                        style={{ background: c.hex }}
+                        aria-label={c.name}
+                        title={c.name}
+                        onClick={() => update({ color: c.hex })}
+                      />
+                    ))}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className={`stem-wall-tex-btn${item.flake ? ' active' : ''}`}
+                  onClick={() => {
+                    const on = !item.flake
+                    update({
+                      flake: on,
+                      ...(on && !item.flakeTextureId ? { flakeTextureId: flooringColor } : {}),
+                    })
+                  }}
+                >
+                  Floor texture: {item.flake ? 'On' : 'Off'}
+                </button>
+                {item.flake && (
+                  <div style={{ marginTop: 6 }}>
+                    <div style={{ fontSize: 10, color: '#aaa', marginBottom: 4 }}>Flake texture</div>
+                    <FlakeTexturePicker
+                      selectedId={item.flakeTextureId}
+                      onChange={id => update({ flakeTextureId: id })}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+          </BBSWRow>
+        )
+      })}
+    </div>
+  )
+}
+
+// Texture picker for baseboard / stem wall flake — mirrors the swatch grid
+// layout used in the Flooring sidebar tab. "Match floor" is the default
+// (no override stored) and renders the current floor texture on the piece.
+function FlakeTexturePicker({ selectedId, onChange }: {
+  selectedId: string | undefined; onChange: (id: string | undefined) => void
+}) {
+  const classic  = flooringColors.filter(c => c.series === 'classic')
+  const stone    = flooringColors.filter(c => c.series === 'stone')
+  const concrete = flooringColors.filter(c => c.series === 'concrete')
+  const Group = ({ title, items }: { title: string; items: typeof flooringColors }) => (
+    <div style={{ marginTop: 6 }}>
+      <div style={{ fontSize: 9, color: '#888', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>{title}</div>
+      <div className="color-grid" role="radiogroup" aria-label={title}>
+        {items.map(c => (
+          <button key={c.id} type="button"
+            role="radio"
+            aria-checked={selectedId === c.id}
+            className={`color-swatch ${selectedId === c.id ? 'selected' : ''}`}
+            onClick={() => onChange(c.id)}
+            aria-label={c.name}>
+            <div className="swatch-img" style={{ backgroundImage: `url(${import.meta.env.BASE_URL}${flooringTexturePath(c)})` }} />
+            <span className="swatch-name">{c.name}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+  return (
+    <>
+      <button type="button"
+        onClick={() => onChange(undefined)}
+        style={{
+          fontSize: 11, padding: '4px 8px', cursor: 'pointer',
+          background: !selectedId ? 'rgba(100,160,255,0.18)' : 'rgba(255,255,255,0.05)',
+          border: `1px solid ${!selectedId ? 'rgba(100,160,255,0.4)' : 'rgba(255,255,255,0.15)'}`,
+          borderRadius: 4, color: !selectedId ? '#9ec6ff' : '#ccc', width: '100%',
+        }}
+      >
+        Match floor
+      </button>
+      <Group title="Classic FLOORTEX®" items={classic} />
+      <Group title="Stone Series" items={stone} />
+      <Group title="Concrete" items={concrete} />
+    </>
+  )
+}
+
+// Single row with auto-scroll into view when selected.
+function BBSWRow({ isSel, onClick, children }: {
+  isSel: boolean; onClick: () => void; children: ReactNode
+}) {
+  const ref = useScrollToSelected<HTMLDivElement>(isSel)
+  return (
+    <div ref={ref}
+      className={`cab-item${isSel ? ' selected' : ''}`}
+      onClick={onClick}
+      style={{ padding: '4px 8px' }}>
+      {children}
+    </div>
+  )
+}
+
 export default function WallPanel() {
   const { walls, addWall, selectedSlatwallPanelId, ceilingHeight, setCeilingHeight } = useGarageStore()
   return (
@@ -637,6 +795,13 @@ export default function WallPanel() {
       <div className="wall-list">
         {walls.map(w => <WallEditor key={w.id} wall={w} />)}
       </div>
+
+      {/* Always-visible baseboards & stem walls section, so selecting a piece
+         in 3D shows its editor here even if no wall is selected. */}
+      <div className="panel-top" style={{ marginTop: 16 }}>
+        <span className="section-label">Baseboards & Stem Walls</span>
+      </div>
+      <BaseboardStemWallList />
     </div>
   )
 }
