@@ -30,6 +30,26 @@ export default function App() {
   const viewMode = useGarageStore(s => s.viewMode)
   const [showKeyboard, setShowKeyboard] = useState(false)
 
+  // Rehydrate imported textures from IndexedDB on boot — they persist across
+  // app sessions regardless of whether a project has been saved.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const { loadAllTexturesFromDB } = await import('./utils/textureLibrary')
+        const stored = await loadAllTexturesFromDB()
+        if (cancelled || stored.length === 0) return
+        const state = useGarageStore.getState()
+        const existingIds = new Set(state.importedAssets.map(a => a.id))
+        const toAdd = stored.filter(a => !existingIds.has(a.id))
+        for (const a of toAdd) state.addImportedAsset(a)
+      } catch (err) {
+        console.warn('Texture library load failed:', err)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
   // Global "?" shortcut to toggle keyboard help
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {

@@ -10,6 +10,7 @@ import CabinetsPanel from './CabinetsPanel'
 import LightingPanel from './LightingPanel'
 import ItemsPanel from './ItemsPanel'
 import OverheadRacksPanel from './OverheadRacksPanel'
+import GuidePanel from './GuidePanel'
 import MeasureInput from './MeasureInput'
 import './Sidebar.css'
 
@@ -94,6 +95,13 @@ const IconProject = () => (
     <line x1="7" y1="15" x2="10.5" y2="15"/>
   </svg>
 )
+const IconGuide = () => (
+  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="10" cy="10" r="7"/>
+    <path d="M8 7.5a2 2 0 1 1 3 1.7c-.6.4-1 .8-1 1.5v.3"/>
+    <circle cx="10" cy="14" r="0.6" fill="currentColor"/>
+  </svg>
+)
 
 const TAB_ICONS: Record<SidebarTab, ReactNode> = {
   walls:      <IconWalls />,
@@ -105,6 +113,7 @@ const TAB_ICONS: Record<SidebarTab, ReactNode> = {
   lighting:   <IconLighting />,
   vehicles:   <IconVehicles />,
   info:       <IconProject />,
+  guide:      <IconGuide />,
 }
 
 const TABS: { id: SidebarTab; label: string }[] = [
@@ -116,6 +125,7 @@ const TABS: { id: SidebarTab; label: string }[] = [
   { id: 'lighting', label: 'Lighting' },
   { id: 'vehicles', label: 'Vehicles' },
   { id: 'info',     label: 'Project'  },
+  { id: 'guide',    label: 'Guide'    },
 ]
 
 function FloorStepItem({ step, isSel, onSelect, onDelete }: {
@@ -476,6 +486,8 @@ export default function Sidebar() {
               </div>
             </div>
           )}
+
+          {tab === 'guide' && <GuidePanel />}
 
           </div>
         </div>

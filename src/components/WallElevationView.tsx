@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react'
 import { useGarageStore, CABINET_PRESETS, COUNTERTOP_THICKNESS, COUNTERTOP_DEPTH } from '../store/garageStore'
-import type { GarageWall, PlacedCabinet, SlatwallPanel, StainlessBacksplashPanel, Countertop, FloorStep } from '../store/garageStore'
+import type { GarageWall, PlacedCabinet, SlatwallPanel, StainlessBacksplashPanel, Countertop, FloorStep, Baseboard, StemWall } from '../store/garageStore'
 import { slatwallColors } from '../data/slatwallColors'
 import { snapToGrid, inchesToDisplay } from '../utils/measurements'
 import { cabinetFrontPaths } from './CabinetFrontSVG'
@@ -154,7 +154,7 @@ const COUNTERTOP_HEX: Record<string, string> = {
 
 export default function WallElevationView() {
   const {
-    walls, slatwallPanels, stainlessBacksplashPanels, cabinets, countertops, floorSteps,
+    walls, slatwallPanels, stainlessBacksplashPanels, cabinets, countertops, floorSteps, baseboards, stemWalls,
     elevationWallIndex, setElevationWallIndex,
     updateSlatwallPanel, selectSlatwallPanel, selectedSlatwallPanelId, addSlatwallPanel, deleteSlatwallPanel,
     updateStainlessBacksplashPanel, selectStainlessBacksplashPanel, selectedStainlessBacksplashPanelId,
@@ -189,7 +189,55 @@ export default function WallElevationView() {
 
   const wLen = wallLen(wall)
   const wH = wall.height
-  const bbH = 0  // baseboards are now standalone pieces, not per-wall
+  // Compute baseboard projections onto this wall (for snap + dim breakpoints)
+  const wallBaseboards: { alongStart: number; alongEnd: number; y: number; height: number }[] = []
+  for (const bb of baseboards) {
+    const bux = Math.cos(bb.rotY), buz = -Math.sin(bb.rotY)
+    const halfL = bb.length / 2
+    const ends: [number, number][] = [
+      [bb.x - bux * halfL, bb.z - buz * halfL],
+      [bb.x + bux * halfL, bb.z + buz * halfL],
+    ]
+    const wdx = wall.x2 - wall.x1, wdz = wall.z2 - wall.z1
+    const wl = Math.hypot(wdx, wdz)
+    if (wl < 0.1) continue
+    const wux = wdx / wl, wuz = wdz / wl
+    const wnx = -wuz, wnz = wux
+    const perpDist = Math.abs((bb.x - wall.x1) * wnx + (bb.z - wall.z1) * wnz)
+    if (perpDist > wall.thickness / 2 + bb.thickness + 6) continue
+    let minU = Infinity, maxU = -Infinity
+    for (const [px, pz] of ends) {
+      const u = (px - wall.x1) * wux + (pz - wall.z1) * wuz
+      minU = Math.min(minU, u); maxU = Math.max(maxU, u)
+    }
+    const u0 = Math.max(0, minU), u1 = Math.min(wLen, maxU)
+    if (u1 - u0 < 0.5) continue
+    wallBaseboards.push({ alongStart: u0, alongEnd: u1, y: bb.y, height: bb.height })
+  }
+  for (const sw of stemWalls) {
+    const bux = Math.cos(sw.rotY), buz = -Math.sin(sw.rotY)
+    const halfL = sw.length / 2
+    const ends: [number, number][] = [
+      [sw.x - bux * halfL, sw.z - buz * halfL],
+      [sw.x + bux * halfL, sw.z + buz * halfL],
+    ]
+    const wdx = wall.x2 - wall.x1, wdz = wall.z2 - wall.z1
+    const wl = Math.hypot(wdx, wdz)
+    if (wl < 0.1) continue
+    const wux = wdx / wl, wuz = wdz / wl
+    const wnx = -wuz, wnz = wux
+    const perpDist = Math.abs((sw.x - wall.x1) * wnx + (sw.z - wall.z1) * wnz)
+    if (perpDist > wall.thickness / 2 + sw.thickness + 6) continue
+    let minU = Infinity, maxU = -Infinity
+    for (const [px, pz] of ends) {
+      const u = (px - wall.x1) * wux + (pz - wall.z1) * wuz
+      minU = Math.min(minU, u); maxU = Math.max(maxU, u)
+    }
+    const u0 = Math.max(0, minU), u1 = Math.min(wLen, maxU)
+    if (u1 - u0 < 0.5) continue
+    wallBaseboards.push({ alongStart: u0, alongEnd: u1, y: sw.y, height: sw.height })
+  }
+  const bbH = 0  // legacy — individual baseboard heights used via wallBaseboards
   const svgW = wLen + 2 * PAD
   const hasAnySlatwall = slatwallPanels.some(p => p.wallId === wall.id && (p.alongEnd - p.alongStart) >= 1)
   const svgH = wH + 2 * PAD + (hasAnySlatwall ? 20 : 0)
@@ -307,9 +355,16 @@ export default function WallElevationView() {
     const snaps: { target: number; forEdge: 'bottom' | 'top' }[] = []
     snaps.push({ target: 0, forEdge: 'bottom' })     // floor
     snaps.push({ target: wH, forEdge: 'top' })       // ceiling
-    if (bbH > 0) {
-      snaps.push({ target: bbH, forEdge: 'bottom' }) // baseboard top
-      snaps.push({ target: bbH, forEdge: 'top' })
+    // Baseboard/stem wall tops as snap targets (position-aware)
+    for (const wb of wallBaseboards) {
+      const objOverlaps = along !== undefined && halfW !== undefined
+        ? (along + halfW > wb.alongStart && along - halfW < wb.alongEnd)
+        : true
+      if (objOverlaps) {
+        const top = wb.y + wb.height
+        snaps.push({ target: top, forEdge: 'bottom' })
+        snaps.push({ target: top, forEdge: 'top' })
+      }
     }
     for (const p of wallPanels) {
       if (p.id === selfId) continue
@@ -351,9 +406,12 @@ export default function WallElevationView() {
         snaps.push({ target: proj.height, forEdge: 'bottom' })
         snaps.push({ target: proj.height, forEdge: 'top' })
         // Baseboard on top of step
-        if (bbH > 0) {
-          snaps.push({ target: proj.height + bbH, forEdge: 'bottom' })
-          snaps.push({ target: proj.height + bbH, forEdge: 'top' })
+        for (const wb of wallBaseboards) {
+          if (Math.abs(wb.y - proj.height) < 1) {
+            const top = proj.height + wb.height
+            snaps.push({ target: top, forEdge: 'bottom' })
+            snaps.push({ target: top, forEdge: 'top' })
+          }
         }
       }
     }
@@ -994,9 +1052,69 @@ export default function WallElevationView() {
             )
           })}
 
-          {/* Baseboards now render as standalone Baseboard pieces (3D side
-             only). The wall elevation no longer shows them since they can be
-             placed anywhere along the wall and would clutter the dim tiers. */}
+          {/* Baseboards — project onto wall and render as rectangles */}
+          {baseboards.map(bb => {
+            const ux = Math.cos(bb.rotY), uz = -Math.sin(bb.rotY)
+            const halfL = bb.length / 2
+            // Two endpoints of the baseboard centerline
+            const ends: [number, number][] = [
+              [bb.x - ux * halfL, bb.z - uz * halfL],
+              [bb.x + ux * halfL, bb.z + uz * halfL],
+            ]
+            const wdx = wall.x2 - wall.x1, wdz = wall.z2 - wall.z1
+            const wLen2 = Math.hypot(wdx, wdz)
+            if (wLen2 < 0.1) return null
+            const wux = wdx / wLen2, wuz = wdz / wLen2
+            const wnx = -wuz, wnz = wux
+            // Project endpoints onto wall along-axis and normal
+            let minU = Infinity, maxU = -Infinity
+            for (const [px, pz] of ends) {
+              const u = (px - wall.x1) * wux + (pz - wall.z1) * wuz
+              minU = Math.min(minU, u); maxU = Math.max(maxU, u)
+            }
+            // Check perpendicular distance — baseboard center must be near wall
+            const perpDist = Math.abs((bb.x - wall.x1) * wnx + (bb.z - wall.z1) * wnz)
+            if (perpDist > wall.thickness / 2 + bb.thickness + 6) return null
+            const u0 = Math.max(0, minU), u1 = Math.min(wLen, maxU)
+            if (u1 - u0 < 0.5) return null
+            return (
+              <rect key={bb.id}
+                x={toX(u0)} y={toY(bb.y + bb.height)}
+                width={u1 - u0} height={bb.height}
+                fill={bb.color} stroke="#888" strokeWidth={0.4} opacity={0.7}
+              />
+            )
+          })}
+          {/* Stem walls — same projection as baseboards */}
+          {stemWalls.map(sw => {
+            const ux = Math.cos(sw.rotY), uz = -Math.sin(sw.rotY)
+            const halfL = sw.length / 2
+            const ends: [number, number][] = [
+              [sw.x - ux * halfL, sw.z - uz * halfL],
+              [sw.x + ux * halfL, sw.z + uz * halfL],
+            ]
+            const wdx = wall.x2 - wall.x1, wdz = wall.z2 - wall.z1
+            const wLen2 = Math.hypot(wdx, wdz)
+            if (wLen2 < 0.1) return null
+            const wux = wdx / wLen2, wuz = wdz / wLen2
+            const wnx = -wuz, wnz = wux
+            let minU = Infinity, maxU = -Infinity
+            for (const [px, pz] of ends) {
+              const u = (px - wall.x1) * wux + (pz - wall.z1) * wuz
+              minU = Math.min(minU, u); maxU = Math.max(maxU, u)
+            }
+            const perpDist = Math.abs((sw.x - wall.x1) * wnx + (sw.z - wall.z1) * wnz)
+            if (perpDist > wall.thickness / 2 + sw.thickness + 6) return null
+            const u0 = Math.max(0, minU), u1 = Math.min(wLen, maxU)
+            if (u1 - u0 < 0.5) return null
+            return (
+              <rect key={sw.id}
+                x={toX(u0)} y={toY(sw.y + sw.height)}
+                width={u1 - u0} height={sw.height}
+                fill={sw.color} stroke="#888" strokeWidth={0.4} opacity={0.7}
+              />
+            )
+          })}
 
           {/* Openings */}
           {wall.openings.map(op => (
@@ -1561,10 +1679,6 @@ export default function WallElevationView() {
           })()}
         </svg>
         </div>
-      </div>
-
-      <div className="wall-elev-hint">
-        Drag panels, cabinets &amp; countertops to reposition · Drag corners to resize · Changes sync to 3D view
       </div>
 
       {/* Snap toggle */}

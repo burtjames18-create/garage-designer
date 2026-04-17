@@ -139,15 +139,18 @@ export default function TextureLibraryModal({ onClose }: Props) {
     setLoading(true)
     let importedCount = 0
     try {
+      const { saveTextureToDB } = await import('../utils/textureLibrary')
       // Plain image files
       for (const file of images) {
         const dataUrl = await readTextureFile(file)
-        addImportedAsset({
+        const asset = {
           id: crypto.randomUUID(),
           name: file.name,
-          assetType: 'texture',
+          assetType: 'texture' as const,
           data: dataUrl,
-        })
+        }
+        addImportedAsset(asset)
+        saveTextureToDB(asset).catch(err => console.warn('Persist failed:', err))
         importedCount++
       }
       // Zip archives (AmbientCG / PolyHaven / Sketchfab PBR packs) — classify
@@ -194,17 +197,19 @@ export default function TextureLibraryModal({ onClose }: Props) {
         const aoUrl           = await readMap('ao')
         const displacementUrl = await readMap('displacement')
 
-        addImportedAsset({
+        const asset = {
           id: crypto.randomUUID(),
           name: baseLabel,
-          assetType: 'texture',
+          assetType: 'texture' as const,
           data: colorUrl,
           normalMap:       normalUrl,
           roughnessMap:    roughnessUrl,
           metalnessMap:    metalnessUrl,
           aoMap:           aoUrl,
           displacementMap: displacementUrl,
-        })
+        }
+        addImportedAsset(asset)
+        saveTextureToDB(asset).catch(err => console.warn('Persist failed:', err))
         importedCount++
       }
       if (importedCount > 0) {
@@ -373,7 +378,12 @@ export default function TextureLibraryModal({ onClose }: Props) {
                       <div style={{ fontSize: 10, color: '#fff' }}>Delete?</div>
                       <div style={{ display: 'flex', gap: 4 }}>
                         <button
-                          onClick={() => { deleteImportedAsset(t.id); setConfirmDeleteId(null); showToast('Texture deleted', 'success') }}
+                          onClick={() => {
+                            deleteImportedAsset(t.id)
+                            import('../utils/textureLibrary').then(m => m.deleteTextureFromDB(t.id).catch(() => {}))
+                            setConfirmDeleteId(null)
+                            showToast('Texture deleted', 'success')
+                          }}
                           style={{
                             background: '#c84a3a', color: '#fff', border: 0,
                             borderRadius: 4, padding: '3px 8px', fontSize: 10, cursor: 'pointer',

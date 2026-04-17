@@ -34,7 +34,9 @@ const SLATWALL_DEPTH = 3  // visual depth of slatwall on floor plan (inches)
 
 export default function FloorPlanBlueprint({ walls, cabinets, countertops, floorPoints, floorSteps = [], slatwallPanels = [], stainlessBacksplashPanels = [], overheadRacks = [], baseboards = [], stemWalls = [] }: Props) {
   const { selectRack, updateRack, selectedRackId,
-    selectCabinet, updateCabinet, selectedCabinetId, snappingEnabled } = useGarageStore()
+    selectCabinet, updateCabinet, selectedCabinetId, snappingEnabled,
+    updateWall, selectedWallId, selectWall,
+    wallAngleSnapEnabled, cornerAngleLabelsVisible } = useGarageStore()
   const svgRef = useRef<SVGSVGElement>(null)
   const rackDragRef = useRef<{ rackId: string; startX: number; startZ: number; startMouseX: number; startMouseZ: number } | null>(null)
   const [rackSnap, setRackSnap] = useState<RackSnapResult | null>(null)
@@ -49,13 +51,35 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
     startMouseAlong: number           // cursor's along-projection at drag start
   } | null>(null)
 
+  // Wall endpoint drag — reshape garage footprint in the floor plan view.
+  // `end` = which end of the wall being dragged.
+  const wallEndDragRef = useRef<{
+    wallId: string
+    end: 'start' | 'end'
+    startMouseX: number; startMouseZ: number
+    initX: number; initZ: number
+  } | null>(null)
+  // Whole-wall drag — translate both endpoints by the same delta.
+  const wallBodyDragRef = useRef<{
+    wallId: string
+    startMouseX: number; startMouseZ: number
+    initX1: number; initZ1: number
+    initX2: number; initZ2: number
+  } | null>(null)
+  // Frozen bounds during a wall-endpoint drag so the view doesn't recenter
+  // as the endpoint moves outside the current bounding box.
+  const frozenBoundsRef = useRef<{ minX: number; maxX: number; minZ: number; maxZ: number } | null>(null)
+
   if (walls.length === 0) return null
 
-  // Bounding box of all wall endpoints
+  // Bounding box of all wall endpoints (or frozen bounds during drag)
   const allX = walls.flatMap(w => [w.x1, w.x2])
   const allZ = walls.flatMap(w => [w.z1, w.z2])
-  const minX = Math.min(...allX), maxX = Math.max(...allX)
-  const minZ = Math.min(...allZ), maxZ = Math.max(...allZ)
+  const fb = frozenBoundsRef.current
+  const minX = fb ? fb.minX : Math.min(...allX)
+  const maxX = fb ? fb.maxX : Math.max(...allX)
+  const minZ = fb ? fb.minZ : Math.min(...allZ)
+  const maxZ = fb ? fb.maxZ : Math.max(...allZ)
   const rangeX = maxX - minX || 1
   const rangeZ = maxZ - minZ || 1
 
@@ -252,6 +276,215 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
     }
   }, [])
 
+  // ─── Wall endpoint drag ────────────────────────────────────────────────────
+  const onWallEndPointerDown = useCallback((
+    e: React.PointerEvent, wall: GarageWall, end: 'start' | 'end',
+  ) => {
+    e.stopPropagation()
+    e.preventDefault()
+    selectWall(wall.id)
+    const pos = mouseToSvg(e)
+    if (!pos) return
+    wallEndDragRef.current = {
+      wallId: wall.id, end,
+      startMouseX: pos.x, startMouseZ: pos.z,
+      initX: end === 'start' ? wall.x1 : wall.x2,
+      initZ: end === 'start' ? wall.z1 : wall.z2,
+    }
+    // Freeze view bounds for the duration of the drag so the canvas doesn't
+    // rescale/recenter as the endpoint moves around.
+    const xs = walls.flatMap(w => [w.x1, w.x2])
+    const zs = walls.flatMap(w => [w.z1, w.z2])
+    frozenBoundsRef.current = {
+      minX: Math.min(...xs), maxX: Math.max(...xs),
+      minZ: Math.min(...zs), maxZ: Math.max(...zs),
+    }
+    ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
+  }, [mouseToSvg, selectWall, walls])
+
+  const onWallEndPointerMove = useCallback((e: React.PointerEvent) => {
+    const wd = wallEndDragRef.current
+    if (!wd) return
+    const pos = mouseToSvg(e)
+    if (!pos) return
+    let nx = snapToGrid(wd.initX + (pos.x - wd.startMouseX))
+    let nz = snapToGrid(wd.initZ + (pos.z - wd.startMouseZ))
+    if (snappingEnabled) {
+      const SNAP = 3
+      const wall = walls.find(w => w.id === wd.wallId)
+      const fixedX = wall ? (wd.end === 'start' ? wall.x2 : wall.x1) : wd.initX
+      const fixedZ = wall ? (wd.end === 'start' ? wall.z2 : wall.z1) : wd.initZ
+
+      // Step 1: angle-snap the direction from fixed end → cursor to nearest 45°.
+      let dirX = nx - fixedX, dirZ = nz - fixedZ
+      let len = Math.hypot(dirX, dirZ)
+      let angleLocked = false
+      if (len > 1) {
+        if (wallAngleSnapEnabled) {
+          const ang = Math.atan2(dirZ, dirX)
+          const step = Math.PI / 4
+          const snapped = Math.round(ang / step) * step
+          const diff = Math.abs(((ang - snapped + Math.PI * 3) % (Math.PI * 2)) - Math.PI)
+          const ANGLE_TOL = 1 * Math.PI / 180
+          if (diff < ANGLE_TOL) {
+            dirX = Math.cos(snapped); dirZ = Math.sin(snapped)
+            nx = snapToGrid(fixedX + dirX * len)
+            nz = snapToGrid(fixedZ + dirZ * len)
+            angleLocked = true
+          } else {
+            dirX /= len; dirZ /= len
+          }
+        } else {
+          dirX /= len; dirZ /= len
+        }
+      }
+
+      // Step 2: collect wall-snap targets (endpoints + edge projections of the
+      // CURRENT cursor position). When the angle is locked, project each target
+      // ONTO the locked ray and snap only if it's close to that ray (so the wall
+      // attaches end-to-end or end-to-edge without breaking the angle lock).
+      const targets: [number, number][] = []
+      for (const w of walls) {
+        for (const [px, pz, isSelf] of [
+          [w.x1, w.z1, w.id === wd.wallId && wd.end === 'start'],
+          [w.x2, w.z2, w.id === wd.wallId && wd.end === 'end'],
+        ] as [number, number, boolean][]) {
+          if (!isSelf) targets.push([px, pz])
+        }
+      }
+      // Edge projections are evaluated relative to the current nx/nz (which
+      // is already on the locked ray if angleLocked).
+      for (const w of walls) {
+        if (w.id === wd.wallId) continue
+        const wdx = w.x2 - w.x1, wdz = w.z2 - w.z1
+        const wl2 = wdx * wdx + wdz * wdz
+        if (wl2 < 0.01) continue
+        const t = Math.max(0, Math.min(1, ((nx - w.x1) * wdx + (nz - w.z1) * wdz) / wl2))
+        targets.push([w.x1 + t * wdx, w.z1 + t * wdz])
+      }
+
+      let bestDist = SNAP, bx = nx, bz = nz
+      if (angleLocked) {
+        // Slide the endpoint ALONG the locked ray to a nearby target. Require
+        // both perpendicular closeness to the ray AND along-axis closeness to
+        // the cursor, so distant targets on the ray don't grab the endpoint.
+        const cursorAlong = (nx - fixedX) * dirX + (nz - fixedZ) * dirZ
+        for (const [tx, tz] of targets) {
+          const along = (tx - fixedX) * dirX + (tz - fixedZ) * dirZ
+          if (along < 1) continue
+          const perpX = (tx - fixedX) - dirX * along
+          const perpZ = (tz - fixedZ) - dirZ * along
+          const perp = Math.hypot(perpX, perpZ)
+          if (perp >= SNAP) continue
+          const alongDist = Math.abs(along - cursorAlong)
+          if (alongDist >= SNAP) continue
+          const total = Math.hypot(perp, alongDist)
+          if (total < bestDist) {
+            bestDist = total
+            bx = snapToGrid(fixedX + dirX * along)
+            bz = snapToGrid(fixedZ + dirZ * along)
+          }
+        }
+      } else {
+        // No angle lock — plain 2D closest-target snap.
+        for (const [tx, tz] of targets) {
+          const d = Math.hypot(nx - tx, nz - tz)
+          if (d < bestDist) { bestDist = d; bx = tx; bz = tz }
+        }
+      }
+      nx = bx; nz = bz
+    }
+    const changes = wd.end === 'start' ? { x1: nx, z1: nz } : { x2: nx, z2: nz }
+    updateWall(wd.wallId, changes)
+  }, [mouseToSvg, snappingEnabled, updateWall, walls])
+
+  const onWallEndPointerUp = useCallback((e?: React.PointerEvent) => {
+    wallEndDragRef.current = null
+    frozenBoundsRef.current = null
+    if (e) {
+      try { (e.currentTarget as Element).releasePointerCapture(e.pointerId) } catch (_) {}
+    }
+  }, [])
+
+  // Whole-wall body drag (click+drag the wall polygon to translate it).
+  const onWallBodyPointerDown = useCallback((
+    e: React.PointerEvent, wall: GarageWall,
+  ) => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    e.preventDefault()
+    selectWall(wall.id)
+    const pos = mouseToSvg(e)
+    if (!pos) return
+    wallBodyDragRef.current = {
+      wallId: wall.id,
+      startMouseX: pos.x, startMouseZ: pos.z,
+      initX1: wall.x1, initZ1: wall.z1,
+      initX2: wall.x2, initZ2: wall.z2,
+    }
+    const xs = walls.flatMap(w => [w.x1, w.x2])
+    const zs = walls.flatMap(w => [w.z1, w.z2])
+    frozenBoundsRef.current = {
+      minX: Math.min(...xs), maxX: Math.max(...xs),
+      minZ: Math.min(...zs), maxZ: Math.max(...zs),
+    }
+    ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
+  }, [mouseToSvg, selectWall, walls])
+
+  const onWallBodyPointerMove = useCallback((e: React.PointerEvent) => {
+    const wd = wallBodyDragRef.current
+    if (!wd) return
+    const pos = mouseToSvg(e)
+    if (!pos) return
+    const dx = pos.x - wd.startMouseX
+    const dz = pos.z - wd.startMouseZ
+    let nx1 = snapToGrid(wd.initX1 + dx), nz1 = snapToGrid(wd.initZ1 + dz)
+    let nx2 = snapToGrid(wd.initX2 + dx), nz2 = snapToGrid(wd.initZ2 + dz)
+    // Snap whichever endpoint lands closest to another wall's endpoint OR
+    // to any point along another wall's edge; shift the whole wall by that
+    // delta so both endpoints move in unison.
+    if (snappingEnabled) {
+      const SNAP = 3
+      let bestDist = SNAP, snapDx = 0, snapDz = 0
+      for (const w of walls) {
+        if (w.id === wd.wallId) continue
+        // Wall endpoints
+        for (const [px, pz] of [[w.x1, w.z1], [w.x2, w.z2]] as [number, number][]) {
+          const d1 = Math.hypot(nx1 - px, nz1 - pz)
+          if (d1 < bestDist) { bestDist = d1; snapDx = px - nx1; snapDz = pz - nz1 }
+          const d2 = Math.hypot(nx2 - px, nz2 - pz)
+          if (d2 < bestDist) { bestDist = d2; snapDx = px - nx2; snapDz = pz - nz2 }
+        }
+        // Wall edge — closest point on segment for each endpoint
+        const wdx = w.x2 - w.x1, wdz = w.z2 - w.z1
+        const wl2 = wdx * wdx + wdz * wdz
+        if (wl2 < 0.01) continue
+        const proj = (px: number, pz: number) => {
+          const t = Math.max(0, Math.min(1, ((px - w.x1) * wdx + (pz - w.z1) * wdz) / wl2))
+          return [w.x1 + t * wdx, w.z1 + t * wdz] as [number, number]
+        }
+        const [cx1, cz1] = proj(nx1, nz1)
+        const [cx2, cz2] = proj(nx2, nz2)
+        const de1 = Math.hypot(nx1 - cx1, nz1 - cz1)
+        if (de1 < bestDist) { bestDist = de1; snapDx = cx1 - nx1; snapDz = cz1 - nz1 }
+        const de2 = Math.hypot(nx2 - cx2, nz2 - cz2)
+        if (de2 < bestDist) { bestDist = de2; snapDx = cx2 - nx2; snapDz = cz2 - nz2 }
+      }
+      if (snapDx || snapDz) {
+        nx1 += snapDx; nz1 += snapDz; nx2 += snapDx; nz2 += snapDz
+      }
+    }
+    updateWall(wd.wallId, { x1: nx1, z1: nz1, x2: nx2, z2: nz2 })
+  }, [mouseToSvg, snappingEnabled, updateWall, walls])
+
+  const onWallBodyPointerUp = useCallback((e?: React.PointerEvent) => {
+    wallBodyDragRef.current = null
+    frozenBoundsRef.current = null
+    if (e) {
+      try { (e.currentTarget as Element).releasePointerCapture(e.pointerId) } catch (_) {}
+    }
+  }, [])
+
   const dimColor = '#555'
   const dimColorLight = '#888'
   const textColor = '#333'
@@ -414,8 +647,8 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
       outX: number; outZ: number; color: string; fontSize: number; fontWeight: string }) {
     const mx = (x1 + x2) / 2, my = (y1 + y2) / 2
     const angle = readableAngle(Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI)
-    // Place text on the outward side of the dim line
-    const textOff = 2
+    // Place text on the outward side of the dim line, clear of the line itself.
+    const textOff = fontSize * 0.9
     const tx = mx + outX * textOff, ty = my + outZ * textOff
 
     return (
@@ -443,8 +676,9 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
       preserveAspectRatio="xMidYMid meet"
       style={{ width: '100%', height: '100%', display: 'block' }}
     >
-      {/* Background */}
-      <rect x={0} y={0} width={SVG_W} height={SVG_H} fill="#ffffff" />
+      {/* Background — click to deselect walls */}
+      <rect x={0} y={0} width={SVG_W} height={SVG_H} fill="#ffffff"
+        onPointerDown={() => { if (selectedWallId) selectWall(null) }} />
 
 
       {/* Floor steps */}
@@ -545,9 +779,16 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
             `${sx(n0.x)},${sz(n0.z)}`,
           ].join(' ')
 
+          const isSel = selectedWallId === w.id
           return (
             <polygon key={w.id} points={points}
-              fill="#222" stroke="#222" strokeWidth={0.5} strokeLinejoin="miter" />
+              fill={isSel ? '#334466' : '#222'} stroke={isSel ? '#66aaff' : '#222'}
+              strokeWidth={isSel ? 1.2 : 0.5} strokeLinejoin="miter"
+              style={{ cursor: 'move' }}
+              onPointerDown={e => onWallBodyPointerDown(e, w)}
+              onPointerMove={onWallBodyPointerMove}
+              onPointerUp={onWallBodyPointerUp}
+              onPointerCancel={onWallBodyPointerUp} />
           )
         })
       })()}
@@ -909,7 +1150,8 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
             {isSel && !rack.locked && (
               <circle
                 cx={rotHandleX} cy={rotHandleZ} r={4}
-                fill="#4444ff" stroke="#fff" strokeWidth={1}
+                fill="none" stroke="#44aaff" strokeWidth={1.5}
+                pointerEvents="all"
                 style={{ cursor: 'pointer' }}
                 onPointerDown={(e) => {
                   e.stopPropagation()
@@ -922,6 +1164,133 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
         )
       })}
 
+      {/* Corner angle labels — toggled by its own button */}
+      {cornerAngleLabelsVisible && (() => {
+        // Ray at each endpoint = direction pointing AWAY from the endpoint
+        // along its wall. Each wall contributes two rays (one per endpoint).
+        const endpoints: { x: number; z: number; ux: number; uz: number; wallId: string }[] = []
+        for (const w of walls) {
+          const [dx, dz] = wallDir(w)
+          endpoints.push({ x: w.x1, z: w.z1, ux: dx,  uz: dz,  wallId: w.id })
+          endpoints.push({ x: w.x2, z: w.z2, ux: -dx, uz: -dz, wallId: w.id })
+        }
+        // Also detect T-junctions: an endpoint of one wall landing on another
+        // wall's body/edge (not just at its endpoints). Contributes TWO rays
+        // for the host wall at the junction point (one each direction).
+        const TOL = 2
+        for (const w of walls) {
+          const [dx, dz] = wallDir(w)
+          const wl = wallLen(w)
+          if (wl < 1) continue
+          // Perpendicular tolerance scales with wall thickness so endpoints
+          // landing on the wall's interior face still register as T-junctions.
+          const perpTol = Math.max(TOL, w.thickness / 2 + TOL)
+          const endTol = perpTol + 2  // along-wall gap to avoid double-counting corners
+          for (const other of walls) {
+            if (other.id === w.id) continue
+            for (const [px, pz] of [[other.x1, other.z1], [other.x2, other.z2]] as [number, number][]) {
+              // Projection of endpoint onto wall w (segment)
+              const t = ((px - w.x1) * dx + (pz - w.z1) * dz)
+              if (t < endTol || t > wl - endTol) continue   // skip true corners
+              const cxw = w.x1 + t * dx, czw = w.z1 + t * dz
+              if (Math.hypot(px - cxw, pz - czw) > perpTol) continue
+              // T-junction — add two rays on w (both directions along w).
+              endpoints.push({ x: cxw, z: czw, ux: dx,  uz: dz,  wallId: w.id })
+              endpoints.push({ x: cxw, z: czw, ux: -dx, uz: -dz, wallId: w.id })
+              // Also project the OTHER wall's endpoint onto its own direction
+              // ray pointing INTO the host wall, so its angle shows up here.
+              // (other's direction from its [px,pz] endpoint back toward its body.)
+              const [odx, odz] = wallDir(other)
+              const isStart = px === other.x1 && pz === other.z1
+              endpoints.push({
+                x: cxw, z: czw,
+                ux: isStart ? odx : -odx,
+                uz: isStart ? odz : -odz,
+                wallId: other.id,
+              })
+            }
+          }
+        }
+        // Group coincident endpoints (within 2").
+        const groups: typeof endpoints[] = []
+        for (const e of endpoints) {
+          const g = groups.find(gg => Math.hypot(gg[0].x - e.x, gg[0].z - e.z) < TOL)
+          if (g) g.push(e); else groups.push([e])
+        }
+        const labels: JSX.Element[] = []
+        for (const g of groups) {
+          if (g.length < 2) continue
+          // Dedupe rays pointing the same direction (within ~1°).
+          const unique: typeof g = []
+          for (const r of g) {
+            if (unique.some(u => u.ux * r.ux + u.uz * r.uz > 0.9998)) continue
+            unique.push(r)
+          }
+          if (unique.length < 2) continue
+          const sorted = [...unique].sort((a, b) => Math.atan2(a.uz, a.ux) - Math.atan2(b.uz, b.ux))
+          for (let i = 0; i < sorted.length; i++) {
+            if (sorted.length === 2 && i > 0) break
+            const a = sorted[i]
+            const b = sorted[(i + 1) % sorted.length]
+            const dot = a.ux * b.ux + a.uz * b.uz
+            let angleDeg = Math.acos(Math.max(-1, Math.min(1, dot))) * 180 / Math.PI
+            if (sorted.length > 2) {
+              const cross = a.ux * b.uz - a.uz * b.ux
+              const sweep = Math.atan2(cross, dot) * 180 / Math.PI
+              angleDeg = sweep < 0 ? sweep + 360 : sweep
+            }
+            if (angleDeg < 1 || angleDeg > 359) continue
+            // Place label in the sector between rays a and b (bisector),
+            // pushed into the wedge so it sits visibly in the opening.
+            let bx = a.ux + b.ux, bz = a.uz + b.uz
+            // If rays are (nearly) antiparallel (180° sector), bisector
+            // collapses — use the perpendicular of either ray instead.
+            if (Math.hypot(bx, bz) < 0.01) { bx = -a.uz; bz = a.ux }
+            const blen = Math.hypot(bx, bz) || 1
+            bx /= blen; bz /= blen
+            const OFF = 16
+            const tx = sx(a.x) + bx * OFF
+            const ty = sz(a.z) + bz * OFF
+            labels.push(
+              <g key={`ang-${a.x.toFixed(1)}-${a.z.toFixed(1)}-${i}`} pointerEvents="none">
+                <rect x={tx - 12} y={ty - 5.5} width={24} height={11} rx={2}
+                  fill="#ffffffcc" stroke="#888" strokeWidth={0.3} />
+                <text x={tx} y={ty} textAnchor="middle" dominantBaseline="central"
+                  fontSize={6.5} fontWeight={600} fill="#333">
+                  {angleDeg.toFixed(0)}°
+                </text>
+              </g>
+            )
+          }
+        }
+        return labels
+      })()}
+
+      {/* Wall endpoint drag handles — only shown on the selected wall */}
+      {walls.filter(w => w.id === selectedWallId).map(w => (
+        <g key={`wh-${w.id}`}>
+          <circle
+            cx={sx(w.x1)} cy={sz(w.z1)} r={6}
+            fill="none" stroke="#44aaff" strokeWidth={1.5}
+            pointerEvents="all"
+            style={{ cursor: 'grab' }}
+            onPointerDown={e => onWallEndPointerDown(e, w, 'start')}
+            onPointerMove={onWallEndPointerMove}
+            onPointerUp={onWallEndPointerUp}
+            onPointerCancel={onWallEndPointerUp}
+          />
+          <circle
+            cx={sx(w.x2)} cy={sz(w.z2)} r={6}
+            fill="none" stroke="#44aaff" strokeWidth={1.5}
+            pointerEvents="all"
+            style={{ cursor: 'grab' }}
+            onPointerDown={e => onWallEndPointerDown(e, w, 'end')}
+            onPointerMove={onWallEndPointerMove}
+            onPointerUp={onWallEndPointerUp}
+            onPointerCancel={onWallEndPointerUp}
+          />
+        </g>
+      ))}
     </svg>
   )
 }

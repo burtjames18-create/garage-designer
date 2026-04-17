@@ -1,6 +1,6 @@
 import { useMemo, useRef, useCallback, useEffect, useState, Suspense, Component, memo } from 'react'
 import type { ReactNode, JSX } from 'react'
-import { useTexture, Text, useGLTF, MeshReflectorMaterial, RoundedBox } from '@react-three/drei'
+import { useTexture, Text, useGLTF, MeshReflectorMaterial, RoundedBox, Edges } from '@react-three/drei'
 import { useThree, useFrame } from '@react-three/fiber'
 import type { ThreeEvent } from '@react-three/fiber'
 import { useGarageStore, COUNTERTOP_DEPTH, COUNTERTOP_THICKNESS, CEILING_LIGHT_W, CEILING_LIGHT_L, CEILING_LIGHT_TH, RACK_DECK_THICKNESS, RACK_LEG_SIZE } from '../store/garageStore'
@@ -115,6 +115,40 @@ function lineIntersectT(
   const det = dx * (-ez) - dz * (-ex)
   if (Math.abs(det) < 1e-6) return NaN
   return ((bx - ax) * (-ez) - (bz - az) * (-ex)) / det
+}
+
+/** Project baseboards/stemwalls onto a wall and return along-axis overlaps.
+ *  Used to add baseboard heights as Y-snap targets during cabinet placement. */
+function getBaseboardWallOverlaps(
+  wall: GarageWall,
+  pieces: { x: number; z: number; rotY: number; length: number; height: number; y: number; thickness: number }[],
+  wallLen: number,
+): { u0: number; u1: number; bbTop: number }[] {
+  const wdx = wall.x2 - wall.x1, wdz = wall.z2 - wall.z1
+  const wl = Math.hypot(wdx, wdz)
+  if (wl < 0.1) return []
+  const wux = wdx / wl, wuz = wdz / wl
+  const wnx = -wuz, wnz = wux
+  const results: { u0: number; u1: number; bbTop: number }[] = []
+  for (const bb of pieces) {
+    const bux = Math.cos(bb.rotY), buz = -Math.sin(bb.rotY)
+    const halfL = bb.length / 2
+    const ends: [number, number][] = [
+      [bb.x - bux * halfL, bb.z - buz * halfL],
+      [bb.x + bux * halfL, bb.z + buz * halfL],
+    ]
+    const perpDist = Math.abs((bb.x - wall.x1) * wnx + (bb.z - wall.z1) * wnz)
+    if (perpDist > wall.thickness / 2 + bb.thickness + 6) continue
+    let minU = Infinity, maxU = -Infinity
+    for (const [px, pz] of ends) {
+      const u = (px - wall.x1) * wux + (pz - wall.z1) * wuz
+      minU = Math.min(minU, u); maxU = Math.max(maxU, u)
+    }
+    const u0 = Math.max(0, minU), u1 = Math.min(wallLen, maxU)
+    if (u1 - u0 < 0.5) continue
+    results.push({ u0, u1, bbTop: bb.y + bb.height })
+  }
+  return results
 }
 
 /** An entry in a wall chain, with start/end in chain traversal order. */
@@ -2729,13 +2763,20 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
       >
         {blueprint
           ? <meshBasicMaterial color={color} />
-          : hasWallTexture
-            ? <Suspense fallback={<meshLambertMaterial color={color} />}>
-                {isImportedWallTex
-                  ? <ImportedWallTexture assetId={wall.wallTextureId!.replace('imported:', '')} widthFt={segWFt} heightFt={segHFt} selected={selected} />
-                  : <TexturedWallMaterial textureId={wall.wallTextureId!} widthFt={segWFt} heightFt={segHFt} selected={selected} />}
-              </Suspense>
-            : <meshLambertMaterial wireframe={wireframe} color={color} />
+          : wireframe
+            ? <>
+                {/* Transparent fill so the shape still occludes correctly,
+                    with crisp hard edges for the actual geometry. */}
+                <meshBasicMaterial color="#ffffff" transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
+                <Edges threshold={15} color={color} />
+              </>
+            : hasWallTexture
+              ? <Suspense fallback={<meshLambertMaterial color={color} />}>
+                  {isImportedWallTex
+                    ? <ImportedWallTexture assetId={wall.wallTextureId!.replace('imported:', '')} widthFt={segWFt} heightFt={segHFt} selected={selected} />
+                    : <TexturedWallMaterial textureId={wall.wallTextureId!} widthFt={segWFt} heightFt={segHFt} selected={selected} />}
+                </Suspense>
+              : <meshLambertMaterial color={color} />
         }
       </mesh>
     ))}
@@ -2753,15 +2794,20 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
             onPointerDown={onPointerDown}
           >
             <boxGeometry args={[segW, segH, thickFt]} />
-            {hasWallTexture ? (
-              <Suspense fallback={<meshLambertMaterial color={color} />}>
-                {isImportedWallTex
-                  ? <ImportedWallTexture assetId={wall.wallTextureId!.replace('imported:', '')} widthFt={segW} heightFt={segH} selected={selected} />
-                  : <TexturedWallMaterial textureId={wall.wallTextureId!} widthFt={segW} heightFt={segH} selected={selected} />}
-              </Suspense>
-            ) : blueprint
-                ? <meshBasicMaterial color={color} />
-                : <meshLambertMaterial wireframe={wireframe} color={color} />
+            {wireframe
+              ? <>
+                  <meshBasicMaterial color="#ffffff" transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
+                  <Edges threshold={15} color={color} />
+                </>
+              : hasWallTexture ? (
+                <Suspense fallback={<meshLambertMaterial color={color} />}>
+                  {isImportedWallTex
+                    ? <ImportedWallTexture assetId={wall.wallTextureId!.replace('imported:', '')} widthFt={segW} heightFt={segH} selected={selected} />
+                    : <TexturedWallMaterial textureId={wall.wallTextureId!} widthFt={segW} heightFt={segH} selected={selected} />}
+                </Suspense>
+              ) : blueprint
+                  ? <meshBasicMaterial color={color} />
+                  : <meshLambertMaterial color={color} />
             }
           </mesh>
         )
@@ -3969,6 +4015,7 @@ export default function GarageShell() {
     overheadRacks, selectedRackId, selectRack, updateRack,
     slatwallAccessories, selectedAccessoryId, selectSlatwallAccessory,
     qualityPreset, isExporting,
+    cornerAngleLabelsVisible,
   } = useGarageStore()
 
   // Effective quality: always high during export
@@ -4597,11 +4644,14 @@ export default function GarageShell() {
           // Look up wall live for ceiling + baseboard values
           const dragWall = wallsRef.current.find(w => w.id === sbd.wallId)
           const wallH    = dragWall?.height ?? 9999
-          const bbH      = 0
 
           let newBottom = snapToGrid(sbd.startYBottom + dHeight)
-          // Snap to baseboard top within 3"
-          if (bbH > 0 && Math.abs(newBottom - bbH) <= 3) newBottom = bbH
+          // Snap to baseboard/stemwall tops within 3"
+          if (dragWall) {
+            const wl = Math.hypot(dragWall.x2 - dragWall.x1, dragWall.z2 - dragWall.z1)
+            const bos = getBaseboardWallOverlaps(dragWall, [...baseboardsRef.current, ...stemWallsRef.current], wl)
+            for (const bo of bos) { if (Math.abs(newBottom - bo.bbTop) <= 3) { newBottom = bo.bbTop; break } }
+          }
           // Clamp between floor (or baseboard) and ceiling
           newBottom = Math.max(0, Math.min(newBottom, wallH - panelH))
           const newTop = newBottom + panelH
@@ -4642,10 +4692,13 @@ export default function GarageShell() {
 
           const dragWall = wallsRef.current.find(w => w.id === bbd.wallId)
           const wallH    = dragWall?.height ?? 9999
-          const bbH      = 0
 
           let newBottom = snapToGrid(bbd.startYBottom + dHeight)
-          if (bbH > 0 && Math.abs(newBottom - bbH) <= 3) newBottom = bbH
+          if (dragWall) {
+            const wl = Math.hypot(dragWall.x2 - dragWall.x1, dragWall.z2 - dragWall.z1)
+            const bos = getBaseboardWallOverlaps(dragWall, [...baseboardsRef.current, ...stemWallsRef.current], wl)
+            for (const bo of bos) { if (Math.abs(newBottom - bo.bbTop) <= 3) { newBottom = bo.bbTop; break } }
+          }
           newBottom = Math.max(0, Math.min(newBottom, wallH - panelH))
           const newTop = newBottom + panelH
 
@@ -4676,7 +4729,6 @@ export default function GarageShell() {
           const cWall = wallsRef.current.find(w => w.id === bsc.wallId)
           if (panel && cWall) {
             const wallH = cWall.height
-            const bbH   = 0
             const changes: Partial<StainlessBacksplashPanel> = {}
             const minAlong = bsc.startTrimIn
             const maxAlong = bsc.wallLenIn - bsc.endTrimIn
@@ -4688,7 +4740,7 @@ export default function GarageShell() {
             if (bsc.corner === 0 || bsc.corner === 1) {
               changes.yTop = Math.max(panel.yBottom + 6, Math.min(heightIn, wallH))
             } else {
-              changes.yBottom = Math.max(bbH, Math.min(heightIn, panel.yTop - 6))
+              changes.yBottom = Math.max(0, Math.min(heightIn, panel.yTop - 6))
             }
             updateBacksplashRef.current(bsc.panelId, changes)
           }
@@ -4715,7 +4767,6 @@ export default function GarageShell() {
           const cWall = wallsRef.current.find(w => w.id === sc.wallId)
           if (panel && cWall) {
             const wallH = cWall.height
-            const bbH   = 0
             const changes: Partial<SlatwallPanel> = {}
             const minAlong = sc.startTrimIn
             const maxAlong = sc.wallLenIn - sc.endTrimIn
@@ -4728,8 +4779,8 @@ export default function GarageShell() {
               // top handle — clamp to wall ceiling
               changes.yTop = Math.max(panel.yBottom + 6, Math.min(heightIn, wallH))
             } else {
-              // bottom handle — clamp to baseboard top (or floor)
-              changes.yBottom = Math.max(bbH, Math.min(heightIn, panel.yTop - 6))
+              // bottom handle — clamp to floor
+              changes.yBottom = Math.max(0, Math.min(heightIn, panel.yTop - 6))
             }
             updateSlatRef.current(sc.panelId, changes)
           }
@@ -5171,15 +5222,23 @@ export default function GarageShell() {
                 // cabinet tops (stacking) / bottoms (hanging under).
                 let cabY = Math.max(0, wh.yIn - cab.h / 2)
                 if (!skipSnap) {
-                  const bbH = 0
                   const yTargets: number[] = [0]
-                  if (bbH > 0) yTargets.push(bbH)
+                  const bbOverlaps = getBaseboardWallOverlaps(wall, [...baseboardsRef.current, ...stemWallsRef.current], lenIn)
+                  for (const bo of bbOverlaps) {
+                    if (snappedAlong + halfW > bo.u0 && snappedAlong - halfW < bo.u1) {
+                      yTargets.push(bo.bbTop)
+                    }
+                  }
                   for (const step of floorStepsRef.current) {
                     const overlaps = getStepWallOverlaps(wall, step, lenIn)
                     for (const ov of overlaps) {
                       if (snappedAlong + halfW > ov.u0 && snappedAlong - halfW < ov.u1) {
                         yTargets.push(ov.stepHeight)
-                        if (bbH > 0) yTargets.push(ov.stepHeight + bbH)
+                        for (const bo of bbOverlaps) {
+                          if (Math.abs(bo.bbTop - ov.stepHeight) > 0.5 && snappedAlong + halfW > bo.u0 && snappedAlong - halfW < bo.u1) {
+                            yTargets.push(ov.stepHeight + (bo.bbTop - (bo.bbTop > ov.stepHeight ? ov.stepHeight : 0)))
+                          }
+                        }
                       }
                     }
                   }
@@ -5428,16 +5487,18 @@ export default function GarageShell() {
 
               // Snap cabinet Y to step-up heights
               const Y_SNAP = 8  // inches threshold
-              const bbH = 0
               const yTargets: number[] = [0]
-              if (bbH > 0) yTargets.push(bbH)
+              const bbOvs = getBaseboardWallOverlaps(wall, [...baseboardsRef.current, ...stemWallsRef.current], len)
+              for (const bo of bbOvs) {
+                if (snappedAlong + cab.w / 2 > bo.u0 && snappedAlong - cab.w / 2 < bo.u1) {
+                  yTargets.push(bo.bbTop)
+                }
+              }
               for (const step of floorStepsRef.current) {
                 const overlaps = getStepWallOverlaps(wall, step, len)
                 for (const ov of overlaps) {
-                  // Only snap if cabinet overlaps this step horizontally
                   if (snappedAlong + cab.w / 2 > ov.u0 && snappedAlong - cab.w / 2 < ov.u1) {
                     yTargets.push(ov.stepHeight)
-                    if (bbH > 0) yTargets.push(ov.stepHeight + bbH)
                   }
                 }
               }
@@ -5872,53 +5933,6 @@ export default function GarageShell() {
         </mesh>
       )}
 
-      {/* Wall corner angles — floor labels, wireframe/mesh mode only */}
-      {wireframe && (() => {
-        const labels: JSX.Element[] = []
-        const SNAP_IN = 8
-        type EP = { x: number; z: number; dx: number; dz: number }
-        const eps: EP[] = []
-        for (const w of walls) {
-          const dx = w.x2 - w.x1, dz = w.z2 - w.z1
-          const len = Math.hypot(dx, dz) || 1
-          const ux = dx / len, uz = dz / len
-          eps.push({ x: w.x1, z: w.z1, dx: ux,  dz: uz })
-          eps.push({ x: w.x2, z: w.z2, dx: -ux, dz: -uz })
-        }
-        const used = new Array(eps.length).fill(false)
-        for (let i = 0; i < eps.length; i++) {
-          if (used[i]) continue
-          const g: EP[] = [eps[i]]; used[i] = true
-          for (let j = i + 1; j < eps.length; j++) {
-            if (used[j]) continue
-            if (Math.hypot(eps[j].x - eps[i].x, eps[j].z - eps[i].z) < SNAP_IN) {
-              g.push(eps[j]); used[j] = true
-            }
-          }
-          if (g.length !== 2) continue
-          const a = g[0], b = g[1]
-          const dot = a.dx * b.dx + a.dz * b.dz
-          const deg = Math.round(Math.acos(Math.max(-1, Math.min(1, dot))) * 180 / Math.PI)
-          const bx = a.dx + b.dx, bz = a.dz + b.dz
-          const blen = Math.hypot(bx, bz) || 1
-          const inX = bx / blen, inZ = bz / blen
-          const labelInches = 14
-          const wx = FT(a.x + inX * labelInches)
-          const wz = FT(a.z + inZ * labelInches)
-          labels.push(
-            <Text key={`ang-${Math.round(a.x)}-${Math.round(a.z)}`}
-              position={[wx, 0.5, wz]}
-              rotation={[-Math.PI / 2, 0, 0]}
-              fontSize={0.6} color="#ffcc00"
-              anchorX="center" anchorY="middle" renderOrder={999}
-              outlineWidth={0.03} outlineColor="#000">
-              {deg}°
-            </Text>
-          )
-        }
-        return labels
-      })()}
-
       {/* Walls */}
       {walls.map(wall => {
         const { startTrim, endTrim } = cornerAdjMap.get(wall.id) ?? { startExt: 0, endExt: 0, startTrim: 0, endTrim: 0 }
@@ -5975,6 +5989,111 @@ export default function GarageShell() {
           </group>
         )
       })}
+
+      {/* Corner angle labels — same logic as floor plan view (wireframe only) */}
+      {wireframe && cornerAngleLabelsVisible && (() => {
+        // Ray at each endpoint = direction pointing AWAY from the endpoint.
+        const rays: { x: number; z: number; ux: number; uz: number }[] = []
+        for (const w of walls) {
+          const dx = w.x2 - w.x1, dz = w.z2 - w.z1
+          const len = Math.hypot(dx, dz)
+          if (len < 1) continue
+          const ux = dx / len, uz = dz / len
+          rays.push({ x: w.x1, z: w.z1, ux,  uz  })
+          rays.push({ x: w.x2, z: w.z2, ux: -ux, uz: -uz })
+        }
+        // T-junctions: other wall's endpoint landing on wall body.
+        const TOL = 2
+        for (const w of walls) {
+          const dx = w.x2 - w.x1, dz = w.z2 - w.z1
+          const wl = Math.hypot(dx, dz)
+          if (wl < 1) continue
+          const ux = dx / wl, uz = dz / wl
+          const perpTol = Math.max(TOL, w.thickness / 2 + TOL)
+          const endTol = perpTol + 2
+          for (const o of walls) {
+            if (o.id === w.id) continue
+            for (const [px, pz, isStart] of [
+              [o.x1, o.z1, true],
+              [o.x2, o.z2, false],
+            ] as [number, number, boolean][]) {
+              const t = ((px - w.x1) * ux + (pz - w.z1) * uz)
+              if (t < endTol || t > wl - endTol) continue
+              const cxw = w.x1 + t * ux, czw = w.z1 + t * uz
+              if (Math.hypot(px - cxw, pz - czw) > perpTol) continue
+              rays.push({ x: cxw, z: czw, ux,  uz  })
+              rays.push({ x: cxw, z: czw, ux: -ux, uz: -uz })
+              const odx = o.x2 - o.x1, odz = o.z2 - o.z1
+              const olen = Math.hypot(odx, odz)
+              if (olen < 1) continue
+              const oux = odx / olen, ouz = odz / olen
+              rays.push({
+                x: cxw, z: czw,
+                ux: isStart ? oux : -oux,
+                uz: isStart ? ouz : -ouz,
+              })
+            }
+          }
+        }
+        // Group rays at coincident points. Use a generous tolerance so a
+        // T-junction ray (at the projection on the host wall centerline) and
+        // the attacher's own endpoint ray (offset by half wall thickness) end
+        // up in the same group.
+        const GROUP_TOL = 8
+        const groups: typeof rays[] = []
+        for (const r of rays) {
+          const g = groups.find(gg => Math.hypot(gg[0].x - r.x, gg[0].z - r.z) < GROUP_TOL)
+          if (g) g.push(r); else groups.push([r])
+        }
+        const labels: JSX.Element[] = []
+        let lk = 0
+        for (const g of groups) {
+          if (g.length < 2) continue
+          // Dedupe rays that point the same direction (within ~1°) — happens
+          // when a true corner is also detected as a T-junction endpoint.
+          const unique: typeof g = []
+          for (const r of g) {
+            if (unique.some(u => u.ux * r.ux + u.uz * r.uz > 0.9998)) continue
+            unique.push(r)
+          }
+          if (unique.length < 2) continue
+          const sorted = [...unique].sort((a, b) => Math.atan2(a.uz, a.ux) - Math.atan2(b.uz, b.ux))
+          for (let i = 0; i < sorted.length; i++) {
+            if (sorted.length === 2 && i > 0) break
+            const a = sorted[i], b = sorted[(i + 1) % sorted.length]
+            const dot = a.ux * b.ux + a.uz * b.uz
+            let angleDeg = Math.acos(Math.max(-1, Math.min(1, dot))) * 180 / Math.PI
+            if (sorted.length > 2) {
+              const cross = a.ux * b.uz - a.uz * b.ux
+              const sweep = Math.atan2(cross, dot) * 180 / Math.PI
+              angleDeg = sweep < 0 ? sweep + 360 : sweep
+            }
+            // Skip degenerate sectors.
+            if (angleDeg < 1 || angleDeg > 359) continue
+            let bx = a.ux + b.ux, bz = a.uz + b.uz
+            if (Math.hypot(bx, bz) < 0.01) { bx = -a.uz; bz = a.ux }
+            const blen = Math.hypot(bx, bz) || 1
+            bx /= blen; bz /= blen
+            const OFF_IN = 12
+            const tx = a.x + bx * OFF_IN
+            const tz = a.z + bz * OFF_IN
+            labels.push(
+              <Text
+                key={`cang-${lk++}`}
+                position={[FT(tx), 0.5, FT(tz)]}
+                rotation={[-Math.PI / 2, 0, 0]}
+                fontSize={0.5}
+                color="#d48b00"
+                anchorX="center" anchorY="middle"
+                outlineColor="#ffffff" outlineWidth={0.015}
+              >
+                {`${angleDeg.toFixed(0)}°`}
+              </Text>
+            )
+          }
+        }
+        return <group>{labels}</group>
+      })()}
 
       {/* Blueprint corner fills — single polygon per junction, no overlap */}
       {blueprint && walls.length > 1 && (() => {

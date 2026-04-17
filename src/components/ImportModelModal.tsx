@@ -136,12 +136,16 @@ export default function ImportModelModal({ onClose }: Props) {
         // Texture file — read as data URL and store
         const dataUrl = await readTextureFile(file)
         const assetId = crypto.randomUUID()
-        addImportedAsset({
+        const asset = {
           id: assetId,
           name: file.name,
           assetType: assetType as ImportAssetType,
           data: dataUrl,
-        })
+        }
+        addImportedAsset(asset)
+        // Persist to IndexedDB so it survives across app sessions
+        const { saveTextureToDB } = await import('../utils/textureLibrary')
+        saveTextureToDB(asset).catch(err => console.warn('Texture persist failed:', err))
         showToast(`Imported texture "${file.name}" — available in ${assetType === 'wall-texture' ? 'Wall' : 'Flooring'} panel`, 'success')
       }
 

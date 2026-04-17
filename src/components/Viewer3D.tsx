@@ -414,7 +414,9 @@ export default function Viewer3D() {
     selectBaseboard, selectStemWall,
     exportShots, addExportShot, updateExportShot, deleteExportShot, reorderExportShots,
     walls, cabinets, countertops, floorPoints, floorSteps, slatwallPanels, overheadRacks, baseboards, stemWalls,
-    qualityPreset, snappingEnabled, setSnappingEnabled } = useGarageStore()
+    qualityPreset, snappingEnabled, setSnappingEnabled,
+    wallAngleSnapEnabled, setWallAngleSnapEnabled,
+    cornerAngleLabelsVisible, setCornerAngleLabelsVisible } = useGarageStore()
   const isWireframe  = viewMode === 'wireframe'
   const isPerspective = viewMode === 'perspective' || viewMode === 'wireframe'
   const orbitRef     = useRef<any>(null)
@@ -530,9 +532,31 @@ export default function Viewer3D() {
               aria-pressed={!snappingEnabled}
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" />
+                <path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6h-6z" />
               </svg>
               Snap: {snappingEnabled ? 'On' : 'Off'}
+            </button>
+            <button
+              className={`shot-save-btn snap-toggle-btn${wallAngleSnapEnabled ? '' : ' off'}`}
+              onClick={() => setWallAngleSnapEnabled(!wallAngleSnapEnabled)}
+              title={wallAngleSnapEnabled ? 'Wall angle snap ON — click to disable' : 'Wall angle snap OFF — click to enable'}
+              aria-pressed={!wallAngleSnapEnabled}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 21 L21 3 M3 21 L21 21 M12 21 L12 12" />
+              </svg>
+              Angle Snap: {wallAngleSnapEnabled ? 'On' : 'Off'}
+            </button>
+            <button
+              className={`shot-save-btn snap-toggle-btn${cornerAngleLabelsVisible ? '' : ' off'}`}
+              onClick={() => setCornerAngleLabelsVisible(!cornerAngleLabelsVisible)}
+              title={cornerAngleLabelsVisible ? 'Corner angle labels ON — click to hide' : 'Corner angle labels OFF — click to show'}
+              aria-pressed={!cornerAngleLabelsVisible}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 20 L20 20 M4 20 L12 6 M12 6 L20 20 M8 17 A5 5 0 0 1 16 17" />
+              </svg>
+              Angle Labels: {cornerAngleLabelsVisible ? 'On' : 'Off'}
             </button>
           </div>
         </div>
@@ -669,6 +693,19 @@ export default function Viewer3D() {
                   <path d="M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18" />
                 </svg>
                 Grid: {gridVisible ? 'On' : 'Off'}
+              </button>
+            )}
+            {isWireframe && (
+              <button
+                className={`shot-save-btn snap-toggle-btn${cornerAngleLabelsVisible ? '' : ' off'}`}
+                onClick={() => setCornerAngleLabelsVisible(!cornerAngleLabelsVisible)}
+                title={cornerAngleLabelsVisible ? 'Corner angle labels ON — click to hide' : 'Corner angle labels OFF — click to show'}
+                aria-pressed={!cornerAngleLabelsVisible}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 20 L20 20 M4 20 L12 6 M12 6 L20 20 M8 17 A5 5 0 0 1 16 17" />
+                </svg>
+                Angle Labels: {cornerAngleLabelsVisible ? 'On' : 'Off'}
               </button>
             )}
           </div>

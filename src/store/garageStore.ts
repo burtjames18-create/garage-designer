@@ -3,7 +3,7 @@ import { getCachedModelBase64Async, cacheModelBase64 } from '../utils/importedMo
 
 export type ViewMode = 'perspective' | 'wireframe' | 'top' | 'elevation'
 export type QualityPreset = 'high' | 'medium' | 'low'
-export type SidebarTab = 'walls' | 'flooring' | 'shapes' | 'ceiling' | 'cabinets' | 'overhead' | 'lighting' | 'vehicles' | 'info'
+export type SidebarTab = 'walls' | 'flooring' | 'shapes' | 'ceiling' | 'cabinets' | 'overhead' | 'lighting' | 'vehicles' | 'info' | 'guide'
 
 export type LightType = 'point' | 'spot'
 
@@ -507,6 +507,14 @@ interface GarageStore {
   snappingEnabled: boolean
   setSnappingEnabled: (v: boolean) => void
 
+  // Wall-angle snap (0/45/90°) in floor plan view
+  wallAngleSnapEnabled: boolean
+  setWallAngleSnapEnabled: (v: boolean) => void
+
+  // Corner angle labels visibility in floor plan view
+  cornerAngleLabelsVisible: boolean
+  setCornerAngleLabelsVisible: (v: boolean) => void
+
   // Floor selection
   floorSelected: boolean
 
@@ -754,6 +762,8 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
   qualityPreset: 'low' as QualityPreset,
   isExporting: false,
   snappingEnabled: true,
+  wallAngleSnapEnabled: true,
+  cornerAngleLabelsVisible: true,
 
   isDraggingWall: false,
   dragCount: 0,
@@ -1053,6 +1063,8 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
   ),
   setIsExporting: (v) => set({ isExporting: v }),
   setSnappingEnabled: (v) => set({ snappingEnabled: v }),
+  setWallAngleSnapEnabled: (v) => set({ wallAngleSnapEnabled: v }),
+  setCornerAngleLabelsVisible: (v) => set({ cornerAngleLabelsVisible: v }),
   setIsDraggingWall: (v) => set({ isDraggingWall: v }),
   beginDrag: () => set(s => { const n = s.dragCount + 1; return { dragCount: n, isDraggingWall: n > 0 } }),
   endDrag: () => set(s => { const n = Math.max(0, s.dragCount - 1); return { dragCount: n, isDraggingWall: n > 0 } }),
