@@ -34,4 +34,7 @@ build/*.exe
 .env
 .env.*
 
+# Separate license server project — not part of this repo
+license-server/
+
 # Large 3D model assets are tracked via Git LFS (see .gitattributes)
