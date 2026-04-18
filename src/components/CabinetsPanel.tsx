@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useGarageStore } from '../store/garageStore'
 import { useScrollToSelected } from '../hooks/useScrollToSelected'
 import { CABINET_PRESETS } from '../store/garageStore'
-import type { PlacedCabinet, Countertop, CabinetPreset, CabinetLine } from '../store/garageStore'
+import type { PlacedCabinet, Countertop, CabinetPreset, CabinetLine, GarageWall } from '../store/garageStore'
 import { inchesToDisplay, cameraFloorPos } from '../utils/measurements'
 import MeasureInput from './MeasureInput'
 import { IconDelete, IconRotate, IconLocked, IconUnlocked } from './Icons'
@@ -53,9 +53,10 @@ const CT_COLORS: { id: string; name: string; hex: string }[] = [
 ]
 
 const STYLE_GROUPS: { label: string; style: string }[] = [
-  { label: 'Lockers',        style: 'locker' },
-  { label: 'Lower Cabinets', style: 'lower' },
-  { label: 'Upper Cabinets', style: 'upper' },
+  { label: 'Lockers',         style: 'locker' },
+  { label: 'Lower Cabinets',  style: 'lower' },
+  { label: 'Upper Cabinets',  style: 'upper' },
+  { label: 'Corner Cabinets', style: 'corner-upper' },
 ]
 
 function CabinetEditor({ cab }: { cab: PlacedCabinet }) {
@@ -194,7 +195,7 @@ function CabinetEditor({ cab }: { cab: PlacedCabinet }) {
                 </button>
               )
             })()}
-            {cab.style === 'upper' && (() => {
+            {(cab.style === 'upper' || cab.style === 'corner-upper') && (() => {
               const on = !!cab.underLight
               return (
                 <button
@@ -212,7 +213,7 @@ function CabinetEditor({ cab }: { cab: PlacedCabinet }) {
                 </button>
               )
             })()}
-            {cab.style === 'upper' && (() => {
+            {(cab.style === 'upper' || cab.style === 'corner-upper') && (() => {
               // A ledbar is "under this cabinet" if its position matches the
               // cabinet center within ~6" and y roughly equals the cabinet bottom.
               const cabXFt = cab.x / 12, cabZFt = cab.z / 12
@@ -260,7 +261,7 @@ function CabinetEditor({ cab }: { cab: PlacedCabinet }) {
               aria-label="Cabinet price"
             />
           </div>
-          {cab.style === 'upper' && cab.underLight && (() => {
+          {(cab.style === 'upper' || cab.style === 'corner-upper') && cab.underLight && (() => {
             const angle = cab.underLightAngle ?? (75 * Math.PI) / 180
             const deg = Math.round((angle * 180) / Math.PI)
             return (

@@ -187,11 +187,11 @@ function WallEditor({ wall }: { wall: GarageWall }) {
           <div className="stem-wall-texture-row" style={{ marginBottom: 10, gap: 6, flexWrap: 'wrap' }}>
             <button
               className="stem-wall-tex-btn"
-              onClick={() => addBaseboardForWall(wall.id)}
+              onClick={e => { e.stopPropagation(); addBaseboardForWall(wall.id) }}
             >+ Baseboard</button>
             <button
               className="stem-wall-tex-btn"
-              onClick={() => addStemWallForWall(wall.id)}
+              onClick={e => { e.stopPropagation(); addStemWallForWall(wall.id) }}
             >+ Stem Wall</button>
           </div>
 

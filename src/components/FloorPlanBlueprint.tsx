@@ -724,16 +724,23 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
         const miterFace = (
           faceX: number, faceZ: number, dirX: number, dirZ: number,  // this wall's face line
           conn: GarageWall, epx: number, epz: number,                // connected wall + corner point
-          side: number,                                                // +1 or -1 for face side
+          sidePx: number, sidePz: number,                             // this wall's face offset direction
         ): { x: number; z: number } | null => {
           const cLen = wallLen(conn)
           if (cLen < 0.5) return null
           const [cdx, cdz] = wallDir(conn)
           const cpx = -cdz, cpz = cdx  // conn perpendicular
           const cHT = conn.thickness / 2
-          // Connected wall's same-side face line
-          const cFaceX = conn.x1 + cpx * cHT * side
-          const cFaceZ = conn.z1 + cpz * cHT * side
+          // Pick the connected wall's face that lies on the SAME side of the
+          // corner as our current face. If our face is offset in (sidePx, sidePz)
+          // direction from the centerline endpoint, pick conn's face on the
+          // side that has positive dot product with (sidePx, sidePz).
+          const cSide = (sidePx * cpx + sidePz * cpz) >= 0 ? +1 : -1
+          // Use the endpoint shared with this wall as the anchor; the conn
+          // line passes through (epx, epz) parallel to (cdx, cdz). Shift it
+          // perpendicular by cHT*cSide to get the face line.
+          const cFaceX = epx + cpx * cHT * cSide
+          const cFaceZ = epz + cpz * cHT * cSide
           const t = intersectT(faceX, faceZ, dirX, dirZ, cFaceX, cFaceZ, cdx, cdz)
           if (isNaN(t)) return null
           return { x: faceX + t * dirX, z: faceZ + t * dirZ }
@@ -755,40 +762,57 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
           let p1 = { x: w.x2 + px * halfT, z: w.z2 + pz * halfT }  // +side end
           let n1 = { x: w.x2 - px * halfT, z: w.z2 - pz * halfT }  // -side end
 
-          // At connected corners, compute mitered intersection points.
-          // Only extend (use miter) on the face that goes outward; keep perpendicular
-          // on the face that retracts inward, to avoid overlap with adjacent wall.
+          // At connected corners, miter BOTH faces to their intersections
+          // so adjacent wall polygons meet cleanly (a single diagonal line
+          // across the corner) without overlapping. Cap the miter extension
+          // at ~2× wall thickness to avoid long spikes at very acute angles.
+          const maxExt = 2 * Math.max(halfT, conn1?.thickness ?? 0, conn2?.thickness ?? 0)
+          const inRange = (px: number, pz: number, ex: number, ez: number) =>
+            Math.hypot(px - ex, pz - ez) < maxExt
           if (conn1) {
             const mP = miterFace(p0.x, p0.z, dx, dz, conn1, w.x1, w.z1, +1)
             const mN = miterFace(n0.x, n0.z, dx, dz, conn1, w.x1, w.z1, -1)
-            // Only use miter if it extends past the endpoint (along = negative for start end)
-            if (mP) { const along = (mP.x - w.x1) * dx + (mP.z - w.z1) * dz; if (along < -0.1) p0 = mP }
-            if (mN) { const along = (mN.x - w.x1) * dx + (mN.z - w.z1) * dz; if (along < -0.1) n0 = mN }
+            if (mP && inRange(mP.x, mP.z, w.x1, w.z1)) p0 = mP
+            if (mN && inRange(mN.x, mN.z, w.x1, w.z1)) n0 = mN
           }
           if (conn2) {
             const mP = miterFace(p1.x, p1.z, dx, dz, conn2, w.x2, w.z2, +1)
             const mN = miterFace(n1.x, n1.z, dx, dz, conn2, w.x2, w.z2, -1)
-            if (mP) { const along = (mP.x - w.x2) * dx + (mP.z - w.z2) * dz; if (along > 0.1) p1 = mP }
-            if (mN) { const along = (mN.x - w.x2) * dx + (mN.z - w.z2) * dz; if (along > 0.1) n1 = mN }
+            if (mP && inRange(mP.x, mP.z, w.x2, w.z2)) p1 = mP
+            if (mN && inRange(mN.x, mN.z, w.x2, w.z2)) n1 = mN
           }
 
-          const points = [
+          const isSel = selectedWallId === w.id
+          const strokeColor = isSel ? '#66aaff' : '#222'
+          const strokeW = isSel ? 1.2 : 0.8
+          // Render each wall as two parallel polylines (interior face + exterior
+          // face) rather than a filled polygon, so corners appear as clean
+          // right-angles where adjacent walls' faces meet, without any diagonal
+          // end-cap lines crossing through the corner.
+          // Invisible polygon for hit detection on the wall body.
+          const hitPoints = [
             `${sx(p0.x)},${sz(p0.z)}`,
             `${sx(p1.x)},${sz(p1.z)}`,
             `${sx(n1.x)},${sz(n1.z)}`,
             `${sx(n0.x)},${sz(n0.z)}`,
           ].join(' ')
-
-          const isSel = selectedWallId === w.id
           return (
-            <polygon key={w.id} points={points}
-              fill={isSel ? '#334466' : '#222'} stroke={isSel ? '#66aaff' : '#222'}
-              strokeWidth={isSel ? 1.2 : 0.5} strokeLinejoin="miter"
-              style={{ cursor: 'move' }}
-              onPointerDown={e => onWallBodyPointerDown(e, w)}
-              onPointerMove={onWallBodyPointerMove}
-              onPointerUp={onWallBodyPointerUp}
-              onPointerCancel={onWallBodyPointerUp} />
+            <g key={w.id}>
+              <polygon points={hitPoints}
+                fill={isSel ? 'rgba(102,170,255,0.15)' : 'transparent'}
+                stroke="none"
+                style={{ cursor: 'move' }}
+                onPointerDown={e => onWallBodyPointerDown(e, w)}
+                onPointerMove={onWallBodyPointerMove}
+                onPointerUp={onWallBodyPointerUp}
+                onPointerCancel={onWallBodyPointerUp} />
+              {/* Interior face */}
+              <line x1={sx(p0.x)} y1={sz(p0.z)} x2={sx(p1.x)} y2={sz(p1.z)}
+                stroke={strokeColor} strokeWidth={strokeW} pointerEvents="none" />
+              {/* Exterior face */}
+              <line x1={sx(n0.x)} y1={sz(n0.z)} x2={sx(n1.x)} y2={sz(n1.z)}
+                stroke={strokeColor} strokeWidth={strokeW} pointerEvents="none" />
+            </g>
           )
         })
       })()}

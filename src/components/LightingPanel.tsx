@@ -308,7 +308,7 @@ function UnderCabinetAddButton() {
   const cabinets = useGarageStore(s => s.cabinets)
   const addCeilingLight = useGarageStore(s => s.addCeilingLight)
   const selectedCab = selectedCabinetId ? cabinets.find(c => c.id === selectedCabinetId) : null
-  const canAdd = !!selectedCab && selectedCab.style === 'upper'
+  const canAdd = !!selectedCab && (selectedCab.style === 'upper' || selectedCab.style === 'corner-upper')
   return (
     <button
       className="light-add-btn"

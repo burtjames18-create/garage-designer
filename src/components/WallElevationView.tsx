@@ -45,6 +45,8 @@ function isCabinetOnWall(cab: PlacedCabinet, w: GarageWall, side?: 'interior' | 
   // Cabinet must be facing roughly perpendicular to this wall (within 45° of
   // either face direction). Wall draw direction is arbitrary per-wall, so we
   // accept either +normal or -normal; the side filter below picks correct one.
+  // Corner cabinets have TWO 24" back walls (90° apart), so they're flush
+  // against two adjacent walls simultaneously — accept ±90° rotations too.
   const [dx, dz] = wallDir(w)
   const rotA = Math.atan2(-dz, dx)
   const rotB = rotA + Math.PI
@@ -55,7 +57,14 @@ function isCabinetOnWall(cab: PlacedCabinet, w: GarageWall, side?: 'interior' | 
   }
   const facesA = angDiff(rotA) < Math.PI / 4
   const facesB = angDiff(rotB) < Math.PI / 4
-  if (!facesA && !facesB) return false
+  let faces = facesA || facesB
+  if (!faces && cab.style === 'corner-upper') {
+    // Corner cabinets also attach at ±90° rotations (other back wall)
+    const facesA90p = angDiff(rotA + Math.PI / 2) < Math.PI / 4
+    const facesA90n = angDiff(rotA - Math.PI / 2) < Math.PI / 4
+    faces = facesA90p || facesA90n
+  }
+  if (!faces) return false
   if (side) {
     // Side filter: 'interior' = side facing into garage (use cabinetWallSide
     // which resolves it the same way for consistency).
@@ -67,6 +76,9 @@ function isCabinetOnWall(cab: PlacedCabinet, w: GarageWall, side?: 'interior' | 
 
 /** Which side of a wall a cabinet faces */
 function cabinetWallSide(cab: PlacedCabinet, w: GarageWall): 'interior' | 'exterior' {
+  // Corner cabinets always sit INSIDE a wall corner with their body on the
+  // interior side of both adjacent walls — classify as interior.
+  if (cab.style === 'corner-upper') return 'interior'
   const [dx, dz] = wallDir(w)
   const intRotY = Math.atan2(-dz, dx)
   let diff = Math.abs(cab.rotY - intRotY) % (Math.PI * 2)

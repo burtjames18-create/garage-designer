@@ -59,7 +59,7 @@ export interface ExportShot {
   thumbnail: string
 }
 
-export type CabinetStyle = 'lower' | 'upper' | 'locker'
+export type CabinetStyle = 'lower' | 'upper' | 'locker' | 'corner-upper'
 export type CabinetLine = 'technica' | 'signature'
 
 export interface CabinetPreset {
@@ -81,6 +81,7 @@ export const CABINET_PRESETS: CabinetPreset[] = [
   { key: 't-lower-20-1',    label: '20" 1-Door Lower',          line: 'technica', style: 'lower',  doors: 1, w: 20, d: 24, h: 30.5, sku: 'GL-TEC-BASE-20',      price: 249 },
   { key: 't-lower-28-2',    label: '28" 2-Door Lower',          line: 'technica', style: 'lower',  doors: 2, w: 28, d: 24, h: 30.5, sku: 'GL-TEC-BASE-28',      price: 319 },
   { key: 't-lower-36-2',    label: '36" 2-Door Lower',          line: 'technica', style: 'lower',  doors: 2, w: 36, d: 24, h: 30.5, sku: 'GL-TEC-BASE-36',      price: 429 },
+  { key: 't-lower-28-1d2d', label: '28" 1-Drawer 2-Door Lower', line: 'technica', style: 'lower',  doors: 2, drawers: 1, w: 28, d: 24, h: 30.5, sku: 'GL-TEC-BASE-28-1D',  price: 389 },
   { key: 't-lower-36-1d2d', label: '36" 1-Drawer 2-Door Lower', line: 'technica', style: 'lower',  doors: 2, drawers: 1, w: 36, d: 24, h: 30.5, sku: 'GL-TEC-BASE-36-1D',  price: 469 },
   { key: 't-lower-36-5dr',  label: '36" 5-Drawer Lower',        line: 'technica', style: 'lower',  doors: 0, drawers: 5, w: 36, d: 24, h: 30.5, sku: 'GL-TEC-BASE-36-5DR', price: 549 },
   { key: 't-lower-28-5dr',  label: '28" 5-Drawer Lower',        line: 'technica', style: 'lower',  doors: 0, drawers: 5, w: 28, d: 24, h: 30.5, sku: 'GL-TEC-BASE-28-5DR', price: 499 },
@@ -88,13 +89,15 @@ export const CABINET_PRESETS: CabinetPreset[] = [
   { key: 't-locker-36-2',   label: '36" 2-Door Locker',         line: 'technica', style: 'locker', doors: 2, w: 36, d: 24, h: 84, sku: 'GL-TEC-TALL-36', price: 699 },
   { key: 't-locker-28-2',   label: '28" 2-Door Locker',         line: 'technica', style: 'locker', doors: 2, w: 28, d: 24, h: 84, sku: 'GL-TEC-TALL-28', price: 649 },
   { key: 't-locker-20-1',   label: '20" 1-Door Locker',         line: 'technica', style: 'locker', doors: 1, w: 20, d: 24, h: 84, sku: 'GL-TEC-TALL-20', price: 599 },
-  { key: 't-upper-36-2',    label: '36" 2-Door Upper',          line: 'technica', style: 'upper',  doors: 2, w: 36, d: 18, h: 30.5, sku: 'GL-TEC-WALL-36', price: 299 },
-  { key: 't-upper-28-2',    label: '28" 2-Door Upper',          line: 'technica', style: 'upper',  doors: 2, w: 28, d: 18, h: 30.5, sku: 'GL-TEC-WALL-28', price: 259 },
-  { key: 't-upper-20-1',    label: '20" 1-Door Upper',          line: 'technica', style: 'upper',  doors: 1, w: 20, d: 18, h: 30.5, sku: 'GL-TEC-WALL-20', price: 229 },
+  { key: 't-upper-36-2',    label: '36" 2-Door Upper',          line: 'technica', style: 'upper',  doors: 2, w: 36, d: 14, h: 30.5, sku: 'GL-TEC-WALL-36', price: 299 },
+  { key: 't-upper-28-2',    label: '28" 2-Door Upper',          line: 'technica', style: 'upper',  doors: 2, w: 28, d: 14, h: 30.5, sku: 'GL-TEC-WALL-28', price: 259 },
+  { key: 't-upper-20-1',    label: '20" 1-Door Upper',          line: 'technica', style: 'upper',  doors: 1, w: 20, d: 14, h: 30.5, sku: 'GL-TEC-WALL-20', price: 229 },
+  { key: 't-corner-upper',  label: 'Corner Upper',              line: 'technica', style: 'corner-upper', doors: 1, w: 24, d: 24, h: 30.5, sku: 'GL-TEC-WALL-CNR', price: 289 },
   // ── Signature ─────────────────────────────────────────────────────────
   { key: 's-lower-20-1',    label: '20" 1-Door Lower',          line: 'signature', style: 'lower',  doors: 1, w: 20, d: 24, h: 30.5, sku: 'GL-SIG-BASE-20',      price: 299 },
   { key: 's-lower-28-2',    label: '28" 2-Door Lower',          line: 'signature', style: 'lower',  doors: 2, w: 28, d: 24, h: 30.5, sku: 'GL-SIG-BASE-28',      price: 379 },
   { key: 's-lower-36-2',    label: '36" 2-Door Lower',          line: 'signature', style: 'lower',  doors: 2, w: 36, d: 24, h: 30.5, sku: 'GL-SIG-BASE-36',      price: 499 },
+  { key: 's-lower-28-1d2d', label: '28" 1-Drawer 2-Door Lower', line: 'signature', style: 'lower',  doors: 2, drawers: 1, w: 28, d: 24, h: 30.5, sku: 'GL-SIG-BASE-28-1D',  price: 449 },
   { key: 's-lower-36-1d2d', label: '36" 1-Drawer 2-Door Lower', line: 'signature', style: 'lower',  doors: 2, drawers: 1, w: 36, d: 24, h: 30.5, sku: 'GL-SIG-BASE-36-1D',  price: 539 },
   { key: 's-lower-36-5dr',  label: '36" 5-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 5, w: 36, d: 24, h: 30.5, sku: 'GL-SIG-BASE-36-5DR', price: 619 },
   { key: 's-lower-28-5dr',  label: '28" 5-Drawer Lower',        line: 'signature', style: 'lower',  doors: 0, drawers: 5, w: 28, d: 24, h: 30.5, sku: 'GL-SIG-BASE-28-5DR', price: 569 },
@@ -102,9 +105,10 @@ export const CABINET_PRESETS: CabinetPreset[] = [
   { key: 's-locker-36-2',   label: '36" 2-Door Locker',         line: 'signature', style: 'locker', doors: 2, w: 36, d: 24, h: 80, sku: 'GL-SIG-TALL-36', price: 799 },
   { key: 's-locker-28-2',   label: '28" 2-Door Locker',         line: 'signature', style: 'locker', doors: 2, w: 28, d: 24, h: 80, sku: 'GL-SIG-TALL-28', price: 749 },
   { key: 's-locker-20-1',   label: '20" 1-Door Locker',         line: 'signature', style: 'locker', doors: 1, w: 20, d: 24, h: 80, sku: 'GL-SIG-TALL-20', price: 699 },
-  { key: 's-upper-36-2',    label: '36" 2-Door Upper',          line: 'signature', style: 'upper',  doors: 2, w: 36, d: 18, h: 30.5, sku: 'GL-SIG-WALL-36', price: 359 },
-  { key: 's-upper-28-2',    label: '28" 2-Door Upper',          line: 'signature', style: 'upper',  doors: 2, w: 28, d: 18, h: 30.5, sku: 'GL-SIG-WALL-28', price: 319 },
-  { key: 's-upper-20-1',    label: '20" 1-Door Upper',          line: 'signature', style: 'upper',  doors: 1, w: 20, d: 18, h: 30.5, sku: 'GL-SIG-WALL-20', price: 279 },
+  { key: 's-upper-36-2',    label: '36" 2-Door Upper',          line: 'signature', style: 'upper',  doors: 2, w: 36, d: 14, h: 30.5, sku: 'GL-SIG-WALL-36', price: 359 },
+  { key: 's-upper-28-2',    label: '28" 2-Door Upper',          line: 'signature', style: 'upper',  doors: 2, w: 28, d: 14, h: 30.5, sku: 'GL-SIG-WALL-28', price: 319 },
+  { key: 's-upper-20-1',    label: '20" 1-Door Upper',          line: 'signature', style: 'upper',  doors: 1, w: 20, d: 14, h: 30.5, sku: 'GL-SIG-WALL-20', price: 279 },
+  { key: 's-corner-upper',  label: 'Corner Upper',              line: 'signature', style: 'corner-upper', doors: 1, w: 24, d: 24, h: 30.5, sku: 'GL-SIG-WALL-CNR', price: 349 },
 ]
 
 export interface PlacedCabinet {
@@ -763,7 +767,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
   isExporting: false,
   snappingEnabled: true,
   wallAngleSnapEnabled: true,
-  cornerAngleLabelsVisible: true,
+  cornerAngleLabelsVisible: false,
 
   isDraggingWall: false,
   dragCount: 0,
@@ -1070,7 +1074,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
   endDrag: () => set(s => { const n = Math.max(0, s.dragCount - 1); return { dragCount: n, isDraggingWall: n > 0 } }),
 
   addCabinet: (preset, spawnX = 0, spawnZ = 0, spawnRotY = 0) => {
-    const defaultY = preset.style === 'upper' ? 30.5 : 0
+    const defaultY = (preset.style === 'upper' || preset.style === 'corner-upper') ? 30.5 : 0
     const cabinet: PlacedCabinet = {
       id: uid(),
       presetKey: preset.key,
@@ -1161,7 +1165,23 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       flake: false,
       ...overrides,
     }
-    set(s => ({ baseboards: [...s.baseboards, bb], selectedBaseboardId: bb.id }))
+    set(s => ({
+      baseboards: [...s.baseboards, bb],
+      selectedBaseboardId: bb.id,
+      // Deselect all other entity types so only the new baseboard is selected.
+      selectedWallId: null,
+      selectedShapeId: null,
+      selectedSlatwallPanelId: null,
+      selectedStainlessBacksplashPanelId: null,
+      selectedCabinetId: null,
+      selectedCountertopId: null,
+      selectedStemWallId: null,
+      selectedFloorStepId: null,
+      selectedCeilingLightId: null,
+      selectedItemId: null,
+      selectedRackId: null,
+      floorSelected: false,
+    }))
   },
   updateBaseboard: (id, changes) =>
     set(s => ({ baseboards: s.baseboards.map(b => b.id === id ? { ...b, ...changes } : b) })),
@@ -1213,7 +1233,23 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       flake: false,
       ...overrides,
     }
-    set(s => ({ stemWalls: [...s.stemWalls, sw], selectedStemWallId: sw.id }))
+    set(s => ({
+      stemWalls: [...s.stemWalls, sw],
+      selectedStemWallId: sw.id,
+      // Deselect all other entity types so only the new stem wall is selected.
+      selectedWallId: null,
+      selectedShapeId: null,
+      selectedSlatwallPanelId: null,
+      selectedStainlessBacksplashPanelId: null,
+      selectedCabinetId: null,
+      selectedCountertopId: null,
+      selectedBaseboardId: null,
+      selectedFloorStepId: null,
+      selectedCeilingLightId: null,
+      selectedItemId: null,
+      selectedRackId: null,
+      floorSelected: false,
+    }))
   },
   updateStemWall: (id, changes) =>
     set(s => ({ stemWalls: s.stemWalls.map(w => w.id === id ? { ...w, ...changes } : w) })),

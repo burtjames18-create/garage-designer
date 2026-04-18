@@ -29,7 +29,7 @@ interface CabinetFrontProps {
   h: number         // height in inches
   doors: 0 | 1 | 2
   drawers?: number
-  style: 'lower' | 'upper' | 'locker'
+  style: 'lower' | 'upper' | 'locker' | 'corner-upper'
   line: CabinetLine
   color?: string    // cabinet color id
   shellColor?: string // Signature shell color: 'black' | 'granite'
@@ -42,9 +42,12 @@ interface CabinetFrontProps {
  * All coordinates are in inches (matching the real dimensions).
  * The caller wraps this in a <g> with appropriate transform/scale.
  */
-export function cabinetFrontPaths({ w, h, doors, drawers: drawersProp, style, line, color, shellColor, handleColor, handleSide }: CabinetFrontProps) {
+export function cabinetFrontPaths({ w, h, doors, drawers: drawersProp, style: styleRaw, line, color, shellColor, handleColor, handleSide }: CabinetFrontProps) {
   const drawers = drawersProp ?? 0
   const isSignature = line === 'signature'
+  // Normalize: corner-upper renders its front-elevation the same way as a
+  // standard upper (handle near bottom of door).
+  const style: 'lower' | 'upper' | 'locker' = styleRaw === 'corner-upper' ? 'upper' : styleRaw
   const handleRight = (handleSide ?? 'right') === 'right'
   const handleHex = HANDLE_HEX[handleColor ?? 'brushed'] ?? HANDLE_HEX.brushed
 
@@ -218,6 +221,9 @@ const THUMB_DIMS: Record<string, { w: number; h: number; svgW: number; svgH: num
   lower:  { w: 30, h: 30.5, svgW: 52, svgH: 44 },
   upper:  { w: 30, h: 28,    svgW: 52, svgH: 40 },
   locker: { w: 40, h: 80,    svgW: 52, svgH: 62 },
+  // Corner-upper thumbnail = front-elevation of the angled door face only.
+  // Width = diagonal of the chamfer = (back − side)·√2 ≈ 14.14" for 24/14.
+  'corner-upper': { w: 14.14, h: 28, svgW: 32, svgH: 40 },
 }
 
 /** Sidebar thumbnail SVG — consistent size per cabinet style. Both Signature
@@ -225,6 +231,9 @@ const THUMB_DIMS: Record<string, { w: number; h: number; svgW: number; svgH: num
  *  (Signature: granite/granite, Technica: mica). */
 export default function CabinetFrontSVG({ preset }: { preset: CabinetPreset }) {
   const thumb = THUMB_DIMS[preset.style] ?? THUMB_DIMS.lower
+  // Corner-upper thumbnail renders the diagonal door face, treated as a
+  // 1-door upper-style elevation (handle near bottom).
+  const renderStyle: 'lower' | 'upper' | 'locker' = preset.style === 'corner-upper' ? 'upper' : preset.style
 
   return (
     <svg width={thumb.svgW} height={thumb.svgH}
@@ -233,7 +242,7 @@ export default function CabinetFrontSVG({ preset }: { preset: CabinetPreset }) {
       {cabinetFrontPaths({
         w: thumb.w, h: thumb.h,
         doors: preset.doors, drawers: preset.drawers,
-        style: preset.style, line: preset.line,
+        style: renderStyle, line: preset.line,
       })}
     </svg>
   )

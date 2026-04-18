@@ -1249,6 +1249,228 @@ const CabinetMesh = memo(function CabinetMesh({ cabinet, selected, wireframe, bl
     if (groupRef) groupRef(cabinet.id, g)
   }, [groupRef, cabinet.id])
 
+  // ── Corner-upper cabinet — pentagonal footprint ─────────────────────────
+  // Two back walls (length w) sit against the wall corner; two side walls
+  // (length d) stick into the room; a 45° hypotenuse holds the single door.
+  // Local origin is the inside wall corner; pentagon extends in +X/+Z quadrant.
+  if (cabinet.style === 'corner-upper') {
+    const pt = FT(0.75)
+    const wIn = wFt  // cabinet bounding box width = 24" (= w = d)
+    const chamferIn = FT(14)  // the two 14" chamfer/side faces
+    // Pentagon inscribed in a 24×24 bounding box centered on (0, 0). Back-A
+    // runs along local z = -w/2 (the "back" face, conventional), and back-B
+    // runs along local x = -w/2 (the "left side" face). The inside corner
+    // (where back-A and back-B meet) is at (-w/2, -w/2). The opposite corner
+    // is chamfered — a 14" diagonal cut connecting the two adjacent sides.
+    const half = wIn / 2
+    const chamf = chamferIn
+    const verts: [number, number][] = [
+      [-half, -half],              // v0: inside corner (back-A × back-B)
+      [ half, -half],              // v1: end of back-A (back-A × side-A)
+      [ half, -half + chamf],      // v2: end of side-A (start of hypotenuse)
+      [-half + chamf,  half],      // v3: end of hypotenuse (start of side-B)
+      [-half,  half],              // v4: end of side-B (back-B × side-B)
+    ]
+    // Cabinet shell = 4 non-hypotenuse side walls + top cap + bottom cap.
+    // The hypotenuse side is OPEN (no front panel) — matches standard
+    // Signature cabinets. The smaller door sits across the opening; the
+    // reveal gap around the door shows the hollow interior as the visible
+    // "frame" effect (dark shadow behind the door).
+    const wallEdges: { a: [number, number]; b: [number, number] }[] = [
+      { a: verts[0], b: verts[1] },  // back-A: local z = -w/2 (back face)
+      { a: verts[1], b: verts[2] },  // side-A: local x = +w/2
+      { a: verts[3], b: verts[4] },  // side-B: local z = +w/2
+      { a: verts[4], b: verts[0] },  // back-B: local x = -w/2 (left side)
+    ]
+    const shellCentroid = {
+      x: (verts[0][0] + verts[1][0] + verts[2][0] + verts[3][0] + verts[4][0]) / 5,
+      z: (verts[0][1] + verts[1][1] + verts[2][1] + verts[3][1] + verts[4][1]) / 5,
+    }
+    // Solid pentagon caps (top + bottom). Use ExtrudeGeometry for a 3D
+    // slab of thickness pt; visible from both sides.
+    const capShape = new THREE.Shape()
+    capShape.moveTo(verts[0][0], verts[0][1])
+    for (let i = 1; i < verts.length; i++) capShape.lineTo(verts[i][0], verts[i][1])
+    capShape.lineTo(verts[0][0], verts[0][1])
+    const capSlabGeo = new THREE.ExtrudeGeometry(capShape, { depth: pt, bevelEnabled: false })
+    capSlabGeo.rotateX(Math.PI / 2)
+    capSlabGeo.computeVertexNormals()
+    // Door hypotenuse edge (verts[2] → verts[3])
+    const hxA = verts[2][0], hzA = verts[2][1]
+    const hxB = verts[3][0], hzB = verts[3][1]
+    const hLen = Math.hypot(hxB - hxA, hzB - hzA)
+    // Hypotenuse midpoint
+    const hMidX = (hxA + hxB) / 2
+    const hMidZ = (hzA + hzB) / 2
+    // Edge direction (A → B) and outward normal (pointing away from pentagon
+    // interior centroid)
+    const eDx = (hxB - hxA) / hLen
+    const eDz = (hzB - hzA) / hLen
+    const cX = (verts[0][0] + verts[1][0] + verts[2][0] + verts[3][0] + verts[4][0]) / 5
+    const cZ = (verts[0][1] + verts[1][1] + verts[2][1] + verts[3][1] + verts[4][1]) / 5
+    let oNx = -eDz, oNz = eDx
+    if ((hMidX - cX) * oNx + (hMidZ - cZ) * oNz < 0) { oNx = -oNx; oNz = -oNz }
+    // Door-face angle around +Y. We want the door's local +Z (the face normal)
+    // to align with the outward normal (oNx, 0, oNz). Under Y-rotation by θ,
+    // (0,0,1) → (sin θ, 0, cos θ). So θ = atan2(oNx, oNz).
+    // This maps local +X to (oNz, 0, -oNx), which is parallel to the edge
+    // direction but may point A→B or B→A — we pick handle/hinge ends relative
+    // to that. No reflection needed, so door normals stay consistent.
+    const faceAng = Math.atan2(oNx, oNz)
+    // After rotation, local +X points in direction (oNz, 0, -oNx). Compare to
+    // edge direction (eDx, eDz): if they match, local +X runs A→B; if opposite,
+    // local +X runs B→A.
+    const localXAlongAtoB = (oNz * eDx + (-oNx) * eDz) > 0
+    const doorThickC = FT(0.5)
+    // Corner cabinet front face is FRAMED (locker-style): visible cabinet-body
+    // rails around the door. Match standard Signature cabinets: 0.75" frame
+    // rails + 0.25" reveal between door and frame opening.
+    const frameC = FT(0.75)
+    const revealGap = FT(0.25)  // 1/4" reveal — matches standard Signature cabinet reveal
+    // Door sizing differs by line:
+    //   Signature: door is inset inside the frame with a reveal gap.
+    //   Technica: door is a full-overlay that COVERS the frame (like other
+    //             Technica cabinets) — sized to nearly the full hypotenuse.
+    const doorY0c = isSignature ? frameC + revealGap : 0
+    const doorY1c = isSignature ? hFt - frameC - revealGap : hFt
+    const doorHc = isSignature ? (doorY1c - doorY0c) : (hFt - FT(0.1))
+    const doorMYc = (doorY0c + doorY1c) / 2
+    const doorWc = isSignature
+      ? hLen - 2 * frameC - 2 * revealGap
+      : hLen - FT(1.1)
+    // Door positioning matches standard cabinets:
+    //   Signature: door is RECESSED — front face flush with hypotenuse plane,
+    //              body extends into the hollow cavity.
+    //   Technica: door is OVERLAY — back face flush with hypotenuse plane,
+    //              body extends outward (proud of the cabinet).
+    const doorOutwardOffset = isSignature ? -doorThickC / 2 : doorThickC / 2
+    const doorCX = hMidX + oNx * doorOutwardOffset
+    const doorCZ = hMidZ + oNz * doorOutwardOffset
+    // Hinge side: 'right' handle means the HANDLE is on the right when viewed
+    // from outside the cabinet → the hinge is on the OPPOSITE side (left).
+    // In our hypotenuse convention, vertex A (verts[2]) ends up on the right
+    // side of the door from the viewer, so a 'right' handle means hinge at
+    // vertex B (not A).
+    const hingeEndIsA = (cabinet.handleSide ?? 'right') === 'left'
+    // Handle near bottom of door (corner-upper follows upper convention)
+    const bladeH = FT(8.5)
+    const bladeY = doorY0c + bladeH / 2 + FT(1.5) - doorMYc
+    return (
+      <group
+        ref={setGroupRef}
+        position={[FT(cabinet.x), FT(cabinet.y), FT(cabinet.z)]}
+        rotation={[0, cabinet.rotY, 0]}
+        onClick={(e) => { e.stopPropagation(); onClick() }}
+        onPointerDown={onPointerDown}
+      >
+        <>
+          {/* 4 solid side walls (hypotenuse is OPEN — no front panel). */}
+          {wallEdges.map((e, i) => {
+            const ax = e.a[0], az = e.a[1], bx = e.b[0], bz = e.b[1]
+            const len = Math.hypot(bx - ax, bz - az)
+            const mx = (ax + bx) / 2, mz = (az + bz) / 2
+            const dx = (bx - ax) / len, dz = (bz - az) / len
+            let inX = -dz, inZ = dx
+            if ((shellCentroid.x - mx) * inX + (shellCentroid.z - mz) * inZ < 0) {
+              inX = -inX; inZ = -inZ
+            }
+            const cx2 = mx + inX * pt / 2
+            const cz2 = mz + inZ * pt / 2
+            const ang = Math.atan2(-dz, dx)
+            return (
+              <mesh key={`cw-${i}`} position={[cx2, hFt / 2, cz2]} rotation={[0, ang, 0]} castShadow receiveShadow>
+                {bodyMat}
+                <boxGeometry args={[len, hFt, pt]} />
+              </mesh>
+            )
+          })}
+          {/* Bottom cap (pentagon slab) — occupies y ∈ [0, pt]. */}
+          <mesh geometry={capSlabGeo} position={[0, pt, 0]} castShadow receiveShadow>
+            {bodyMat}
+          </mesh>
+          {/* Top cap — occupies y ∈ [hFt-pt, hFt]. */}
+          <mesh geometry={capSlabGeo} position={[0, hFt, 0]} castShadow receiveShadow>
+            {bodyMat}
+          </mesh>
+          {/* Front-face frame on the hypotenuse — 4 thin rail/stile boxes
+              forming a rectangular frame with a door-sized opening in the
+              middle. The door sits in the opening; hollow shell shows
+              through the 1/4" reveal gap between door and frame edges. */}
+          {(() => {
+            const frameGroupAng = Math.atan2(oNx, oNz)
+            // Frame opening dimensions (what the door sits in):
+            const openW = hLen - 2 * frameC
+            const openH = hFt - 2 * frameC
+            // Rail positions in frame-local coords (origin = hypotenuse center)
+            const rails: Array<{ w: number; h: number; x: number; y: number }> = [
+              // Top rail
+              { w: hLen, h: frameC, x: 0, y: openH / 2 + frameC / 2 },
+              // Bottom rail
+              { w: hLen, h: frameC, x: 0, y: -openH / 2 - frameC / 2 },
+              // Left stile (between rails)
+              { w: frameC, h: openH, x: -openW / 2 - frameC / 2, y: 0 },
+              // Right stile
+              { w: frameC, h: openH, x:  openW / 2 + frameC / 2, y: 0 },
+            ]
+            return (
+              <group position={[hMidX, hFt / 2, hMidZ]} rotation={[0, frameGroupAng, 0]}>
+                {rails.map((r, i) => (
+                  <mesh key={`rail-${i}`} position={[r.x, r.y, -pt / 2]} castShadow receiveShadow>
+                    {bodyMat}
+                    <boxGeometry args={[r.w, r.h, pt]} />
+                  </mesh>
+                ))}
+              </group>
+            )
+          })()}
+
+          {!wireframe && cabinet.doors > 0 && doorHc > 0 && (() => {
+            // In the door-local frame (after faceAng rotation): +X runs along
+            // the hypotenuse edge (direction A→B or B→A depending on geometry),
+            // +Z is the outward normal. Pick hinge end's sign along local +X.
+            const hingeSign = (hingeEndIsA === localXAlongAtoB) ? -1 : +1
+            const freeSign = -hingeSign
+            const hingeLocalX = hingeSign * (doorWc / 2)
+            // Swing outward (toward +Z = outward normal): free-end local-X must
+            // move to +Z under rotation. A Y-rotation by -θ sends (r,0,0) to
+            // (r·cosθ, 0, r·sinθ). So for freeSign > 0, use -θ; for < 0, use +θ.
+            const swing = -freeSign * openAngle
+            return (
+              <group position={[doorCX, doorMYc, doorCZ]} rotation={[0, faceAng, 0]}>
+                <group position={[hingeLocalX, 0, 0]} rotation={[0, swing, 0]}>
+                  <group position={[-hingeLocalX, 0, 0]}>
+                    {isSignature ? (
+                      <SignatureDoorPanel
+                        width={doorWc} height={doorHc} thickness={doorThickC}
+                        handleOnPlusX={freeSign > 0}
+                        doorMat={doorMat} lipMat={sigLipMat}
+                      />
+                    ) : (
+                      <>
+                        <RoundedBox args={[doorWc, doorHc, doorThickC]} radius={doorRadius} smoothness={4} castShadow>
+                          {doorMat}
+                        </RoundedBox>
+                        <group position={[freeSign * (doorWc / 2 - FT(1.5)), bladeY, doorThickC / 2]}>
+                          {technicaBladeHandle('cnr-h', 0, 0, 0, bladeH, handleMat)}
+                        </group>
+                      </>
+                    )}
+                  </group>
+                </group>
+              </group>
+            )
+          })()}
+          {/* Under-cabinet puck (treat corner-upper like upper) */}
+          {cabinet.underLight && !blueprint && !wireframe && (() => {
+            const coneAngle = cabinet.underLightAngle ?? (75 * Math.PI) / 180
+            const fovDeg = Math.min(170, (coneAngle * 2 * 180) / Math.PI + 10)
+            return <UnderCabinetPuck coneAngle={coneAngle} fovDeg={fovDeg} />
+          })()}
+        </>
+      </group>
+    )
+  }
+
   return (
     <group
       ref={setGroupRef}
@@ -4930,15 +5152,41 @@ export default function GarageShell() {
               // bump for z-fighting). Visually paints the bottom of the wall.
               ? wall.thickness / 2 + piece.thickness / 2 + 0.0625
               : wall.thickness / 2 + piece.thickness / 2 + 0.5
-            // Snap along-wall position to corners (piece edge flush with wall
-            // end) within 8" — corner snapping gives a clean fit.
+            // Snap along-wall position so the piece's end lands at the
+            // INTERIOR CORNER of the garage — the point where this wall's
+            // interior face meets the adjacent wall's interior face.
+            // For perpendicular adjacent walls, that corner is offset inward
+            // from the centerline endpoint by the adjacent wall's half-thickness.
             const halfL = piece.length / 2
             let snappedAlong = wh.along
-            const startTarget = halfL                  // left edge against start corner
-            const endTarget   = wlen - halfL          // right edge against end corner
+            const adjHalfThick = (ep: [number, number]): number => {
+              let best = 0
+              for (const o of wallsRef.current) {
+                if (o.id === wall.id) continue
+                const onEndpoint =
+                  Math.hypot(o.x1 - ep[0], o.z1 - ep[1]) < 6 ||
+                  Math.hypot(o.x2 - ep[0], o.z2 - ep[1]) < 6
+                if (onEndpoint) best = Math.max(best, o.thickness / 2)
+              }
+              return best
+            }
+            const startInset = adjHalfThick([wall.x1, wall.z1])
+            const endInset   = adjHalfThick([wall.x2, wall.z2])
+            const interiorLen = wlen - startInset - endInset
+            let snappedLen = piece.length
+            // If the piece is longer than the wall's interior length, shrink
+            // it to fit exactly and center between interior corners.
+            if (piece.length > interiorLen + 0.01) {
+              snappedLen = Math.max(3, interiorLen)
+            }
+            const halfSnap = snappedLen / 2
+            const startTarget = startInset + halfSnap
+            const endTarget   = wlen - endInset - halfSnap
             const CORNER_SNAP = 8
             if (Math.abs(snappedAlong - startTarget) < CORNER_SNAP) snappedAlong = startTarget
             else if (Math.abs(snappedAlong - endTarget) < CORNER_SNAP) snappedAlong = endTarget
+            // HARD CLAMP: piece cannot extend past interior corners on either side.
+            snappedAlong = Math.max(startTarget, Math.min(endTarget, snappedAlong))
             const newX = wall.x1 + snappedAlong * ux + nx * targetPerp
             const newZ = wall.z1 + snappedAlong * uz + nz * targetPerp
             // Snap Y to floor when within 4" of floor — common case for stem
@@ -4946,7 +5194,8 @@ export default function GarageShell() {
             let newY = Math.max(0, snapToGrid(wh.yIn - piece.height / 2))
             if (newY < 4) newY = 0
             const newRotY = -Math.atan2(uz, ux) + (wh.side === -1 ? Math.PI : 0)
-            updateRef.current(piece.id, { x: newX, z: newZ, y: newY, rotY: newRotY })
+            const lenUpdate = snappedLen !== piece.length ? { length: snappedLen } : {}
+            updateRef.current(piece.id, { x: newX, z: newZ, y: newY, rotY: newRotY, ...lenUpdate })
           } else if (hitFloor) {
             // Floor-plane drag: offset-based, find nearest wall to snap to.
             const hxIn = hitFloor.x * 12, hzIn = hitFloor.z * 12
@@ -4954,10 +5203,11 @@ export default function GarageShell() {
             const dz = hzIn - (bbDrag.startHitZ ?? hzIn)
             let newX = (bbDrag.startX ?? piece.x) + dx
             let newZ = (bbDrag.startZ ?? piece.z) + dz
-            const SNAP = 4
             const CORNER_SNAP = 8
             let snappedRotY: number | undefined
-            let bestPerp = SNAP
+            // Always snap to the NEAREST wall (no distance threshold) so the
+            // baseboard can never be dragged through a wall or off the floor.
+            let bestPerp = Infinity
             for (const w of wallsRef.current) {
               const wdx = w.x2 - w.x1, wdz = w.z2 - w.z1
               const wlen = Math.hypot(wdx, wdz) || 1
@@ -4975,18 +5225,46 @@ export default function GarageShell() {
                 : w.thickness / 2 + piece.thickness / 2 + 0.5
               if (Math.abs(perp - targetPerp) <= bestPerp) {
                 bestPerp = Math.abs(perp - targetPerp)
-                // Corner snap on along-wall axis.
+                // Corner snap — land the piece's end at the INTERIOR CORNER
+                // (offset inward from centerline endpoint by adjacent wall's
+                // half-thickness).
                 const halfL = piece.length / 2
+                const adjHT = (ep: [number, number]): number => {
+                  let best = 0
+                  for (const o of wallsRef.current) {
+                    if (o.id === w.id) continue
+                    if (Math.hypot(o.x1 - ep[0], o.z1 - ep[1]) < 6 ||
+                        Math.hypot(o.x2 - ep[0], o.z2 - ep[1]) < 6) {
+                      best = Math.max(best, o.thickness / 2)
+                    }
+                  }
+                  return best
+                }
+                const startInset = adjHT([w.x1, w.z1])
+                const endInset = adjHT([w.x2, w.z2])
+                const interiorLen = wlen - startInset - endInset
+                let snappedLen = piece.length
+                if (piece.length > interiorLen + 0.01) {
+                  snappedLen = Math.max(3, interiorLen)
+                }
+                const halfSnap = snappedLen / 2
+                const startTarget = startInset + halfSnap
+                const endTarget = wlen - endInset - halfSnap
                 let snappedAlong = along
-                if (Math.abs(snappedAlong - halfL) < CORNER_SNAP) snappedAlong = halfL
-                else if (Math.abs(snappedAlong - (wlen - halfL)) < CORNER_SNAP) snappedAlong = wlen - halfL
+                if (Math.abs(snappedAlong - startTarget) < CORNER_SNAP) snappedAlong = startTarget
+                else if (Math.abs(snappedAlong - endTarget) < CORNER_SNAP) snappedAlong = endTarget
+                // HARD CLAMP: piece cannot extend past interior corners.
+                snappedAlong = Math.max(startTarget, Math.min(endTarget, snappedAlong))
                 newX = w.x1 + snappedAlong * ux + nx * targetPerp
                 newZ = w.z1 + snappedAlong * uz + nz * targetPerp
                 snappedRotY = -Math.atan2(uz, ux)
+                ;(bbDrag as { _pendingLen?: number })._pendingLen = snappedLen
               }
             }
             // Snap Y back to floor when dragging on the floor plane.
-            updateRef.current(piece.id, { x: newX, z: newZ, y: 0, ...(snappedRotY !== undefined ? { rotY: snappedRotY } : {}) })
+            const pendingLen = (bbDrag as { _pendingLen?: number })._pendingLen
+            const lenUpdate = pendingLen !== undefined && pendingLen !== piece.length ? { length: pendingLen } : {}
+            updateRef.current(piece.id, { x: newX, z: newZ, y: 0, ...(snappedRotY !== undefined ? { rotY: snappedRotY } : {}), ...lenUpdate })
           }
         } else {
           // Resize end — floor-plane only (length axis is horizontal).
@@ -5000,20 +5278,51 @@ export default function GarageShell() {
           const dir = Math.sign(alongFromFixed) || 1
           // Quarter-inch base snap.
           let snapLen = Math.round(newLen * 4) / 4
-          // Corner snap: if the moving end's resulting world position is
-          // within 8" of any wall endpoint, snap length so the moving end
-          // lands exactly at that corner.
+          // Corner snap: moving end lands at INTERIOR CORNER (each wall
+          // endpoint's interior corner is offset inward along the wall by
+          // the adjacent wall's half-thickness).
           const CORNER_SNAP = 8
           let bestDist = CORNER_SNAP
+          const adjHT = (w: GarageWall, ep: [number, number]): number => {
+            let best = 0
+            for (const o of wallsRef.current) {
+              if (o.id === w.id) continue
+              if (Math.hypot(o.x1 - ep[0], o.z1 - ep[1]) < 6 ||
+                  Math.hypot(o.x2 - ep[0], o.z2 - ep[1]) < 6) {
+                best = Math.max(best, o.thickness / 2)
+              }
+            }
+            return best
+          }
+          // HARD CAP: moving end cannot extend past any interior corner of
+          // the wall the baseboard is currently along. Compute the max
+          // allowable length from the fixed end along the baseboard's axis.
+          let maxAllowedLen = Infinity
           for (const w of wallsRef.current) {
-            for (const corner of [[w.x1, w.z1], [w.x2, w.z2]] as [number, number][]) {
-              // Project corner onto the bar axis from the fixed point —
-              // candidate length to land the moving end on this corner.
+            const wdx = w.x2 - w.x1, wdz = w.z2 - w.z1
+            const wlen = Math.hypot(wdx, wdz)
+            if (wlen < 1) continue
+            const wux = wdx / wlen, wuz = wdz / wlen
+            // Only consider walls parallel to baseboard axis (so the "along"
+            // direction matches). Use dot product check.
+            const parallel = Math.abs(wux * ux + wuz * uz) > 0.95
+            if (!parallel) continue
+            // And the baseboard must be close to this wall perpendicularly.
+            const wnx = -wuz, wnz = wux
+            const perpDist = Math.abs((fx - w.x1) * wnx + (fz - w.z1) * wnz)
+            if (perpDist > w.thickness / 2 + piece.thickness + 6) continue
+            const startIn = adjHT(w, [w.x1, w.z1])
+            const endIn   = adjHT(w, [w.x2, w.z2])
+            const interiorCorners: [number, number][] = [
+              [w.x1 + wux * startIn, w.z1 + wuz * startIn],
+              [w.x2 - wux * endIn,   w.z2 - wuz * endIn],
+            ]
+            for (const corner of interiorCorners) {
               const candAlong = (corner[0] - fx) * ux + (corner[1] - fz) * uz
               if (Math.sign(candAlong) !== dir && candAlong !== 0) continue
               const candLen = Math.abs(candAlong)
               if (candLen < 3) continue
-              // Where would the moving end actually land at candLen?
+              maxAllowedLen = Math.min(maxAllowedLen, candLen)
               const movingX = fx + ux * dir * candLen
               const movingZ = fz + uz * dir * candLen
               const distToCorner = Math.hypot(movingX - corner[0], movingZ - corner[1])
@@ -5023,6 +5332,9 @@ export default function GarageShell() {
               }
             }
           }
+          // Apply the hard cap: baseboard length cannot exceed the distance
+          // from the fixed end to the nearest interior corner in the drag direction.
+          if (isFinite(maxAllowedLen)) snapLen = Math.min(snapLen, maxAllowedLen)
           const cx = fx + ux * (dir * snapLen / 2)
           const cz = fz + uz * (dir * snapLen / 2)
           updateRef.current(piece.id, { length: snapLen, x: cx, z: cz })
@@ -5412,6 +5724,81 @@ export default function GarageShell() {
             )
             ray.setFromCamera(_tmpNdc, cameraRef.current)
 
+            // Corner-upper cabinets: snap to the nearest free inside wall
+            // corner (pairs of perpendicular walls meeting at ~90°). The
+            // cabinet's pentagon inside-corner vertex lands at the wall
+            // corner; its two 24" back walls sit flush along both walls.
+            let cornerSnap: { x: number; z: number; y: number; rotY: number; dist: number } | null = null
+            if (!skipSnap && cab.style === 'corner-upper') {
+              const CORNER_SNAP_DIST = 24 // inches — generous threshold
+              const SNAP = 6
+              type EndRef = { wall: GarageWall; end: 0 | 1 }
+              const clusters: { x: number; z: number; refs: EndRef[] }[] = []
+              for (const w of wallsRef.current) {
+                for (const end of [0, 1] as const) {
+                  const ex = end === 0 ? w.x1 : w.x2
+                  const ez = end === 0 ? w.z1 : w.z2
+                  let cl = clusters.find(c => Math.hypot(c.x - ex, c.z - ez) < SNAP)
+                  if (!cl) { cl = { x: ex, z: ez, refs: [] }; clusters.push(cl) }
+                  cl.refs.push({ wall: w, end })
+                }
+              }
+              for (const cl of clusters) {
+                if (cl.refs.length !== 2) continue
+                const [r1, r2] = cl.refs
+                const dirOf = (r: EndRef) => {
+                  const ox = r.end === 0 ? r.wall.x2 : r.wall.x1
+                  const oz = r.end === 0 ? r.wall.z2 : r.wall.z1
+                  const cx = r.end === 0 ? r.wall.x1 : r.wall.x2
+                  const cz = r.end === 0 ? r.wall.z1 : r.wall.z2
+                  const ddx = ox - cx, ddz = oz - cz
+                  const L = Math.hypot(ddx, ddz) || 1
+                  return { dx: ddx / L, dz: ddz / L, thick: r.wall.thickness }
+                }
+                let aDir = dirOf(r1)
+                let bDir = dirOf(r2)
+                const dot = aDir.dx * bDir.dx + aDir.dz * bDir.dz
+                if (Math.abs(dot) > 0.2) continue
+                const cross = aDir.dx * bDir.dz - aDir.dz * bDir.dx
+                if (cross > 0) { const tmp = aDir; aDir = bDir; bDir = tmp }
+                const pickInward = (dir: { dx: number; dz: number }, other: { dx: number; dz: number }) => {
+                  const n1x = -dir.dz, n1z = dir.dx
+                  return (n1x * other.dx + n1z * other.dz) > 0
+                    ? { nx: n1x, nz: n1z } : { nx: -n1x, nz: -n1z }
+                }
+                const nAv = pickInward(aDir, bDir)
+                const nBv = pickInward(bDir, aDir)
+                const wallCornerX = cl.x + nAv.nx * (aDir.thick / 2) + nBv.nx * (bDir.thick / 2)
+                const wallCornerZ = cl.z + nAv.nz * (aDir.thick / 2) + nBv.nz * (bDir.thick / 2)
+                // Validate: probe inward along bisector; must be inside floor polygon
+                const bisX = aDir.dx + bDir.dx, bisZ = aDir.dz + bDir.dz
+                const bisL = Math.hypot(bisX, bisZ) || 1
+                if (!pointInPolygon(wallCornerX + (bisX / bisL) * 12, wallCornerZ + (bisZ / bisL) * 12, floorPtsRef.current)) continue
+                const rotY = Math.atan2(-aDir.dz, aDir.dx)
+                // Pentagon is centered on the cabinet's 24×24 bounding box.
+                // Inside-corner vertex is at local (-w/2, -w/2). To place it
+                // at the wall corner: cabinet.position = wall_corner + rotated(w/2, w/2).
+                const halfW = cab.w / 2
+                const cs = Math.cos(rotY), sn = Math.sin(rotY)
+                const cornerX = wallCornerX + halfW * cs + halfW * sn
+                const cornerZ = wallCornerZ - halfW * sn + halfW * cs
+                // Skip if another corner cabinet occupies this spot
+                const occupied = cabinetsRef.current.some(cb =>
+                  cb.id !== cab.id && cb.style === 'corner-upper' &&
+                  Math.hypot(cb.x - cornerX, cb.z - cornerZ) < SNAP
+                )
+                if (occupied) continue
+                const dist = Math.hypot(rawX - cornerX, rawZ - cornerZ)
+                if (dist > CORNER_SNAP_DIST) continue
+                if (!cornerSnap || dist < cornerSnap.dist) {
+                  cornerSnap = { x: cornerX, z: cornerZ, y: cab.y, rotY, dist }
+                }
+              }
+              if (cornerSnap) {
+                bestPos = { x: cornerSnap.x, z: cornerSnap.z, y: cornerSnap.y, rotY: cornerSnap.rotY }
+              }
+            }
+
             // Check for wall snap — only snap when cabinet center is within 20" of wall face
             // Shift key disables wall/cabinet snapping
             const WALL_SNAP_DIST = skipSnap ? 0 : 2
@@ -5522,9 +5909,9 @@ export default function GarageShell() {
               }
             }
 
-            if (wallSnap) {
+            if (wallSnap && !cornerSnap) {
               bestPos = { x: wallSnap.x, z: wallSnap.z, y: wallSnap.y, rotY: wallSnap.rotY }
-            } else if (pointInPolygon(rawX, rawZ, floorPtsRef.current)) {
+            } else if (!cornerSnap && pointInPolygon(rawX, rawZ, floorPtsRef.current)) {
               // When on the floor, sit on top of any step the cabinet is over
               let floorY = 0
               for (const step of floorStepsRef.current) {
