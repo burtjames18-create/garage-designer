@@ -6990,7 +6990,7 @@ export default function GarageShell() {
         // Push handles just past the wall face on each side so they're clickable
         // from both interior and exterior views.
         return wall.openings
-          .filter(op => op.type === 'door' || op.type === 'window')
+          .filter(op => op.type === 'door' || op.type === 'window' || op.type === 'garage-door')
           .map(op => {
             const topY = FT(op.yOffset + op.height)
             const leftX  = FT(-wLen / 2 + op.xOffset)

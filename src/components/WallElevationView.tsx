@@ -1251,7 +1251,7 @@ export default function WallElevationView() {
 
           {/* Openings */}
           {wall.openings.map(op => {
-            const draggable = op.type === 'door' || op.type === 'window'
+            const draggable = op.type === 'door' || op.type === 'window' || op.type === 'garage-door'
             const hitRect = draggable ? (
               <rect
                 x={toX(op.xOffset)} y={toY(op.yOffset + op.height)}
@@ -1312,7 +1312,7 @@ export default function WallElevationView() {
 
           {/* Opening resize handles — top-left & top-right, only on selected door/window */}
           {wall.openings
-            .filter(op => (op.type === 'door' || op.type === 'window') && op.id === selectedOpeningId)
+            .filter(op => (op.type === 'door' || op.type === 'window' || op.type === 'garage-door') && op.id === selectedOpeningId)
             .map(op => {
               const left  = toX(op.xOffset)
               const right = toX(op.xOffset + op.width)

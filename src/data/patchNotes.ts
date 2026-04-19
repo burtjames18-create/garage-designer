@@ -9,6 +9,14 @@ export interface PatchNote {
 
 export const PATCH_NOTES: PatchNote[] = [
   {
+    version: '1.2.7',
+    date: '2026-04-19',
+    items: [
+      'Garage door openings resize via top-left / top-right handles (3D + wall edit mode)',
+      'Garage doors draggable along the wall in wall edit mode',
+    ],
+  },
+  {
     version: '1.2.6',
     date: '2026-04-19',
     items: [
