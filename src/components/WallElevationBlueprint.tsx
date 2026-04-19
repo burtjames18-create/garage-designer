@@ -146,13 +146,13 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
   const fs = 2.5
   const tk = 2
 
-  const hasItems = wallCabinets.length > 0 || wallPanels.length > 0
+  const wallDoors = wall.openings.filter(op => op.type === 'door')
+  const hasItems = wallCabinets.length > 0 || wallPanels.length > 0 || wallDoors.length > 0
   const hBreaks = new Set<number>()
   hBreaks.add(hasItems ? leftEdge : 0)
   hBreaks.add(hasItems ? rightEdge : wLen)
-  // Cabinet tier breakpoints — cabinets only. Slatwall lives on its own tier
-  // below (see slatTierSegs) so SW segments don't fragment the cabinet/gap
-  // breakdown.
+  // Cabinet + door tier breakpoints. Slatwall lives on its own tier below
+  // (see slatTierSegs) so SW segments don't fragment this breakdown.
   type Range = { start: number; end: number }
   const cabRanges: Range[] = []
   wallCabinets.forEach(cab => {
@@ -162,10 +162,21 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
     hBreaks.add(s); hBreaks.add(e)
     cabRanges.push({ start: s, end: e })
   })
+  const doorRanges: Range[] = []
+  wall.openings.filter(op => op.type === 'door').forEach(op => {
+    const ext = op.modelId === 'custom-plain' ? 2.5 : 0
+    const s = Math.max(leftEdge, op.xOffset - ext)
+    const e = Math.min(rightEdge, op.xOffset + op.width + ext)
+    if (e - s > 0.5) {
+      hBreaks.add(s); hBreaks.add(e)
+      doorRanges.push({ start: s, end: e })
+    }
+  })
   const hSorted = [...hBreaks].sort((a, b) => a - b)
   const hasHSegs = hSorted.length > 2
-  const classifySeg = (start: number, end: number): 'cab' | 'gap' => {
+  const classifySeg = (start: number, end: number): 'cab' | 'door' | 'gap' => {
     const mid = (start + end) / 2
+    for (const r of doorRanges) if (mid >= r.start - 0.1 && mid <= r.end + 0.1) return 'door'
     for (const r of cabRanges) if (mid >= r.start - 0.1 && mid <= r.end + 0.1) return 'cab'
     return 'gap'
   }
@@ -199,6 +210,7 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
   const TIER_COLOR = {
     overall: '#333',
     cab:     '#333',
+    door:    '#b22',
     slat:    '#1d6f3d',
     ct:      '#8a6a3a',
     bb:      '#555',
@@ -340,12 +352,49 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
       {/* Baseboards now standalone — not rendered in wall elevation. */}
 
       {/* Openings */}
-      {wall.openings.map(op => (
-        <rect key={op.id}
-          x={toX(op.xOffset)} y={toY(op.yOffset + op.height)}
-          width={op.width} height={op.height}
-          fill="#ffffff" stroke="#bbb" strokeWidth={0.5} />
-      ))}
+      {wall.openings.map(op => {
+        if (op.type === 'door' && op.modelId === 'custom-plain') {
+          // Frame extends 2.5" past the opening on sides + top (no bottom casing).
+          const casW = 2.5
+          const jambT = 0.75, gap = 0.125, bottomGap = 0.75
+          const slabX = op.xOffset + jambT + gap
+          const slabW = op.width - 2 * (jambT + gap)
+          const slabTopY = op.yOffset + op.height - jambT - gap
+          const slabBotY = op.yOffset + bottomGap
+          return (
+            <g key={op.id}>
+              {/* Casing / frame */}
+              <rect
+                x={toX(op.xOffset - casW)}
+                y={toY(op.yOffset + op.height + casW)}
+                width={op.width + 2 * casW}
+                height={op.height + casW}
+                fill={op.frameColor ?? '#f0ede4'}
+                stroke="#666" strokeWidth={0.4}
+              />
+              {/* Slab */}
+              <rect
+                x={toX(slabX)} y={toY(slabTopY)}
+                width={slabW} height={slabTopY - slabBotY}
+                fill={op.doorColor ?? '#e0dedd'}
+                stroke="#444" strokeWidth={0.4}
+              />
+              {/* Handle at 36" from floor, near the right slab edge */}
+              <circle
+                cx={toX(slabX + slabW - 2.75)} cy={toY(36)} r={0.9}
+                fill="#B8B8B0" stroke="#222" strokeWidth={0.2}
+              />
+            </g>
+          )
+        }
+        return (
+          <rect key={op.id}
+            x={toX(op.xOffset)} y={toY(op.yOffset + op.height)}
+            width={op.width} height={op.height}
+            fill="#ffffff" stroke="#bbb" strokeWidth={0.5} />
+        )
+      })}
+
 
       {/* Clipped elements */}
       <g clipPath={`url(#${clipId})`}>
@@ -481,12 +530,13 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
         const segPx = y2 - y1
         const kind = classifyVSeg(bot, top)
         const color = TIER_COLOR[kind]
-        const prefix = kind === 'cab' ? 'CAB ' : kind === 'slat' ? 'SW ' : kind === 'ct' ? 'CT ' : kind === 'bb' ? 'BB ' : ''
+        const prefix = kind === 'cab' ? 'CAB ' : kind === 'door' ? 'DOOR ' : kind === 'slat' ? 'SW ' : kind === 'ct' ? 'CT ' : kind === 'bb' ? 'BB ' : ''
         const labelText = `${prefix}${inchesToDisplay(top - bot)}`
         const needed = labelText.length * fs * 0.55
         const inline = segPx > needed + 2
-        // Skip labels on plain gap segments — matches wall edit view.
-        const showLabel = kind !== 'gap'
+        // Show labels on all segments including gaps, so the empty space
+        // between cabinets / above / below can be read directly.
+        const showLabel = true
         return (
           <g key={`vs${i}`}>
             <line x1={dimX1} y1={y1} x2={dimX1} y2={y2} stroke={color} strokeWidth={0.45} />
@@ -541,7 +591,7 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
         const x1 = toX(start), x2 = toX(end), mid = (x1 + x2) / 2
         const kind = classifySeg(start, end)
         const color = TIER_COLOR[kind]
-        const prefix = kind === 'cab' ? 'CAB ' : ''
+        const prefix = kind === 'cab' ? 'CAB ' : kind === 'door' ? 'DOOR ' : ''
         const showLabel = (x2 - x1) > 14
         return (
           <g key={`hs${i}`}>

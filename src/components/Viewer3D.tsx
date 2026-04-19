@@ -339,11 +339,14 @@ function ExportCapture({ orbitRef }: { orbitRef: React.RefObject<any> }) {
       const pos = camera.position.clone()
       const tgt = orbitRef.current.target?.clone() ?? new THREE.Vector3(0, chFt * 0.35, 0)
       const thumbnail = gl.domElement.toDataURL('image/jpeg', 0.6)
+      const vm = useGarageStore.getState().viewMode
+      const shotMode: 'perspective' | 'wireframe' = vm === 'wireframe' ? 'wireframe' : 'perspective'
       return {
         id: '', label: '',
         camX: pos.x, camY: pos.y, camZ: pos.z,
         targetX: tgt.x, targetY: tgt.y, targetZ: tgt.z,
         thumbnail,
+        viewMode: shotMode,
       }
     }
 
@@ -360,10 +363,22 @@ function ExportCapture({ orbitRef }: { orbitRef: React.RefObject<any> }) {
 
       const origCamPos = camera.position.clone()
       const origTarget = orbitRef.current?.target?.clone() ?? new THREE.Vector3(0, chFt * 0.35, 0)
+      const origViewMode = useGarageStore.getState().viewMode
 
       for (let i = 0; i < shots.length; i++) {
         if (onProgress) onProgress(i)
         const shot = shots[i]
+
+        // Match the viewMode the shot was captured in (default 'perspective'
+        // for legacy shots). Switching remounts EffectComposer and swaps the
+        // lighting rig, so we need a couple of RAFs for React to rebuild the
+        // tree before we start waiting on render frames.
+        const shotMode = shot.viewMode ?? 'perspective'
+        if (useGarageStore.getState().viewMode !== shotMode) {
+          useGarageStore.getState().setViewMode(shotMode)
+          await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+          await waitFrames(4)
+        }
 
         camera.position.set(shot.camX, shot.camY, shot.camZ)
         camera.lookAt(shot.targetX, shot.targetY, shot.targetZ)
@@ -378,6 +393,9 @@ function ExportCapture({ orbitRef }: { orbitRef: React.RefObject<any> }) {
         results.push(gl.domElement.toDataURL('image/png'))
       }
 
+      if (useGarageStore.getState().viewMode !== origViewMode) {
+        useGarageStore.getState().setViewMode(origViewMode)
+      }
       camera.position.copy(origCamPos)
       if (orbitRef.current?.target) {
         orbitRef.current.target.copy(origTarget)
@@ -578,7 +596,7 @@ export default function Viewer3D() {
           powerPreference: qualityPreset === 'low' ? 'low-power' : 'high-performance',
         }}
         style={{ background: bgColor }}
-        onPointerMissed={() => { setFloorSelected(false); selectWall(null); selectShape(null); selectSlatwallPanel(null); selectItem(null); selectBaseboard(null); selectStemWall(null) }}
+        onPointerMissed={() => { setFloorSelected(false); selectShape(null); selectSlatwallPanel(null); selectItem(null); selectBaseboard(null); selectStemWall(null) }}
       >
         <SceneBackground />
         <RectAreaLightInit />

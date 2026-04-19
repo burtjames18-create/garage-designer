@@ -676,9 +676,9 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
       preserveAspectRatio="xMidYMid meet"
       style={{ width: '100%', height: '100%', display: 'block' }}
     >
-      {/* Background — click to deselect walls */}
-      <rect x={0} y={0} width={SVG_W} height={SVG_H} fill="#ffffff"
-        onPointerDown={() => { if (selectedWallId) selectWall(null) }} />
+      {/* Background — wall selection is intentionally preserved when clicking
+          empty space so the wall info panel stays open. Use Escape to close. */}
+      <rect x={0} y={0} width={SVG_W} height={SVG_H} fill="#ffffff" />
 
 
       {/* Floor steps */}
@@ -1054,6 +1054,50 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
               slatSegs.push({ start: lastEnd, end: iEnd, label: inchesToDisplay(iEnd - lastEnd), bold: false, color: dimColorLight })
             }
             tierStrips.push(slatSegs)
+          }
+
+          // ── Doors tier: labeled segments for each door + gaps ──
+          // For procedural doors, the dimension spans the outer edges of the
+          // casing trim (2.5" past the rough opening on each side).
+          const wDoors = w.openings.filter(op => op.type === 'door')
+          if (wDoors.length > 0) {
+            const items = wDoors.map(op => {
+              const ext = op.modelId === 'custom-plain' ? 2.5 : 0
+              return {
+                start: Math.max(iStart, op.xOffset - ext),
+                end:   Math.min(iEnd,   op.xOffset + op.width + ext),
+              }
+            }).filter(p => p.end - p.start > 0.5)
+              .sort((a, b) => a.start - b.start)
+            if (items.length > 0) {
+              const doorSegs: Strip[] = []
+              if (items[0].start - iStart > 1) {
+                doorSegs.push({ start: iStart, end: items[0].start,
+                  label: inchesToDisplay(items[0].start - iStart),
+                  bold: false, color: dimColorLight })
+              }
+              for (let i = 0; i < items.length; i++) {
+                const it = items[i]
+                doorSegs.push({ start: it.start, end: it.end,
+                  label: 'DOOR ' + inchesToDisplay(it.end - it.start),
+                  bold: true, color: '#b22' })
+                if (i < items.length - 1) {
+                  const gs = items[i].end, ge = items[i + 1].start
+                  if (ge - gs > 1) {
+                    doorSegs.push({ start: gs, end: ge,
+                      label: inchesToDisplay(ge - gs),
+                      bold: false, color: dimColorLight })
+                  }
+                }
+              }
+              const lastEnd = items[items.length - 1].end
+              if (iEnd - lastEnd > 1) {
+                doorSegs.push({ start: lastEnd, end: iEnd,
+                  label: inchesToDisplay(iEnd - lastEnd),
+                  bold: false, color: dimColorLight })
+              }
+              tierStrips.push(doorSegs)
+            }
           }
 
           // Overall wall length is always the outermost tier.

@@ -263,6 +263,46 @@
   box-shadow: 0 0 0 1px var(--accent-hover), 0 0 8px var(--accent-glow);
 }
 
+/* Door style tile — large 2D door preview */
+.door-style-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.door-style-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px 6px;
+  background: rgba(255,255,255,0.04);
+  border: 2px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+.door-style-tile:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255,255,255,0.4);
+  background: rgba(255,255,255,0.08);
+}
+.door-style-tile.active {
+  border-color: #fff;
+  background: rgba(255,255,255,0.1);
+  box-shadow: 0 0 0 1px var(--accent-hover), 0 0 8px var(--accent-glow);
+}
+.door-style-svg {
+  width: 36px;
+  height: 50px;
+  border-radius: 3px;
+  display: block;
+}
+.door-style-label {
+  font-size: 10px;
+  color: #ccc;
+  line-height: 1;
+}
+
 /* Slatwall accessories */
 .slat-acc-section {
   margin-top: 8px;

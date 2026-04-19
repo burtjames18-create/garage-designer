@@ -2,37 +2,26 @@
 // Kenney Building Kit models (CC0) — free for any use
 
 export type OpeningModelType = 'door' | 'garage-door' | 'window'
+export type OpeningModelKind = 'glb' | 'procedural'
 
 export interface OpeningModel {
   id: string
   name: string
-  file: string          // GLB filename in public/assets/models/
+  file: string          // GLB filename in public/assets/models/ (empty for procedural)
   type: OpeningModelType // which opening types this model can be used for
   preview: string       // CSS color or emoji for the picker swatch
+  kind?: OpeningModelKind // 'glb' (default) renders from GLB file; 'procedural' renders from primitives
 }
 
 export const openingModels: OpeningModel[] = [
   // ── Doors ──────────────────────────────────────────────────────────────────
   {
-    id: 'door-panel',
-    name: 'Panel Door',
-    file: 'door-panel.glb',
+    id: 'custom-plain',
+    name: 'Custom Plain',
+    file: '',
     type: 'door',
-    preview: '#8B7355',
-  },
-  {
-    id: 'door-panel-glass',
-    name: 'Panel Door (Glass)',
-    file: 'door-panel-glass.glb',
-    type: 'door',
-    preview: '#6B8E9B',
-  },
-  {
-    id: 'door-arched',
-    name: 'Arched Door',
-    file: 'door-arched.glb',
-    type: 'door',
-    preview: '#A0522D',
+    preview: '#e0dedd',
+    kind: 'procedural',
   },
 
   // ── Windows ────────────────────────────────────────────────────────────────

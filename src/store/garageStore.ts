@@ -57,6 +57,9 @@ export interface ExportShot {
   targetZ: number
   // Thumbnail data URL (small preview)
   thumbnail: string
+  // View mode the shot was captured in. Optional for backward compat with
+  // shots saved before this field existed (treated as 'perspective').
+  viewMode?: 'perspective' | 'wireframe'
 }
 
 export type CabinetStyle = 'lower' | 'upper' | 'locker' | 'corner-upper'
@@ -92,7 +95,7 @@ export const CABINET_PRESETS: CabinetPreset[] = [
   { key: 't-upper-36-2',    label: '36" 2-Door Upper',          line: 'technica', style: 'upper',  doors: 2, w: 36, d: 14, h: 30.5, sku: 'GL-TEC-WALL-36', price: 299 },
   { key: 't-upper-28-2',    label: '28" 2-Door Upper',          line: 'technica', style: 'upper',  doors: 2, w: 28, d: 14, h: 30.5, sku: 'GL-TEC-WALL-28', price: 259 },
   { key: 't-upper-20-1',    label: '20" 1-Door Upper',          line: 'technica', style: 'upper',  doors: 1, w: 20, d: 14, h: 30.5, sku: 'GL-TEC-WALL-20', price: 229 },
-  { key: 't-corner-upper',  label: 'Corner Upper',              line: 'technica', style: 'corner-upper', doors: 1, w: 24, d: 24, h: 30.5, sku: 'GL-TEC-WALL-CNR', price: 289 },
+  { key: 't-corner-upper',  label: '24" Upper Corner',           line: 'technica', style: 'corner-upper', doors: 1, w: 24, d: 24, h: 30.5, sku: 'GL-TEC-WALL-CNR', price: 289 },
   // ── Signature ─────────────────────────────────────────────────────────
   { key: 's-lower-20-1',    label: '20" 1-Door Lower',          line: 'signature', style: 'lower',  doors: 1, w: 20, d: 24, h: 30.5, sku: 'GL-SIG-BASE-20',      price: 299 },
   { key: 's-lower-28-2',    label: '28" 2-Door Lower',          line: 'signature', style: 'lower',  doors: 2, w: 28, d: 24, h: 30.5, sku: 'GL-SIG-BASE-28',      price: 379 },
@@ -108,7 +111,7 @@ export const CABINET_PRESETS: CabinetPreset[] = [
   { key: 's-upper-36-2',    label: '36" 2-Door Upper',          line: 'signature', style: 'upper',  doors: 2, w: 36, d: 14, h: 30.5, sku: 'GL-SIG-WALL-36', price: 359 },
   { key: 's-upper-28-2',    label: '28" 2-Door Upper',          line: 'signature', style: 'upper',  doors: 2, w: 28, d: 14, h: 30.5, sku: 'GL-SIG-WALL-28', price: 319 },
   { key: 's-upper-20-1',    label: '20" 1-Door Upper',          line: 'signature', style: 'upper',  doors: 1, w: 20, d: 14, h: 30.5, sku: 'GL-SIG-WALL-20', price: 279 },
-  { key: 's-corner-upper',  label: 'Corner Upper',              line: 'signature', style: 'corner-upper', doors: 1, w: 24, d: 24, h: 30.5, sku: 'GL-SIG-WALL-CNR', price: 349 },
+  { key: 's-corner-upper',  label: '24" Upper Corner',           line: 'signature', style: 'corner-upper', doors: 1, w: 24, d: 24, h: 30.5, sku: 'GL-SIG-WALL-CNR', price: 349 },
 ]
 
 export interface PlacedCabinet {
@@ -208,6 +211,9 @@ export interface WallOpening {
   yOffset: number   // inches from floor (0 = ground level)
   textureId?: string // texture id from textureCatalog (for door/window appearance)
   modelId?: string   // GLB model id from openingModels catalog (overrides box geometry)
+  // Procedural door colors (used when modelId points to a procedural entry like 'custom-plain').
+  doorColor?: string   // hex — slab color
+  frameColor?: string  // hex — jamb + casing color
 }
 
 export interface GarageWall {

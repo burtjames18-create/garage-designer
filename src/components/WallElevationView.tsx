@@ -134,7 +134,7 @@ function getStepWallProjection(
 // ─── Drag state ───────────────────────────────────────────────────────────────
 
 interface SvgDrag {
-  type: 'panel-body' | 'panel-corner' | 'backsplash-body' | 'backsplash-corner' | 'cabinet' | 'countertop'
+  type: 'panel-body' | 'panel-corner' | 'backsplash-body' | 'backsplash-corner' | 'cabinet' | 'countertop' | 'opening-body' | 'opening-corner'
   id: string
   corner?: 0 | 1 | 2 | 3
   moved: boolean  // becomes true once pointer moves past click threshold
@@ -154,6 +154,11 @@ interface SvgDrag {
   startCtY?: number
   startCtWidth?: number
   ctEdge?: 'left' | 'right'
+  // Opening drag fields
+  startXOffset?: number
+  startWidth?: number
+  startOpYOffset?: number
+  startOpHeight?: number
 }
 
 // ─── Display colors ───────────────────────────────────────────────────────────
@@ -173,12 +178,14 @@ export default function WallElevationView() {
     addStainlessBacksplashPanel, deleteStainlessBacksplashPanel,
     updateCabinet, selectCabinet, selectedCabinetId, addCabinet, deleteCabinet,
     updateCountertop, selectCountertop, selectedCountertopId, addCountertop, deleteCountertop,
+    updateOpening, selectWall,
     elevationSide, setElevationSide,
     snappingEnabled, setSnappingEnabled,
   } = useGarageStore()
 
   const svgRef = useRef<SVGSVGElement>(null)
   const dragRef = useRef<SvgDrag | null>(null)
+  const [selectedOpeningId, setSelectedOpeningId] = useState<string | null>(null)
   const wallSide = elevationSide
   const setWallSide = setElevationSide
 
@@ -356,6 +363,20 @@ export default function WallElevationView() {
       snaps.push({ target: oA + ct.width / 2 - halfW, forEdge: 'right' })
     }
 
+    // Doors & windows — snap to the outer edges of the opening (casing
+    // outside for procedural doors, rough-opening edges otherwise).
+    for (const op of wall.openings) {
+      if (op.type !== 'door' && op.type !== 'window') continue
+      if (op.id === selfId) continue
+      const ext = op.modelId === 'custom-plain' ? 2.5 : 0
+      const leftSide  = op.xOffset - ext
+      const rightSide = op.xOffset + op.width + ext
+      snaps.push({ target: rightSide + halfW, forEdge: 'left' })   // left edge → opening right
+      snaps.push({ target: leftSide  - halfW, forEdge: 'right' })  // right edge → opening left
+      snaps.push({ target: leftSide  + halfW, forEdge: 'left' })   // align left edges
+      snaps.push({ target: rightSide - halfW, forEdge: 'right' })  // align right edges
+    }
+
     return { snaps, leftEdge, rightEdge }
   }
 
@@ -405,6 +426,24 @@ export default function WallElevationView() {
       snaps.push({ target: ct.y,                        forEdge: 'top' })
       snaps.push({ target: ct.y,                        forEdge: 'bottom' })
       snaps.push({ target: ct.y + COUNTERTOP_THICKNESS, forEdge: 'top' })
+    }
+    // Door & window tops/bottoms — position-aware so items only snap when
+    // they horizontally overlap the opening.
+    for (const op of wall.openings) {
+      if (op.type !== 'door' && op.type !== 'window') continue
+      if (op.id === selfId) continue
+      const opLeft  = op.xOffset
+      const opRight = op.xOffset + op.width
+      const overlaps = along !== undefined && halfW !== undefined
+        ? (along + halfW > opLeft && along - halfW < opRight)
+        : true
+      if (!overlaps) continue
+      const opBot = op.yOffset
+      const opTop = op.yOffset + op.height
+      snaps.push({ target: opTop, forEdge: 'bottom' })   // our bottom = opening top
+      snaps.push({ target: opTop, forEdge: 'top' })      // align tops
+      snaps.push({ target: opBot, forEdge: 'bottom' })   // align bottoms
+      snaps.push({ target: opBot, forEdge: 'top' })      // our top = opening bottom
     }
     // Floor step snaps — step top, and baseboard-on-step top (position-aware)
     for (const step of floorSteps) {
@@ -606,6 +645,38 @@ export default function WallElevationView() {
     }
   }
 
+  const onOpeningDown = (e: React.MouseEvent, op: { id: string; xOffset: number; width: number; yOffset: number; height: number }) => {
+    e.stopPropagation()
+    selectWall(wall.id)
+    setSelectedOpeningId(op.id)
+    const pt = getSvgPt(e)
+    if (!pt) return
+    dragRef.current = {
+      type: 'opening-body', id: op.id, moved: false,
+      startSvgX: pt.x, startSvgY: pt.y,
+      startXOffset: op.xOffset, startWidth: op.width,
+      startOpYOffset: op.yOffset, startOpHeight: op.height,
+    }
+  }
+
+  const onOpeningCornerDown = (
+    e: React.MouseEvent,
+    op: { id: string; xOffset: number; width: number; yOffset: number; height: number },
+    corner: 0 | 1 | 2 | 3,
+  ) => {
+    e.stopPropagation()
+    selectWall(wall.id)
+    setSelectedOpeningId(op.id)
+    const pt = getSvgPt(e)
+    if (!pt) return
+    dragRef.current = {
+      type: 'opening-corner', id: op.id, corner, moved: false,
+      startSvgX: pt.x, startSvgY: pt.y,
+      startXOffset: op.xOffset, startWidth: op.width,
+      startOpYOffset: op.yOffset, startOpHeight: op.height,
+    }
+  }
+
   const onCtDown = (e: React.MouseEvent, ct: Countertop, edge?: 'left' | 'right') => {
     e.stopPropagation()
 
@@ -769,6 +840,51 @@ export default function WallElevationView() {
       })
     }
 
+    // ── Opening (door/window) body drag ───────────────────────────────────
+    if (drag.type === 'opening-body') {
+      const op = wall.openings.find(o => o.id === drag.id)
+      if (!op) return
+      const rawX = drag.startXOffset! + dAlong
+      const newX = Math.max(0, Math.min(wLen - drag.startWidth!, Math.round(rawX * 4) / 4))
+      updateOpening(wall.id, drag.id, { xOffset: newX })
+    }
+
+    // ── Opening corner drag (resize) ──────────────────────────────────────
+    if (drag.type === 'opening-corner') {
+      const op = wall.openings.find(o => o.id === drag.id)
+      if (!op) return
+      const MIN = 12
+      const startLeft = drag.startXOffset!
+      const startRight = drag.startXOffset! + drag.startWidth!
+      const startBot = drag.startOpYOffset!
+      const startTop = drag.startOpYOffset! + drag.startOpHeight!
+      let newLeft = startLeft, newRight = startRight
+      let newBot = startBot, newTop = startTop
+      const c = drag.corner!
+      if (c === 0 || c === 3) {
+        // left edge
+        newLeft = Math.max(0, Math.min(startRight - MIN, Math.round((startLeft + dAlong) * 4) / 4))
+      }
+      if (c === 1 || c === 2) {
+        // right edge
+        newRight = Math.max(startLeft + MIN, Math.min(wLen, Math.round((startRight + dAlong) * 4) / 4))
+      }
+      if (c === 0 || c === 1) {
+        // top edge
+        newTop = Math.max(newBot + MIN, Math.min(wH, Math.round((startTop + dHeight) * 4) / 4))
+      }
+      if (c === 2 || c === 3) {
+        // bottom edge
+        newBot = Math.max(0, Math.min(newTop - MIN, Math.round((startBot + dHeight) * 4) / 4))
+      }
+      updateOpening(wall.id, drag.id, {
+        xOffset: newLeft,
+        width: newRight - newLeft,
+        yOffset: newBot,
+        height: newTop - newBot,
+      })
+    }
+
     // ── Countertop drag (body or edge resize) ──────────────────────────────
     if (drag.type === 'countertop') {
       const ct = countertops.find(c => c.id === drag.id)
@@ -823,6 +939,7 @@ export default function WallElevationView() {
       else if (drag.type === 'backsplash-body' || drag.type === 'backsplash-corner') selectStainlessBacksplashPanel(drag.id)
       else if (drag.type === 'cabinet') selectCabinet(drag.id)
       else if (drag.type === 'countertop') selectCountertop(drag.id)
+      else if (drag.type === 'opening-body' || drag.type === 'opening-corner') selectWall(wall.id)
     }
     dragRef.current = null
   }
@@ -832,11 +949,15 @@ export default function WallElevationView() {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         selectSlatwallPanel(null); selectStainlessBacksplashPanel(null); selectCabinet(null); selectCountertop(null)
+        setSelectedOpeningId(null)
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [selectSlatwallPanel, selectStainlessBacksplashPanel, selectCabinet, selectCountertop])
+
+  // Clear opening selection when switching walls
+  useEffect(() => { setSelectedOpeningId(null) }, [wallIdx])
 
   // ── Add cabinet to this wall ───────────────────────────────────────────────
 
@@ -976,7 +1097,7 @@ export default function WallElevationView() {
           onMouseMove={onMouseMove}
           onMouseUp={onMouseUp}
           onMouseLeave={onMouseUp}
-          onClick={() => { selectSlatwallPanel(null); selectCabinet(null); selectCountertop(null) }}
+          onClick={() => { selectSlatwallPanel(null); selectCabinet(null); selectCountertop(null); setSelectedOpeningId(null) }}
         >
           <defs>
             <clipPath id="wall-face-clip">
@@ -1129,12 +1250,90 @@ export default function WallElevationView() {
           })}
 
           {/* Openings */}
-          {wall.openings.map(op => (
-            <rect key={op.id}
-              x={toX(op.xOffset)} y={toY(op.yOffset + op.height)}
-              width={op.width} height={op.height}
-              fill="#f4f4f2" stroke="#aaa" strokeWidth={0.5} />
-          ))}
+          {wall.openings.map(op => {
+            const draggable = op.type === 'door' || op.type === 'window'
+            const hitRect = draggable ? (
+              <rect
+                x={toX(op.xOffset)} y={toY(op.yOffset + op.height)}
+                width={op.width} height={op.height}
+                fill="transparent"
+                style={{ cursor: 'move', pointerEvents: 'all' }}
+                onMouseDown={e => onOpeningDown(e, op)}
+                onClick={e => e.stopPropagation()}
+              />
+            ) : null
+            if (op.type === 'door' && op.modelId === 'custom-plain') {
+              const casW = 2.5
+              const jambT = 0.75, gap = 0.125, bottomGap = 0.75
+              const slabX = op.xOffset + jambT + gap
+              const slabW = op.width - 2 * (jambT + gap)
+              const slabTopY = op.yOffset + op.height - jambT - gap
+              const slabBotY = op.yOffset + bottomGap
+              return (
+                <g key={op.id}>
+                  {/* Casing / frame */}
+                  <rect
+                    x={toX(op.xOffset - casW)}
+                    y={toY(op.yOffset + op.height + casW)}
+                    width={op.width + 2 * casW}
+                    height={op.height + casW}
+                    fill={op.frameColor ?? '#f0ede4'}
+                    stroke="#666" strokeWidth={0.5}
+                  />
+                  {/* Slab */}
+                  <rect
+                    x={toX(slabX)} y={toY(slabTopY)}
+                    width={slabW} height={slabTopY - slabBotY}
+                    fill={op.doorColor ?? '#e0dedd'}
+                    stroke="#444" strokeWidth={0.5}
+                  />
+                  {/* Handle at 36" from floor */}
+                  <circle
+                    cx={toX(slabX + slabW - 2.75)} cy={toY(36)} r={1.1}
+                    fill="#B8B8B0" stroke="#222" strokeWidth={0.3}
+                  />
+                  {hitRect}
+                </g>
+              )
+            }
+            return (
+              <g key={op.id}>
+                <rect
+                  x={toX(op.xOffset)} y={toY(op.yOffset + op.height)}
+                  width={op.width} height={op.height}
+                  fill="#f4f4f2" stroke="#aaa" strokeWidth={0.5}
+                  style={draggable ? { cursor: 'move' } : undefined}
+                  onMouseDown={draggable ? (e => onOpeningDown(e, op)) : undefined}
+                  onClick={draggable ? (e => e.stopPropagation()) : undefined}
+                />
+              </g>
+            )
+          })}
+
+          {/* Opening resize handles — top-left & top-right, only on selected door/window */}
+          {wall.openings
+            .filter(op => (op.type === 'door' || op.type === 'window') && op.id === selectedOpeningId)
+            .map(op => {
+              const left  = toX(op.xOffset)
+              const right = toX(op.xOffset + op.width)
+              const top   = toY(op.yOffset + op.height)
+              const corners: [0 | 1, number, number][] = [
+                [0, left, top], [1, right, top],
+              ]
+              return (
+                <g key={`dh-${op.id}`}>
+                  {corners.map(([c, cx, cy]) => (
+                    <circle key={c} cx={cx} cy={cy} r={2.4}
+                      fill="#fff" stroke="#44aaff" strokeWidth={0.8}
+                      style={{ cursor: c === 0 ? 'nwse-resize' : 'nesw-resize' }}
+                      onMouseDown={e => onOpeningCornerDown(e, op, c)}
+                      onClick={e => e.stopPropagation()}
+                    />
+                  ))}
+                </g>
+              )
+            })}
+
 
           {/* All wall elements clipped to wall face */}
           <g clipPath="url(#wall-face-clip)">
@@ -1355,13 +1554,14 @@ export default function WallElevationView() {
             // ── Horizontal breakpoints (along wall) ─────────────────────────
             // Use interior face edges so corner stubs don't create phantom gaps
             const { leftEdge, rightEdge } = getWallEdges()
-            const hasItems = wallCabinets.length > 0 || wallPanels.length > 0
+            const wallDoors = wall.openings.filter(op => op.type === 'door')
+            const hasItems = wallCabinets.length > 0 || wallPanels.length > 0 || wallDoors.length > 0
             const hBreaks = new Set<number>()
             // Only use interior face edges when there are items to dimension
             hBreaks.add(hasItems ? leftEdge : 0)
             hBreaks.add(hasItems ? rightEdge : wLen)
-            // Cabinet tier: breakpoints from cabinets only. Each segment is
-            // either a cabinet span or a gap between them.
+            // Cabinet + door tier breakpoints. Each segment is classified by
+            // what spans it: cab / door / gap.
             type Range = { start: number; end: number }
             const cabRanges: Range[] = []
             wallCabinets.forEach(cab => {
@@ -1371,10 +1571,21 @@ export default function WallElevationView() {
               hBreaks.add(s); hBreaks.add(e)
               cabRanges.push({ start: s, end: e })
             })
+            const doorRanges: Range[] = []
+            wallDoors.forEach(op => {
+              const ext = op.modelId === 'custom-plain' ? 2.5 : 0
+              const s = Math.max(leftEdge, op.xOffset - ext)
+              const e = Math.min(rightEdge, op.xOffset + op.width + ext)
+              if (e - s > 0.5) {
+                hBreaks.add(s); hBreaks.add(e)
+                doorRanges.push({ start: s, end: e })
+              }
+            })
             const hSorted = [...hBreaks].sort((a, b) => a - b)
             const hasHSegs = hSorted.length > 2
-            const classifySeg = (start: number, end: number): 'cab' | 'gap' => {
+            const classifySeg = (start: number, end: number): 'cab' | 'door' | 'gap' => {
               const mid = (start + end) / 2
+              for (const r of doorRanges) if (mid >= r.start - 0.1 && mid <= r.end + 0.1) return 'door'
               for (const r of cabRanges) if (mid >= r.start - 0.1 && mid <= r.end + 0.1) return 'cab'
               return 'gap'
             }
@@ -1400,6 +1611,7 @@ export default function WallElevationView() {
             const TIER_COLOR = {
               overall: '#333',
               cab:     '#333',
+              door:    '#b22',
               slat:    '#1d6f3d',
               ct:      '#8a6a3a',
               bb:      '#555',
@@ -1529,11 +1741,11 @@ export default function WallElevationView() {
                 const segPx = y2 - y1
                 const kind = classifyVSeg(bot, top)
                 const color = TIER_COLOR[kind]
-                const prefix = kind === 'cab' ? 'CAB ' : kind === 'ct' ? 'CT ' : kind === 'bb' ? 'BB ' : ''
+                const prefix = kind === 'cab' ? 'CAB ' : kind === 'door' ? 'DOOR ' : kind === 'ct' ? 'CT ' : kind === 'bb' ? 'BB ' : ''
                 const labelText = `${prefix}${inchesToDisplay(top - bot)}`
-                // Skip labels on plain gap segments — baseboards and other
-                // recognized parts (cab/ct/bb) still get labels.
-                const showLabel = kind !== 'gap'
+                // Show labels on all vertical segments including gaps, so empty
+                // space above/below/between cabinets is clearly dimensioned.
+                const showLabel = true
                 const needed = labelText.length * fontSize * 0.55
                 const inline = segPx > needed + 2
                 const fitSize = inline ? Math.min(fontSize, segPx * 0.55) : fontSize
@@ -1626,7 +1838,7 @@ export default function WallElevationView() {
                 const fitSize = Math.max(2, Math.min(fontSize, segPx * 0.55))
                 const kind = classifySeg(start, end)
                 const color = TIER_COLOR[kind]
-                const prefix = kind === 'cab' ? 'CAB ' : ''
+                const prefix = kind === 'cab' ? 'CAB ' : kind === 'door' ? 'DOOR ' : ''
                 const showLabel = true
                 return (
                   <g key={`hs${i}`}>

@@ -9,7 +9,6 @@ import { wallTextures, doorTextures, texturePath } from '../data/textureCatalog'
 import { flooringColors, flooringTexturePath } from '../data/flooringColors'
 import type { ImportedAsset } from '../store/garageStore'
 import { getModelsForType } from '../data/openingModels'
-import type { OpeningModelType } from '../data/openingModels'
 import { SLATWALL_ACCESSORIES } from '../data/slatwallAccessories'
 import { IconDelete, IconDuplicate } from './Icons'
 import ConfirmDialog from './ConfirmDialog'
@@ -54,7 +53,73 @@ const OPENING_LABELS: Record<string, string> = {
   'window': 'Window',
 }
 
-function WallEditor({ wall }: { wall: GarageWall }) {
+/** Large 2D preview tile for picking a door style. */
+function DoorStyleTile({ active, label, onClick, kind, doorColor, frameColor }: {
+  active: boolean
+  label: string
+  onClick: () => void
+  kind: 'flat' | 'plain'
+  doorColor?: string
+  frameColor?: string
+}) {
+  return (
+    <button
+      role="radio"
+      aria-checked={active}
+      aria-label={label}
+      title={label}
+      className={`door-style-tile${active ? ' active' : ''}`}
+      onClick={onClick}
+    >
+      <svg viewBox="0 0 40 56" className="door-style-svg" aria-hidden="true">
+        {/* Wall surround */}
+        <rect x="0" y="0" width="40" height="56" fill="#2a2e35" />
+        {kind === 'flat' ? (
+          <>
+            {/* Bare cut-out — dark void, no frame, no slab */}
+            <rect x="8" y="10" width="24" height="46" fill="#0a0d12" />
+            <rect x="8" y="10" width="24" height="46" fill="none" stroke="rgba(0,0,0,0.5)" strokeWidth="0.4" />
+          </>
+        ) : (
+          <>
+            {/* Casing / frame — inverted "U" hugging three sides of the opening */}
+            <path
+              d="M3 5 L37 5 L37 56 L33 56 L33 9 L7 9 L7 56 L3 56 Z"
+              fill={frameColor ?? '#f0ede4'}
+              stroke="rgba(0,0,0,0.35)"
+              strokeWidth="0.5"
+              strokeLinejoin="miter"
+            />
+            {/* Soft shadow where the head casing meets the slab */}
+            <rect x="7.5" y="9" width="25" height="1.5" fill="rgba(0,0,0,0.15)" />
+            {/* Slab */}
+            <rect x="8" y="10" width="24" height="46" fill={doorColor ?? '#e0dedd'} />
+            {/* Slab edge shading for depth */}
+            <rect x="8" y="10" width="24" height="46" fill="none" stroke="rgba(0,0,0,0.28)" strokeWidth="0.4" />
+            <rect x="8.8" y="10.8" width="22.4" height="44.4" fill="none" stroke="rgba(0,0,0,0.08)" strokeWidth="0.3" />
+            {/* Hinges on the left slab edge */}
+            <rect x="7.7" y="14.5" width="1.2" height="2.8" fill="#555" opacity="0.75" />
+            <rect x="7.7" y="32"   width="1.2" height="2.8" fill="#555" opacity="0.75" />
+            <rect x="7.7" y="49.5" width="1.2" height="2.8" fill="#555" opacity="0.75" />
+            {/* Handle: rose + lever in satin nickel */}
+            <rect x="24" y="34.1" width="4.2" height="1.3" rx="0.4" fill="#B8B8B0" />
+            <circle cx="28.6" cy="34.75" r="1.6" fill="#B8B8B0" stroke="rgba(0,0,0,0.35)" strokeWidth="0.25" />
+            <circle cx="28.6" cy="34.75" r="0.6" fill="rgba(0,0,0,0.25)" />
+          </>
+        )}
+        {/* Floor line at bottom of tile for grounding */}
+        <line x1="0" y1="55.7" x2="40" y2="55.7" stroke="rgba(0,0,0,0.5)" strokeWidth="0.6" />
+      </svg>
+      <span className="door-style-label">{label}</span>
+    </button>
+  )
+}
+
+function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
+  wall: GarageWall
+  expandedWallId: string | null
+  setExpandedWallId: (id: string | null) => void
+}) {
   const {
     updateWall, deleteWall, selectWall, duplicateWall, selectedWallId,
     addOpening, updateOpening, removeOpening,
@@ -74,7 +139,8 @@ function WallEditor({ wall }: { wall: GarageWall }) {
     const cx = (w.x1 + w.x2) / 2, cz = (w.z1 + w.z2) / 2
     let nx = -uz, nz = ux
     if (cx * nx + cz * nz > 0) { nx = -nx; nz = -nz }
-    const inset = w.thickness / 2 + 0.5
+    // wall thickness/2 + baseboard thickness/2 → inner face flush with wall surface.
+    const inset = w.thickness / 2 + 0.25
     addBaseboard({
       x: cx + nx * inset,
       z: cz + nz * inset,
@@ -110,9 +176,12 @@ function WallEditor({ wall }: { wall: GarageWall }) {
   const wallPanels = slatwallPanels.filter(p => p.wallId === wall.id)
   const wallBacksplashes = stainlessBacksplashPanels.filter(p => p.wallId === wall.id)
   const selected = selectedWallId === wall.id
+  // Detail section stays open even after the wall is deselected in the scene;
+  // it only closes when another wall is expanded or the user toggles it off.
+  const expanded = expandedWallId === wall.id
   const len = wallLengthIn(wall.x1, wall.z1, wall.x2, wall.z2)
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const wallScrollRef = useScrollToSelected<HTMLDivElement>(selected)
+  const wallScrollRef = useScrollToSelected<HTMLDivElement>(expanded)
   const slatwallRef = useRef<HTMLDivElement>(null)
   const backsplashRef = useRef<HTMLDivElement>(null)
   const hasSlatwallSelected = wallPanels.some(p => p.id === selectedSlatwallPanelId)
@@ -149,8 +218,13 @@ function WallEditor({ wall }: { wall: GarageWall }) {
   return (
     <div
       ref={wallScrollRef}
-      className={`wall-item ${selected ? 'selected' : ''}`}
-      onClick={() => selectWall(wall.id)}
+      className={`wall-item ${selected ? 'selected' : ''}${expanded ? ' expanded' : ''}`}
+      onClick={() => {
+        // Toggle detail when tapping an already-expanded card; otherwise
+        // expand this one and make it the scene selection.
+        if (expanded) setExpandedWallId(null)
+        else { setExpandedWallId(wall.id); selectWall(wall.id) }
+      }}
     >
       <div className="wall-header">
         <input
@@ -171,7 +245,7 @@ function WallEditor({ wall }: { wall: GarageWall }) {
         </div>
       </div>
 
-      {selected && (
+      {expanded && (
         <div className="wall-detail" onClick={e => e.stopPropagation()}>
 
           {/* Dimensions — always visible at the top of the wall card. */}
@@ -309,11 +383,11 @@ function WallEditor({ wall }: { wall: GarageWall }) {
                       <MeasureInput label="Offset" inches={op.xOffset} onChange={v => updateOpening(wall.id, op.id, { xOffset: v })} min={0} />
                     )}
                   </div>
-                  {/* Door / garage-door texture picker */}
-                  {(op.type === 'door' || op.type === 'garage-door') && (
+                  {/* Garage-door texture picker (regular doors use slab/frame colors instead) */}
+                  {op.type === 'garage-door' && (
                     <div style={{ marginTop: 6 }}>
                       <span className="coord-label">Texture</span>
-                      <div className="slat-color-row" role="radiogroup" aria-label="Door texture" style={{ flexWrap: 'wrap', gap: 4 }}>
+                      <div className="slat-color-row" role="radiogroup" aria-label="Garage door texture" style={{ flexWrap: 'wrap', gap: 4 }}>
                         <button
                           role="radio"
                           aria-checked={!op.textureId}
@@ -345,26 +419,46 @@ function WallEditor({ wall }: { wall: GarageWall }) {
                     </div>
                   )}
 
-                  {/* 3D Model picker for doors and windows */}
-                  {(op.type === 'door' || op.type === 'window') && (
+                  {/* Style picker for doors — 2D preview tiles showing door shape */}
+                  {op.type === 'door' && (
+                    <div style={{ marginTop: 6 }}>
+                      <span className="coord-label">Style</span>
+                      <div className="door-style-row" role="radiogroup" aria-label="Door style">
+                        <DoorStyleTile
+                          active={!op.modelId}
+                          label="Open Doorway"
+                          onClick={() => updateOpening(wall.id, op.id, { modelId: undefined })}
+                          kind="flat"
+                        />
+                        <DoorStyleTile
+                          active={op.modelId === 'custom-plain'}
+                          label="Custom Plain"
+                          onClick={() => updateOpening(wall.id, op.id, { modelId: 'custom-plain' })}
+                          kind="plain"
+                          doorColor={op.doorColor ?? '#e0dedd'}
+                          frameColor={op.frameColor ?? '#f0ede4'}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 3D Model picker for windows only */}
+                  {op.type === 'window' && (
                     <div style={{ marginTop: 6 }}>
                       <span className="coord-label">3D Style</span>
-                      <div className="slat-color-row" role="radiogroup" aria-label="Opening 3D model" style={{ flexWrap: 'wrap', gap: 4 }}>
+                      <div className="slat-color-row" role="radiogroup" aria-label="Window 3D model" style={{ flexWrap: 'wrap', gap: 4 }}>
                         <button
                           role="radio"
                           aria-checked={!op.modelId}
                           className={`slat-color-swatch${!op.modelId ? ' active' : ''}`}
-                          style={{
-                            background: op.type === 'door' ? '#b8b4a8' : '#87CEEB',
-                            fontSize: 8, color: '#444', lineHeight: 1,
-                          }}
+                          style={{ background: '#87CEEB', fontSize: 8, color: '#444', lineHeight: 1 }}
                           aria-label="Default (flat panel)"
                           title="Flat Panel"
                           onClick={() => updateOpening(wall.id, op.id, { modelId: undefined })}
                         >
                           —
                         </button>
-                        {getModelsForType(op.type as OpeningModelType).map(m => (
+                        {getModelsForType('window').map(m => (
                           <button
                             key={m.id}
                             role="radio"
@@ -378,6 +472,46 @@ function WallEditor({ wall }: { wall: GarageWall }) {
                         ))}
                       </div>
                     </div>
+                  )}
+
+                  {/* Procedural door colors — door slab + frame (separate swatches) */}
+                  {op.type === 'door' && op.modelId === 'custom-plain' && (
+                    <>
+                      <div style={{ marginTop: 6 }}>
+                        <span className="coord-label">Door Color</span>
+                        <div className="slat-color-row" role="radiogroup" aria-label="Door color">
+                          {WALL_COLORS.map(c => (
+                            <button
+                              key={c.hex}
+                              role="radio"
+                              aria-checked={(op.doorColor ?? '#e0dedd') === c.hex}
+                              className={`slat-color-swatch${(op.doorColor ?? '#e0dedd') === c.hex ? ' active' : ''}`}
+                              style={{ background: c.hex }}
+                              aria-label={c.name}
+                              title={c.name}
+                              onClick={() => updateOpening(wall.id, op.id, { doorColor: c.hex })}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                      <div style={{ marginTop: 6 }}>
+                        <span className="coord-label">Frame Color</span>
+                        <div className="slat-color-row" role="radiogroup" aria-label="Frame color">
+                          {WALL_COLORS.map(c => (
+                            <button
+                              key={c.hex}
+                              role="radio"
+                              aria-checked={(op.frameColor ?? '#f0ede4') === c.hex}
+                              className={`slat-color-swatch${(op.frameColor ?? '#f0ede4') === c.hex ? ' active' : ''}`}
+                              style={{ background: c.hex }}
+                              aria-label={c.name}
+                              title={c.name}
+                              onClick={() => updateOpening(wall.id, op.id, { frameColor: c.hex })}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    </>
                   )}
                 </div>
               )
@@ -779,7 +913,14 @@ function BBSWRow({ isSel, onClick, children }: {
 }
 
 export default function WallPanel() {
-  const { walls, addWall, selectedSlatwallPanelId, ceilingHeight, setCeilingHeight } = useGarageStore()
+  const { walls, addWall, selectedSlatwallPanelId, selectedWallId, ceilingHeight, setCeilingHeight } = useGarageStore()
+  // Track which wall's detail section is expanded in the side panel. Starts
+  // in sync with the scene's selection, then persists even when the scene
+  // deselects (so clicking off a wall doesn't collapse the info dropdown).
+  const [expandedWallId, setExpandedWallId] = useState<string | null>(selectedWallId)
+  useEffect(() => {
+    if (selectedWallId) setExpandedWallId(selectedWallId)
+  }, [selectedWallId])
   return (
     <div className="wall-panel">
       <div className="ceiling-height-row">
@@ -793,7 +934,11 @@ export default function WallPanel() {
         <p className="empty-msg">No walls yet. Click "Add Wall" or set up dimensions.</p>
       )}
       <div className="wall-list">
-        {walls.map(w => <WallEditor key={w.id} wall={w} />)}
+        {walls.map(w => (
+          <WallEditor key={w.id} wall={w}
+            expandedWallId={expandedWallId}
+            setExpandedWallId={setExpandedWallId} />
+        ))}
       </div>
 
       {/* Always-visible baseboards & stem walls section, so selecting a piece

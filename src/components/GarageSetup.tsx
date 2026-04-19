@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useGarageStore } from '../store/garageStore'
+import { PATCH_NOTES } from '../data/patchNotes'
 import './GarageSetup.css'
 
 export default function GarageSetup() {
@@ -13,6 +14,40 @@ export default function GarageSetup() {
   const [heightFt,    setHeightFt]      = useState('9')
   const [errors, setErrors] = useState<Record<string, string>>({})
   const firstInputRef = useRef<HTMLInputElement>(null)
+
+  // Feedback form state
+  const [fbType, setFbType] = useState<'bug' | 'feature'>('bug')
+  const [fbText, setFbText] = useState('')
+  const [fbSubmitting, setFbSubmitting] = useState(false)
+  const [fbStatus, setFbStatus] = useState<{ kind: 'success' | 'error'; msg: string } | null>(null)
+
+  const LICENSE_SERVER = 'https://gl-license-server-production.up.railway.app'
+
+  const submitFeedback = async () => {
+    if (!fbText.trim() || fbSubmitting) return
+    setFbSubmitting(true)
+    setFbStatus(null)
+    try {
+      const res = await fetch(`${LICENSE_SERVER}/api/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: fbType,
+          message: fbText.trim(),
+          app_version: __APP_VERSION__,
+          customer_name: customerName || undefined,
+          consultant: consultant || undefined,
+        }),
+      })
+      if (!res.ok) throw new Error(`Server ${res.status}`)
+      setFbStatus({ kind: 'success', msg: 'Submitted — thank you!' })
+      setFbText('')
+    } catch (err) {
+      setFbStatus({ kind: 'error', msg: 'Could not send. Check your connection.' })
+    } finally {
+      setFbSubmitting(false)
+    }
+  }
 
   useEffect(() => { firstInputRef.current?.focus() }, [])
 
@@ -43,6 +78,7 @@ export default function GarageSetup() {
 
   return (
     <div className="setup-overlay">
+      <div className="setup-layout">
       <div className="setup-modal" role="dialog" aria-label="Project setup" onKeyDown={handleKeyDown}>
         <div className="setup-logo">
           <img
@@ -151,8 +187,60 @@ export default function GarageSetup() {
           </div>
         )}
       </div>
-      <div style={{ position: 'fixed', bottom: 14, right: 18, fontSize: 10, color: '#444' }}>
-        v{__APP_VERSION__}
+
+      <div className="setup-right-col">
+        <aside className="setup-patchnotes" aria-label="Release notes">
+          <div className="patchnotes-header">
+            <span className="patchnotes-title">Patch Notes</span>
+            <span className="patchnotes-version">v{__APP_VERSION__}</span>
+          </div>
+          <div className="patchnotes-body">
+            {PATCH_NOTES.slice(0, 5).map(rel => (
+              <div key={rel.version} className="patchnotes-release">
+                <div className="patchnotes-release-head">
+                  <span className="patchnotes-release-ver">v{rel.version}</span>
+                  <span className="patchnotes-release-date">{rel.date}</span>
+                </div>
+                <ul>
+                  {rel.items.map((it, i) => <li key={i}>{it}</li>)}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </aside>
+        <section className="setup-feedback" aria-label="Send feedback">
+          <div className="feedback-title">Send Feedback</div>
+          <div className="feedback-sub">Report a bug or request a feature.</div>
+          <select
+            className="feedback-type"
+            value={fbType}
+            onChange={e => setFbType(e.target.value as 'bug' | 'feature')}
+            aria-label="Feedback type"
+          >
+            <option value="bug">🐞 Bug Report</option>
+            <option value="feature">✨ Feature Request</option>
+          </select>
+          <textarea
+            className="feedback-textarea"
+            value={fbText}
+            onChange={e => setFbText(e.target.value)}
+            placeholder="Describe the issue or idea in as much detail as you'd like…"
+            aria-label="Feedback message"
+          />
+          <button
+            className="feedback-submit"
+            onClick={submitFeedback}
+            disabled={!fbText.trim() || fbSubmitting}
+          >
+            {fbSubmitting ? 'Sending…' : 'Submit'}
+          </button>
+          {fbStatus && (
+            <div className={`feedback-status ${fbStatus.kind}`} role="status">
+              {fbStatus.msg}
+            </div>
+          )}
+        </section>
+      </div>
       </div>
     </div>
   )

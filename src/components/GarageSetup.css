@@ -146,3 +146,215 @@
   border-color: var(--danger);
   box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15);
 }
+
+/* ── Layout (setup form + patch notes side by side) ─────────────────── */
+.setup-layout {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+  max-width: 96vw;
+}
+
+/* ── Patch notes panel ──────────────────────────────────────────────── */
+.setup-patchnotes {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg), 0 0 80px rgba(30, 90, 160, 0.08);
+  width: 340px;
+  max-width: 40vw;
+  max-height: 300px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: scaleIn 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ── Feedback panel (below patch notes) ─────────────────────────────── */
+.setup-right-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.setup-feedback {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg), 0 0 80px rgba(30, 90, 160, 0.08);
+  width: 340px;
+  max-width: 40vw;
+  padding: 16px 22px;
+  animation: scaleIn 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.feedback-title {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.3px;
+  margin-bottom: 4px;
+}
+.feedback-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+.feedback-type {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--text);
+  font-size: 12.5px;
+  outline: none;
+  margin-bottom: 10px;
+  cursor: pointer;
+}
+.feedback-type:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+.feedback-textarea {
+  width: 100%;
+  height: 100px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 12.5px;
+  outline: none;
+  resize: none;
+  overflow-y: auto;
+  font-family: inherit;
+  line-height: 1.4;
+}
+.feedback-textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+.feedback-textarea::-webkit-scrollbar { width: 6px; }
+.feedback-textarea::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+}
+.feedback-textarea::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+.feedback-submit {
+  width: 100%;
+  margin-top: 10px;
+  background: linear-gradient(135deg, #1e5a94, #2568aa);
+  color: #d0e4f4;
+  border: 1px solid rgba(42, 130, 245, 0.3);
+  border-radius: var(--radius-md);
+  padding: 10px;
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.feedback-submit:hover:not(:disabled) {
+  background: linear-gradient(135deg, #2568aa, #2d7bea);
+  color: #fff;
+}
+.feedback-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+.feedback-status {
+  font-size: 11px;
+  margin-top: 8px;
+  text-align: center;
+}
+.feedback-status.success { color: #4ade80; }
+.feedback-status.error   { color: var(--danger); }
+
+.patchnotes-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 18px 22px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.patchnotes-title {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.3px;
+}
+.patchnotes-version {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.patchnotes-body {
+  padding: 14px 22px 18px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.patchnotes-release {
+  margin-bottom: 18px;
+}
+.patchnotes-release:last-child {
+  margin-bottom: 0;
+}
+
+.patchnotes-release-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+.patchnotes-release-ver {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent, #5a9fe0);
+  letter-spacing: 0.4px;
+}
+.patchnotes-release-date {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.patchnotes-release ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.patchnotes-release li {
+  position: relative;
+  padding-left: 14px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text);
+}
+.patchnotes-release li::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 7px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  opacity: 0.55;
+}
+
+/* Scrollbar styling for patch notes */
+.patchnotes-body::-webkit-scrollbar {
+  width: 6px;
+}
+.patchnotes-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+}
+.patchnotes-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
