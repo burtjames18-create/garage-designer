@@ -3,6 +3,12 @@ import { useGarageStore, CABINET_PRESETS, COUNTERTOP_THICKNESS, COUNTERTOP_DEPTH
 import type { GarageWall, PlacedCabinet, SlatwallPanel, StainlessBacksplashPanel, Countertop, FloorStep, Baseboard, StemWall } from '../store/garageStore'
 import { slatwallColors } from '../data/slatwallColors'
 import { snapToGrid, inchesToDisplay } from '../utils/measurements'
+import {
+  wallLen, wallDir, wallNormal,
+  projectCabinet, isCabinetOnWall, cabinetWallSide,
+  projectCountertop, isCountertopOnWall,
+  getStepWallProjection,
+} from '../utils/wallGeometry'
 import { cabinetFrontPaths } from './CabinetFrontSVG'
 import './WallElevationView.css'
 import './Viewer3D.css'
@@ -10,131 +16,10 @@ import './Viewer3D.css'
 const PAD = 40  // SVG padding in wall-space inches — leaves room for dim tiers + corner stubs
 const SNAP_DIST = 2  // inches
 
-// ─── Geometry helpers ─────────────────────────────────────────────────────────
-
-function wallLen(w: GarageWall): number {
-  return Math.hypot(w.x2 - w.x1, w.z2 - w.z1)
-}
-
-function wallDir(w: GarageWall): [number, number] {
-  const len = wallLen(w)
-  if (len < 0.01) return [1, 0]
-  return [(w.x2 - w.x1) / len, (w.z2 - w.z1) / len]
-}
-
-function wallNormal(w: GarageWall): [number, number] {
-  const [dx, dz] = wallDir(w)
-  const n1: [number, number] = [-dz, dx]
-  const mx = (w.x1 + w.x2) / 2, mz = (w.z1 + w.z2) / 2
-  return (n1[0] * (-mx) + n1[1] * (-mz)) > 0 ? n1 : [dz, -dx]
-}
-
-function projectCabinet(cab: PlacedCabinet, w: GarageWall): { along: number; perp: number } {
-  const len = wallLen(w)
-  if (len < 0.01) return { along: 0, perp: 99999 }
-  const [dx, dz] = wallDir(w)
-  const vx = cab.x - w.x1, vz = cab.z - w.z1
-  return { along: vx * dx + vz * dz, perp: Math.abs(vx * (-dz) + vz * dx) }
-}
-
-function isCabinetOnWall(cab: PlacedCabinet, w: GarageWall, side?: 'interior' | 'exterior'): boolean {
-  const len = wallLen(w)
-  const { along, perp } = projectCabinet(cab, w)
-  if (perp > cab.d / 2 + w.thickness / 2 + 10) return false
-  if (along <= -cab.w / 2 || along >= len + cab.w / 2) return false
-  // Cabinet must be facing roughly perpendicular to this wall (within 45° of
-  // either face direction). Wall draw direction is arbitrary per-wall, so we
-  // accept either +normal or -normal; the side filter below picks correct one.
-  // Corner cabinets have TWO 24" back walls (90° apart), so they're flush
-  // against two adjacent walls simultaneously — accept ±90° rotations too.
-  const [dx, dz] = wallDir(w)
-  const rotA = Math.atan2(-dz, dx)
-  const rotB = rotA + Math.PI
-  const angDiff = (target: number) => {
-    let d = Math.abs(cab.rotY - target) % (Math.PI * 2)
-    if (d > Math.PI) d = Math.PI * 2 - d
-    return d
-  }
-  const facesA = angDiff(rotA) < Math.PI / 4
-  const facesB = angDiff(rotB) < Math.PI / 4
-  let faces = facesA || facesB
-  if (!faces && cab.style === 'corner-upper') {
-    // Corner cabinets also attach at ±90° rotations (other back wall)
-    const facesA90p = angDiff(rotA + Math.PI / 2) < Math.PI / 4
-    const facesA90n = angDiff(rotA - Math.PI / 2) < Math.PI / 4
-    faces = facesA90p || facesA90n
-  }
-  if (!faces) return false
-  if (side) {
-    // Side filter: 'interior' = side facing into garage (use cabinetWallSide
-    // which resolves it the same way for consistency).
-    const cabSide = cabinetWallSide(cab, w)
-    if (cabSide !== side) return false
-  }
-  return true
-}
-
-/** Which side of a wall a cabinet faces */
-function cabinetWallSide(cab: PlacedCabinet, w: GarageWall): 'interior' | 'exterior' {
-  // Corner cabinets always sit INSIDE a wall corner with their body on the
-  // interior side of both adjacent walls — classify as interior.
-  if (cab.style === 'corner-upper') return 'interior'
-  const [dx, dz] = wallDir(w)
-  const intRotY = Math.atan2(-dz, dx)
-  let diff = Math.abs(cab.rotY - intRotY) % (Math.PI * 2)
-  if (diff > Math.PI) diff = Math.PI * 2 - diff
-  return diff < Math.PI / 4 ? 'interior' : 'exterior'
-}
-
-function projectCountertop(ct: Countertop, w: GarageWall): { along: number; perp: number } {
-  const len = wallLen(w)
-  if (len < 0.01) return { along: 0, perp: 99999 }
-  const [dx, dz] = wallDir(w)
-  const vx = ct.x - w.x1, vz = ct.z - w.z1
-  return { along: vx * dx + vz * dz, perp: Math.abs(vx * (-dz) + vz * dx) }
-}
-
-function isCountertopOnWall(ct: Countertop, w: GarageWall): boolean {
-  const len = wallLen(w)
-  const { along, perp } = projectCountertop(ct, w)
-  return perp <= COUNTERTOP_DEPTH / 2 + w.thickness / 2 + 10 &&
-    along > -ct.width / 2 && along < len + ct.width / 2
-}
-
-/** Project a floor step onto a wall and return the along-wall range if adjacent */
-function getStepWallProjection(
-  step: FloorStep, w: GarageWall, tolerance = 6,
-): { alongStart: number; alongEnd: number; height: number } | null {
-  const len = wallLen(w)
-  if (len < 0.01) return null
-  const [ux, uz] = wallDir(w)
-  const nx = -uz, nz = ux
-
-  const corners = step.corners
-
-  let minU = Infinity, maxU = -Infinity
-  let minV = Infinity, maxV = -Infinity
-  for (const [px, pz] of corners) {
-    const u = (px - w.x1) * ux + (pz - w.z1) * uz
-    const v = (px - w.x1) * nx + (pz - w.z1) * nz
-    minU = Math.min(minU, u); maxU = Math.max(maxU, u)
-    minV = Math.min(minV, v); maxV = Math.max(maxV, v)
-  }
-
-  const halfThick = w.thickness / 2
-  if (maxV < -(halfThick + tolerance) || minV > halfThick + tolerance) return null
-
-  const u0 = Math.max(0, minU)
-  const u1 = Math.min(len, maxU)
-  if (u1 <= u0) return null
-
-  return { alongStart: u0, alongEnd: u1, height: step.height }
-}
-
 // ─── Drag state ───────────────────────────────────────────────────────────────
 
 interface SvgDrag {
-  type: 'panel-body' | 'panel-corner' | 'backsplash-body' | 'backsplash-corner' | 'cabinet' | 'countertop' | 'opening-body' | 'opening-corner'
+  type: 'panel-body' | 'panel-corner' | 'backsplash-body' | 'backsplash-corner' | 'cabinet' | 'countertop' | 'opening-body' | 'opening-corner' | 'bb-body' | 'bb-edge' | 'sw-body' | 'sw-edge'
   id: string
   corner?: 0 | 1 | 2 | 3
   moved: boolean  // becomes true once pointer moves past click threshold
@@ -159,6 +44,13 @@ interface SvgDrag {
   startWidth?: number
   startOpYOffset?: number
   startOpHeight?: number
+  // Baseboard / stem-wall drag fields
+  startBbAlong?: number   // along-wall center at drag start
+  startBbX?: number
+  startBbZ?: number
+  startBbY?: number       // bottom Y
+  startBbLength?: number
+  bbEdge?: 'left' | 'right'
 }
 
 // ─── Display colors ───────────────────────────────────────────────────────────
@@ -178,6 +70,8 @@ export default function WallElevationView() {
     addStainlessBacksplashPanel, deleteStainlessBacksplashPanel,
     updateCabinet, selectCabinet, selectedCabinetId, addCabinet, deleteCabinet,
     updateCountertop, selectCountertop, selectedCountertopId, addCountertop, deleteCountertop,
+    updateBaseboard, selectBaseboard, selectedBaseboardId,
+    updateStemWall, selectStemWall, selectedStemWallId,
     updateOpening, selectWall,
     elevationSide, setElevationSide,
     snappingEnabled, setSnappingEnabled,
@@ -209,7 +103,11 @@ export default function WallElevationView() {
   const wLen = wallLen(wall)
   const wH = wall.height
   // Compute baseboard projections onto this wall (for snap + dim breakpoints)
-  const wallBaseboards: { alongStart: number; alongEnd: number; y: number; height: number }[] = []
+  const wallBaseboards: { id: string; alongStart: number; alongEnd: number; y: number; height: number }[] = []
+  // Separate per-kind Y ranges for the vertical dim tier classifier.
+  const wallBbRanges: { bottom: number; top: number }[] = []
+  const wallSwRanges: { bottom: number; top: number }[] = []
+  const wallStepRanges: { bottom: number; top: number }[] = []
   for (const bb of baseboards) {
     const bux = Math.cos(bb.rotY), buz = -Math.sin(bb.rotY)
     const halfL = bb.length / 2
@@ -231,7 +129,8 @@ export default function WallElevationView() {
     }
     const u0 = Math.max(0, minU), u1 = Math.min(wLen, maxU)
     if (u1 - u0 < 0.5) continue
-    wallBaseboards.push({ alongStart: u0, alongEnd: u1, y: bb.y, height: bb.height })
+    wallBaseboards.push({ id: bb.id, alongStart: u0, alongEnd: u1, y: bb.y, height: bb.height })
+    wallBbRanges.push({ bottom: bb.y, top: bb.y + bb.height })
   }
   for (const sw of stemWalls) {
     const bux = Math.cos(sw.rotY), buz = -Math.sin(sw.rotY)
@@ -254,9 +153,15 @@ export default function WallElevationView() {
     }
     const u0 = Math.max(0, minU), u1 = Math.min(wLen, maxU)
     if (u1 - u0 < 0.5) continue
-    wallBaseboards.push({ alongStart: u0, alongEnd: u1, y: sw.y, height: sw.height })
+    wallBaseboards.push({ id: sw.id, alongStart: u0, alongEnd: u1, y: sw.y, height: sw.height })
+    wallSwRanges.push({ bottom: sw.y, top: sw.y + sw.height })
   }
-  const bbH = 0  // legacy — individual baseboard heights used via wallBaseboards
+  // Step-ups attached to this wall contribute height ranges (0 → step height).
+  for (const step of floorSteps) {
+    const proj = getStepWallProjection(step, wall)
+    if (!proj) continue
+    wallStepRanges.push({ bottom: 0, top: proj.height })
+  }
   const svgW = wLen + 2 * PAD
   const hasAnySlatwall = slatwallPanels.some(p => p.wallId === wall.id && (p.alongEnd - p.alongStart) >= 1)
   const svgH = wH + 2 * PAD + (hasAnySlatwall ? 20 : 0)
@@ -375,6 +280,25 @@ export default function WallElevationView() {
       snaps.push({ target: leftSide  - halfW, forEdge: 'right' })  // right edge → opening left
       snaps.push({ target: leftSide  + halfW, forEdge: 'left' })   // align left edges
       snaps.push({ target: rightSide - halfW, forEdge: 'right' })  // align right edges
+    }
+
+    // Baseboards & stem walls on this wall — butt-up and edge-align.
+    for (const wb of wallBaseboards) {
+      if (wb.id === selfId) continue
+      snaps.push({ target: wb.alongEnd + halfW,   forEdge: 'left' })   // our left → their right (butt)
+      snaps.push({ target: wb.alongStart - halfW, forEdge: 'right' })  // our right → their left
+      snaps.push({ target: wb.alongStart + halfW, forEdge: 'left' })   // align left edges
+      snaps.push({ target: wb.alongEnd - halfW,   forEdge: 'right' })  // align right edges
+    }
+
+    // Step-up along-wall edges — piece ends align with step left/right.
+    for (const step of floorSteps) {
+      const proj = getStepWallProjection(step, wall)
+      if (!proj) continue
+      snaps.push({ target: proj.alongEnd + halfW,   forEdge: 'left' })
+      snaps.push({ target: proj.alongStart - halfW, forEdge: 'right' })
+      snaps.push({ target: proj.alongStart + halfW, forEdge: 'left' })
+      snaps.push({ target: proj.alongEnd - halfW,   forEdge: 'right' })
     }
 
     return { snaps, leftEdge, rightEdge }
@@ -706,6 +630,35 @@ export default function WallElevationView() {
     }
   }
 
+  // Shared pointerdown for baseboard OR stem wall (body or edge).
+  const onPieceDown = (
+    e: React.MouseEvent,
+    piece: { id: string; x: number; z: number; rotY: number; length: number; y: number; locked?: boolean },
+    kind: 'bb' | 'sw',
+    edge?: 'left' | 'right',
+  ) => {
+    e.stopPropagation()
+    // Select immediately so the blue resize handles become visible even before
+    // the user lets go of the mouse.
+    if (kind === 'bb') selectBaseboard(piece.id)
+    else selectStemWall(piece.id)
+    if (piece.locked) return
+    const pt = getSvgPt(e)
+    if (!pt) return
+    // Project the piece's center onto the wall's along-axis.
+    const vx = piece.x - wall.x1, vz = piece.z - wall.z1
+    const along = vx * dx + vz * dz
+    dragRef.current = {
+      type: edge ? (kind === 'bb' ? 'bb-edge' : 'sw-edge') : (kind === 'bb' ? 'bb-body' : 'sw-body'),
+      id: piece.id, moved: false,
+      startSvgX: pt.x, startSvgY: pt.y,
+      startBbAlong: along,
+      startBbX: piece.x, startBbZ: piece.z, startBbY: piece.y,
+      startBbLength: piece.length,
+      bbEdge: edge,
+    }
+  }
+
   // ── Mouse move ─────────────────────────────────────────────────────────────
 
   const onMouseMove = (e: React.MouseEvent) => {
@@ -929,6 +882,56 @@ export default function WallElevationView() {
         })
       }
     }
+
+    // ── Baseboard / stem-wall body drag (slide along wall + vertical Y) ────
+    if (drag.type === 'bb-body' || drag.type === 'sw-body') {
+      const isBb = drag.type === 'bb-body'
+      const piece = isBb
+        ? baseboards.find(b => b.id === drag.id)
+        : stemWalls.find(s => s.id === drag.id)
+      if (!piece) return
+      const halfL = drag.startBbLength! / 2
+      const rawAlong = drag.startBbAlong! + dAlong
+      // Snap to wall edges, other pieces, openings, cabinets, steps, etc.
+      const snappedAlong = findBestAlong(rawAlong, halfL, drag.id)
+      const newCenter = Math.max(halfL, Math.min(wLen - halfL, snappedAlong))
+      const delta = newCenter - drag.startBbAlong!
+      const rawY = drag.startBbY! + dHeight
+      const snappedY = findBestY(rawY, piece.height, drag.id, newCenter, halfL)
+      const newY = Math.max(0, Math.min(wH - piece.height, snappedY))
+      const update = { x: drag.startBbX! + dx * delta, z: drag.startBbZ! + dz * delta, y: newY }
+      if (isBb) updateBaseboard(drag.id, update)
+      else updateStemWall(drag.id, update)
+    }
+
+    // ── Baseboard / stem-wall edge resize ──────────────────────────────────
+    if (drag.type === 'bb-edge' || drag.type === 'sw-edge') {
+      const isBb = drag.type === 'bb-edge'
+      const piece = isBb
+        ? baseboards.find(b => b.id === drag.id)
+        : stemWalls.find(s => s.id === drag.id)
+      if (!piece) return
+      const side = drag.bbEdge!
+      // Fixed end stays put; opposite end tracks the cursor.
+      const startCenter = drag.startBbAlong!
+      const startLen = drag.startBbLength!
+      const fixedEnd = side === 'left' ? startCenter + startLen / 2 : startCenter - startLen / 2
+      const movingEndRaw = (side === 'left' ? startCenter - startLen / 2 : startCenter + startLen / 2) + dAlong
+      // Snap the moving edge to other pieces, wall edges, step edges, etc.
+      const snappedMoving = findBestEdge(movingEndRaw, drag.id, side)
+      // Clamp moving end to the wall span and enforce a 3" minimum length.
+      const clampedMoving = Math.max(0, Math.min(wLen, snappedMoving))
+      const newLen = Math.max(3, Math.abs(fixedEnd - clampedMoving))
+      const newCenter = side === 'left' ? fixedEnd - newLen / 2 : fixedEnd + newLen / 2
+      const delta = newCenter - startCenter
+      const update = {
+        length: Math.round(newLen * 4) / 4,
+        x: drag.startBbX! + dx * delta,
+        z: drag.startBbZ! + dz * delta,
+      }
+      if (isBb) updateBaseboard(drag.id, update)
+      else updateStemWall(drag.id, update)
+    }
   }
 
   const onMouseUp = () => {
@@ -939,6 +942,8 @@ export default function WallElevationView() {
       else if (drag.type === 'backsplash-body' || drag.type === 'backsplash-corner') selectStainlessBacksplashPanel(drag.id)
       else if (drag.type === 'cabinet') selectCabinet(drag.id)
       else if (drag.type === 'countertop') selectCountertop(drag.id)
+      else if (drag.type === 'bb-body' || drag.type === 'bb-edge') selectBaseboard(drag.id)
+      else if (drag.type === 'sw-body' || drag.type === 'sw-edge') selectStemWall(drag.id)
       else if (drag.type === 'opening-body' || drag.type === 'opening-corner') selectWall(wall.id)
     }
     dragRef.current = null
@@ -949,12 +954,13 @@ export default function WallElevationView() {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         selectSlatwallPanel(null); selectStainlessBacksplashPanel(null); selectCabinet(null); selectCountertop(null)
+        selectBaseboard(null); selectStemWall(null)
         setSelectedOpeningId(null)
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [selectSlatwallPanel, selectStainlessBacksplashPanel, selectCabinet, selectCountertop])
+  }, [selectSlatwallPanel, selectStainlessBacksplashPanel, selectCabinet, selectCountertop, selectBaseboard, selectStemWall])
 
   // Clear opening selection when switching walls
   useEffect(() => { setSelectedOpeningId(null) }, [wallIdx])
@@ -1097,7 +1103,7 @@ export default function WallElevationView() {
           onMouseMove={onMouseMove}
           onMouseUp={onMouseUp}
           onMouseLeave={onMouseUp}
-          onClick={() => { selectSlatwallPanel(null); selectCabinet(null); selectCountertop(null); setSelectedOpeningId(null) }}
+          onClick={() => { selectSlatwallPanel(null); selectCabinet(null); selectCountertop(null); selectBaseboard(null); selectStemWall(null); setSelectedOpeningId(null) }}
         >
           <defs>
             <clipPath id="wall-face-clip">
@@ -1210,12 +1216,50 @@ export default function WallElevationView() {
             if (perpDist > wall.thickness / 2 + bb.thickness + 6) return null
             const u0 = Math.max(0, minU), u1 = Math.min(wLen, maxU)
             if (u1 - u0 < 0.5) return null
+            const segW = u1 - u0
+            const cx = toX(u0) + segW / 2
+            const cy = toY(bb.y + bb.height) + bb.height / 2
+            const fs = Math.max(2.5, Math.min(5, Math.min(segW * 0.12, bb.height * 0.55)))
+            const isSel = selectedBaseboardId === bb.id
+            const EDGE_W = 3
             return (
-              <rect key={bb.id}
-                x={toX(u0)} y={toY(bb.y + bb.height)}
-                width={u1 - u0} height={bb.height}
-                fill={bb.color} stroke="#888" strokeWidth={0.4} opacity={0.7}
-              />
+              <g key={bb.id}>
+                <rect
+                  x={toX(u0)} y={toY(bb.y + bb.height)}
+                  width={segW} height={bb.height}
+                  fill={bb.color}
+                  stroke={isSel ? '#0090cc' : '#888'}
+                  strokeWidth={isSel ? 0.8 : 0.4}
+                  opacity={0.8}
+                  style={{ cursor: bb.locked ? 'not-allowed' : 'move' }}
+                  onMouseDown={e => onPieceDown(e, bb, 'bb')}
+                  onClick={e => e.stopPropagation()}
+                />
+                <text x={cx} y={cy}
+                  textAnchor="middle" dominantBaseline="middle"
+                  fill="#222" fontSize={fs} fontWeight={600}
+                  pointerEvents="none">
+                  {bb.label}
+                </text>
+                {isSel && !bb.locked && (<>
+                  <rect
+                    x={toX(u0) - EDGE_W / 2} y={toY(bb.y + bb.height)}
+                    width={EDGE_W} height={bb.height}
+                    fill="#0090cc" opacity={0.85} rx={0.8}
+                    style={{ cursor: 'ew-resize' }}
+                    onMouseDown={e => onPieceDown(e, bb, 'bb', 'left')}
+                    onClick={e => e.stopPropagation()}
+                  />
+                  <rect
+                    x={toX(u1) - EDGE_W / 2} y={toY(bb.y + bb.height)}
+                    width={EDGE_W} height={bb.height}
+                    fill="#0090cc" opacity={0.85} rx={0.8}
+                    style={{ cursor: 'ew-resize' }}
+                    onMouseDown={e => onPieceDown(e, bb, 'bb', 'right')}
+                    onClick={e => e.stopPropagation()}
+                  />
+                </>)}
+              </g>
             )
           })}
           {/* Stem walls — same projection as baseboards */}
@@ -1240,12 +1284,50 @@ export default function WallElevationView() {
             if (perpDist > wall.thickness / 2 + sw.thickness + 6) return null
             const u0 = Math.max(0, minU), u1 = Math.min(wLen, maxU)
             if (u1 - u0 < 0.5) return null
+            const segW = u1 - u0
+            const cx = toX(u0) + segW / 2
+            const cy = toY(sw.y + sw.height) + sw.height / 2
+            const fs = Math.max(2.5, Math.min(5, Math.min(segW * 0.12, sw.height * 0.55)))
+            const isSel = selectedStemWallId === sw.id
+            const EDGE_W = 3
             return (
-              <rect key={sw.id}
-                x={toX(u0)} y={toY(sw.y + sw.height)}
-                width={u1 - u0} height={sw.height}
-                fill={sw.color} stroke="#888" strokeWidth={0.4} opacity={0.7}
-              />
+              <g key={sw.id}>
+                <rect
+                  x={toX(u0)} y={toY(sw.y + sw.height)}
+                  width={segW} height={sw.height}
+                  fill={sw.color}
+                  stroke={isSel ? '#0090cc' : '#888'}
+                  strokeWidth={isSel ? 0.8 : 0.4}
+                  opacity={0.8}
+                  style={{ cursor: sw.locked ? 'not-allowed' : 'move' }}
+                  onMouseDown={e => onPieceDown(e, sw, 'sw')}
+                  onClick={e => e.stopPropagation()}
+                />
+                <text x={cx} y={cy}
+                  textAnchor="middle" dominantBaseline="middle"
+                  fill="#222" fontSize={fs} fontWeight={600}
+                  pointerEvents="none">
+                  {sw.label}
+                </text>
+                {isSel && !sw.locked && (<>
+                  <rect
+                    x={toX(u0) - EDGE_W / 2} y={toY(sw.y + sw.height)}
+                    width={EDGE_W} height={sw.height}
+                    fill="#0090cc" opacity={0.85} rx={0.8}
+                    style={{ cursor: 'ew-resize' }}
+                    onMouseDown={e => onPieceDown(e, sw, 'sw', 'left')}
+                    onClick={e => e.stopPropagation()}
+                  />
+                  <rect
+                    x={toX(u1) - EDGE_W / 2} y={toY(sw.y + sw.height)}
+                    width={EDGE_W} height={sw.height}
+                    fill="#0090cc" opacity={0.85} rx={0.8}
+                    style={{ cursor: 'ew-resize' }}
+                    onMouseDown={e => onPieceDown(e, sw, 'sw', 'right')}
+                    onClick={e => e.stopPropagation()}
+                  />
+                </>)}
+              </g>
             )
           })}
 
@@ -1615,6 +1697,8 @@ export default function WallElevationView() {
               slat:    '#1d6f3d',
               ct:      '#8a6a3a',
               bb:      '#555',
+              sw:      '#2d5a8a',
+              step:    '#7a6a3a',
               gap:     '#888',
             }
 
@@ -1659,8 +1743,6 @@ export default function WallElevationView() {
             // and a baseboard segment at floor level if the wall has a baseboard.
             const vBreaks = new Set<number>()
             vBreaks.add(0); vBreaks.add(wH)
-            // Add baseboard top as a breakpoint so it gets its own labeled segment.
-            if (bbH > 0) vBreaks.add(bbH)
             const cabVRanges: Array<{ bottom: number; top: number }> = []
             wallCabinets.forEach(cab => {
               const b = Math.max(0, cab.y)
@@ -1678,17 +1760,23 @@ export default function WallElevationView() {
               vBreaks.add(b); vBreaks.add(t)
               ctVRanges.push({ bottom: b, top: t })
             })
+            // Baseboard / stem-wall / step-up vertical ranges on this wall.
+            wallBbRanges.forEach(r => { vBreaks.add(Math.max(0, r.bottom)); vBreaks.add(Math.min(wH, r.top)) })
+            wallSwRanges.forEach(r => { vBreaks.add(Math.max(0, r.bottom)); vBreaks.add(Math.min(wH, r.top)) })
+            wallStepRanges.forEach(r => { vBreaks.add(Math.max(0, r.bottom)); vBreaks.add(Math.min(wH, r.top)) })
             const vSorted = [...vBreaks].sort((a, b) => a - b)
             const hasVSegs = vSorted.length > 2
-            // Classify in priority: cab > ct > bb > gap.
-            const classifyVSeg = (bot: number, top: number): 'cab' | 'ct' | 'bb' | 'gap' => {
-              for (const r of cabVRanges) {
-                if (Math.abs(bot - r.bottom) < 0.1 && Math.abs(top - r.top) < 0.1) return 'cab'
-              }
-              for (const r of ctVRanges) {
-                if (Math.abs(bot - r.bottom) < 0.1 && Math.abs(top - r.top) < 0.1) return 'ct'
-              }
-              if (bbH > 0 && Math.abs(bot) < 0.1 && Math.abs(top - bbH) < 0.1) return 'bb'
+            // Classify in priority: cab > ct > step > bb > sw > gap. Step ranks
+            // above bb/sw so if they share a height band the label still reads
+            // as the underlying step-up (which is what matters structurally).
+            const classifyVSeg = (bot: number, top: number): 'cab' | 'ct' | 'step' | 'bb' | 'sw' | 'gap' => {
+              const match = (r: { bottom: number; top: number }) =>
+                Math.abs(bot - r.bottom) < 0.1 && Math.abs(top - r.top) < 0.1
+              for (const r of cabVRanges)  if (match(r)) return 'cab'
+              for (const r of ctVRanges)   if (match(r)) return 'ct'
+              for (const r of wallStepRanges) if (match(r)) return 'step'
+              for (const r of wallBbRanges) if (match(r)) return 'bb'
+              for (const r of wallSwRanges) if (match(r)) return 'sw'
               return 'gap'
             }
 
@@ -1741,7 +1829,7 @@ export default function WallElevationView() {
                 const segPx = y2 - y1
                 const kind = classifyVSeg(bot, top)
                 const color = TIER_COLOR[kind]
-                const prefix = kind === 'cab' ? 'CAB ' : kind === 'door' ? 'DOOR ' : kind === 'ct' ? 'CT ' : kind === 'bb' ? 'BB ' : ''
+                const prefix = kind === 'cab' ? 'CAB ' : kind === 'door' ? 'DOOR ' : kind === 'ct' ? 'CT ' : kind === 'bb' ? 'BB ' : kind === 'sw' ? 'SW ' : kind === 'step' ? 'STEP ' : ''
                 const labelText = `${prefix}${inchesToDisplay(top - bot)}`
                 // Show labels on all vertical segments including gaps, so empty
                 // space above/below/between cabinets is clearly dimensioned.

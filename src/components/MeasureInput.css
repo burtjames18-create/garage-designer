@@ -55,3 +55,14 @@
 .measure-input.compact .measure-fields { gap: 3px; }
 .measure-input.compact .measure-in { width: 64px; }
 .measure-input.compact .measure-display { font-size: 10px; }
+
+.measure-input.disabled .measure-in {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--surface);
+}
+.measure-input.disabled .measure-label,
+.measure-input.disabled .measure-unit,
+.measure-input.disabled .measure-display {
+  opacity: 0.5;
+}

@@ -1,6 +1,7 @@
 import { useGarageStore, OVERHEAD_RACK_PRESETS } from '../store/garageStore'
 import { useScrollToSelected } from '../hooks/useScrollToSelected'
 import MeasureInput from './MeasureInput'
+import { IconLocked, IconUnlocked, IconRotate } from './Icons'
 import './OverheadRacksPanel.css'
 
 /** Tiny top-down SVG thumbnail showing the rack proportions */
@@ -26,9 +27,9 @@ function RackThumb({ width, length }: { width: number; length: number }) {
   )
 }
 
-function RackItem({ rack, isSel, onSelect, onDelete }: {
-  rack: { id: string; label: string }; isSel: boolean
-  onSelect: () => void; onDelete: () => void
+function RackItem({ rack, isSel, onSelect, onDelete, onToggleLock, onRotate }: {
+  rack: { id: string; label: string; locked?: boolean }; isSel: boolean
+  onSelect: () => void; onDelete: () => void; onToggleLock: () => void; onRotate: () => void
 }) {
   const scrollRef = useScrollToSelected<HTMLDivElement>(isSel)
   return (
@@ -43,6 +44,20 @@ function RackItem({ rack, isSel, onSelect, onDelete }: {
       aria-selected={isSel}
     >
       <span className="list-item-label">{rack.label}</span>
+      <button
+        className={`step-lock-btn${rack.locked ? ' locked' : ''}`}
+        onClick={e => { e.stopPropagation(); onToggleLock() }}
+        aria-label={rack.locked ? 'Unlock position' : 'Lock position'}
+      >
+        {rack.locked ? <IconLocked size={12} /> : <IconUnlocked size={12} />}
+      </button>
+      <button
+        className="step-lock-btn"
+        onClick={e => { e.stopPropagation(); onRotate() }}
+        aria-label="Rotate 90 degrees"
+      >
+        <IconRotate size={12} />
+      </button>
       <button
         className="delete-btn"
         onClick={e => { e.stopPropagation(); onDelete() }}
@@ -82,26 +97,19 @@ export default function OverheadRacksPanel() {
           {overheadRacks.map(rack => (
             <RackItem key={rack.id} rack={rack} isSel={selectedRackId === rack.id}
               onSelect={() => selectRack(selectedRackId === rack.id ? null : rack.id)}
-              onDelete={() => deleteRack(rack.id)} />
+              onDelete={() => deleteRack(rack.id)}
+              onToggleLock={() => updateRack(rack.id, { locked: !rack.locked })}
+              onRotate={() => updateRack(rack.id, { rotY: rack.rotY + Math.PI / 2 })} />
           ))}
         </>
       )}
 
       {sel && (
         <div className="field-group" style={{ marginTop: 10 }}>
-          <MeasureInput label="Ceiling Drop" inches={sel.drop} onChange={v => updateRack(sel.id, { drop: Math.max(1, Math.min(48, v)) })} min={1} max={48} />
+          <MeasureInput label="Ceiling Drop" inches={sel.drop} onChange={v => updateRack(sel.id, { drop: Math.max(1, Math.min(48, v)) })} min={1} max={48} disabled={sel.locked} />
           <p className="field-hint">Distance from ceiling to top of rack (1"–48")</p>
-          <MeasureInput label="Position X" inches={sel.x} onChange={v => updateRack(sel.id, { x: v })} min={-600} max={600} />
-          <MeasureInput label="Position Z" inches={sel.z} onChange={v => updateRack(sel.id, { z: v })} min={-600} max={600} />
-
-          <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-            <button className="action-btn" onClick={() => updateRack(sel.id, { rotY: sel.rotY + Math.PI / 2 })}>
-              Rotate 90°
-            </button>
-            <button className="action-btn" onClick={() => updateRack(sel.id, { locked: !sel.locked })}>
-              {sel.locked ? '🔒 Unlock' : '🔓 Lock'}
-            </button>
-          </div>
+          <MeasureInput label="Position X" inches={sel.x} onChange={v => updateRack(sel.id, { x: v })} min={-600} max={600} disabled={sel.locked} />
+          <MeasureInput label="Position Z" inches={sel.z} onChange={v => updateRack(sel.id, { z: v })} min={-600} max={600} disabled={sel.locked} />
 
           <div className="section-label" style={{ marginTop: 10 }}>Rack Color</div>
           <div className="color-grid" role="radiogroup" aria-label="Rack color">

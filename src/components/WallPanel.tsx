@@ -10,7 +10,11 @@ import { flooringColors, flooringTexturePath } from '../data/flooringColors'
 import type { ImportedAsset } from '../store/garageStore'
 import { getModelsForType } from '../data/openingModels'
 import { SLATWALL_ACCESSORIES } from '../data/slatwallAccessories'
-import { IconDelete, IconDuplicate } from './Icons'
+import { IconDelete, IconDuplicate, IconLocked, IconUnlocked } from './Icons'
+import TracingImageControls from './TracingImageControls'
+import { planWallFill, type FillStyle } from '../utils/cabinetFill'
+// BaseboardStemWallList below uses IconLocked/IconUnlocked too, so we just reuse
+// the imports already brought in for WallEditor.
 import ConfirmDialog from './ConfirmDialog'
 import { showToast } from './Toast'
 import './WallPanel.css'
@@ -127,7 +131,7 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
     slatwallAccessories, addSlatwallAccessory, deleteSlatwallAccessory,
     stainlessBacksplashPanels, addStainlessBacksplashPanel, updateStainlessBacksplashPanel, deleteStainlessBacksplashPanel, selectStainlessBacksplashPanel, selectedStainlessBacksplashPanelId,
     importedAssets,
-    addBaseboard, addStemWall, walls,
+    addBaseboard, addStemWall, addCabinet, walls,
   } = useGarageStore()
   // Spawn a default baseboard piece centered against the given wall's interior face.
   const addBaseboardForWall = (wallId: string) => {
@@ -201,12 +205,28 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
 
   const handleLengthChange = (newLen: number) => {
     if (newLen <= 0) return
+    if (wall.locked) return
     const dx = wall.x2 - wall.x1
     const dz = wall.z2 - wall.z1
     const curLen = Math.hypot(dx, dz)
     if (curLen === 0) return
     const ux = dx / curLen, uz = dz / curLen
-    updateWall(wall.id, { x2: wall.x1 + ux * newLen, z2: wall.z1 + uz * newLen })
+    // Keep the end connected to another wall fixed; move the free end.
+    // If both or neither are connected, default to moving (x2, z2).
+    const CONNECT = 2
+    const connectedAt = (x: number, z: number) =>
+      walls.some(o => o.id !== wall.id && (
+        Math.hypot(o.x1 - x, o.z1 - z) < CONNECT ||
+        Math.hypot(o.x2 - x, o.z2 - z) < CONNECT
+      ))
+    const end2Connected = connectedAt(wall.x2, wall.z2)
+    const end1Connected = connectedAt(wall.x1, wall.z1)
+    if (end2Connected && !end1Connected) {
+      // Keep (x2, z2) fixed; shorten/extend from the (x1, z1) side.
+      updateWall(wall.id, { x1: wall.x2 - ux * newLen, z1: wall.z2 - uz * newLen })
+    } else {
+      updateWall(wall.id, { x2: wall.x1 + ux * newLen, z2: wall.z1 + uz * newLen })
+    }
   }
 
   const handleDeleteConfirm = () => {
@@ -236,6 +256,11 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
         />
         <span className="wall-length">{inchesToDisplay(len)}</span>
         <div className="wall-actions">
+          <button
+            className={`wall-lock-btn${wall.locked ? ' locked' : ''}`}
+            aria-label={wall.locked ? 'Unlock position' : 'Lock position'}
+            onClick={e => { e.stopPropagation(); updateWall(wall.id, { locked: !wall.locked }) }}
+          >{wall.locked ? <IconLocked size={12} /> : <IconUnlocked size={12} />}</button>
           <button aria-label={`Duplicate ${wall.label}`} onClick={e => { e.stopPropagation(); duplicateWall(wall.id) }}>
             <IconDuplicate size={12} />
           </button>
@@ -250,15 +275,18 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
 
           {/* Dimensions — always visible at the top of the wall card. */}
           <div className="dim-grid" style={{ marginBottom: 10 }}>
-            <MeasureInput label="Length" inches={len} onChange={handleLengthChange} min={1} max={9999} />
-            <MeasureInput label="Height" inches={wall.height} onChange={v => updateWall(wall.id, { height: v })} min={12} max={360} />
-            <MeasureInput label="Thickness" inches={wall.thickness} onChange={v => updateWall(wall.id, { thickness: v })} min={1} max={24} />
+            <MeasureInput label="Length" inches={len} onChange={handleLengthChange} min={1} max={9999} disabled={wall.locked} />
+            <MeasureInput label="Height" inches={wall.height} onChange={v => updateWall(wall.id, { height: v })} min={12} max={360} disabled={wall.locked} />
+            <MeasureInput label="Thickness" inches={wall.thickness} onChange={v => updateWall(wall.id, { thickness: v })} min={1} max={24} disabled={wall.locked} />
           </div>
 
-          {/* Quick-add buttons for baseboard / stem wall pieces. Always visible
-             under the dimensions. The piece list / editor lives at the bottom
-             of the Walls tab so it works regardless of which wall is open. */}
-          <div className="stem-wall-texture-row" style={{ marginBottom: 10, gap: 6, flexWrap: 'wrap' }}>
+          {/* Quick-access buttons — visibility toggle plus piece quick-adds. */}
+          <div className="stem-wall-texture-row" style={{ marginBottom: 6, gap: 6, flexWrap: 'wrap' }}>
+            <button
+              className="stem-wall-tex-btn"
+              aria-pressed={(wall.visible ?? true) === false}
+              onClick={e => { e.stopPropagation(); updateWall(wall.id, { visible: !(wall.visible ?? true) }) }}
+            >{(wall.visible ?? true) ? 'Hide' : 'Show'}</button>
             <button
               className="stem-wall-tex-btn"
               onClick={e => { e.stopPropagation(); addBaseboardForWall(wall.id) }}
@@ -267,6 +295,32 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
               className="stem-wall-tex-btn"
               onClick={e => { e.stopPropagation(); addStemWallForWall(wall.id) }}
             >+ Stem Wall</button>
+          </div>
+
+          {/* Fill-with-cabinets quick actions. Each button auto-packs the wall's
+              open stretches (gaps between doors/windows) with stock-size
+              cabinets of the chosen style. */}
+          <div className="stem-wall-texture-row" style={{ marginBottom: 10, gap: 6, flexWrap: 'wrap' }}>
+            {(['lower', 'upper', 'locker'] as FillStyle[]).map(style => {
+              const handleFill = (e: React.MouseEvent) => {
+                e.stopPropagation()
+                const plan = planWallFill({ wall, style })
+                if (plan.length === 0) {
+                  showToast(`No room for ${style} cabinets on this wall`, 'info')
+                  return
+                }
+                for (const p of plan) addCabinet(p.preset, p.x, p.z, p.rotY)
+                showToast(`Placed ${plan.length} ${style} cabinet${plan.length === 1 ? '' : 's'}`, 'info')
+              }
+              const label = style === 'lower' ? 'Lowers' : style === 'upper' ? 'Uppers' : 'Lockers'
+              return (
+                <button
+                  key={style}
+                  className="stem-wall-tex-btn"
+                  onClick={handleFill}
+                >Fill {label}</button>
+              )
+            })}
           </div>
 
           {/* Appearance */}
@@ -337,20 +391,6 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
             </div>
           </Section>
 
-
-          {/* Options */}
-          <Section title="Options">
-            <div className="wall-toggles">
-              <label className="toggle-row">
-                <span>Visible</span>
-                <input type="checkbox" checked={wall.visible ?? true} onChange={e => updateWall(wall.id, { visible: e.target.checked })} />
-              </label>
-              <label className="toggle-row">
-                <span>Lock position</span>
-                <input type="checkbox" checked={wall.locked} onChange={e => updateWall(wall.id, { locked: e.target.checked })} />
-              </label>
-            </div>
-          </Section>
 
           {/* Openings */}
           <Section title={`Openings (${wall.openings.length})`}>
@@ -771,11 +811,16 @@ function BaseboardStemWallList() {
         return (
           <BBSWRow key={item.kind + item.id}
             isSel={isSel} onClick={onClick}>
-            <div className="cab-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span className="cab-label" style={{ fontSize: 11 }}>
+            <div className="cab-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 4 }}>
+              <span className="cab-label" style={{ fontSize: 11, flex: 1, minWidth: 0 }}>
                 <span style={{ color: item.kind === 'sw' ? '#88aacc' : '#88cc88', fontWeight: 600 }}>{labelPrefix}</span>
                 {' '}{item.label}
               </span>
+              <button
+                className={`step-lock-btn${item.locked ? ' locked' : ''}`}
+                aria-label={item.locked ? 'Unlock position' : 'Lock position'}
+                onClick={e => { e.stopPropagation(); update({ locked: !item.locked }) }}
+              >{item.locked ? <IconLocked size={12} /> : <IconUnlocked size={12} />}</button>
               <button className="cab-del-btn" onClick={e => { e.stopPropagation(); onDelete() }}
                 style={{ fontSize: 12, padding: '0 6px' }}>×</button>
             </div>
@@ -783,24 +828,27 @@ function BaseboardStemWallList() {
               <div onClick={e => e.stopPropagation()} style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
                 <label style={{ fontSize: 10, color: '#aaa' }}>Length (in)
                   <input type="number" min={1} step={0.25} value={item.length}
+                    disabled={item.locked}
                     onChange={e => update({ length: Math.max(1, parseFloat(e.target.value) || 0) })}
                     style={{ width: '100%', marginTop: 2, fontSize: 11, padding: '2px 6px',
                       background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)',
-                      borderRadius: 3, color: '#eee' }} />
+                      borderRadius: 3, color: '#eee', opacity: item.locked ? 0.5 : 1 }} />
                 </label>
                 <label style={{ fontSize: 10, color: '#aaa' }}>Height (in)
                   <input type="number" min={0.5} step={0.25} value={item.height}
+                    disabled={item.locked}
                     onChange={e => update({ height: Math.max(0.5, parseFloat(e.target.value) || 0) })}
                     style={{ width: '100%', marginTop: 2, fontSize: 11, padding: '2px 6px',
                       background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)',
-                      borderRadius: 3, color: '#eee' }} />
+                      borderRadius: 3, color: '#eee', opacity: item.locked ? 0.5 : 1 }} />
                 </label>
                 <label style={{ fontSize: 10, color: '#aaa' }}>Thickness (in)
                   <input type="number" min={0.25} step={0.125} value={item.thickness}
+                    disabled={item.locked}
                     onChange={e => update({ thickness: Math.max(0.25, parseFloat(e.target.value) || 0) })}
                     style={{ width: '100%', marginTop: 2, fontSize: 11, padding: '2px 6px',
                       background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)',
-                      borderRadius: 3, color: '#eee' }} />
+                      borderRadius: 3, color: '#eee', opacity: item.locked ? 0.5 : 1 }} />
                 </label>
                 <div>
                   <span className="coord-label">Color</span>
@@ -923,6 +971,7 @@ export default function WallPanel() {
   }, [selectedWallId])
   return (
     <div className="wall-panel">
+      <TracingImageControls />
       <div className="ceiling-height-row">
         <MeasureInput label="Ceiling Height" inches={ceilingHeight} onChange={v => setCeilingHeight(Math.max(60, v))} min={60} max={360} />
       </div>

@@ -117,6 +117,7 @@ function CabinetEditor({ cab }: { cab: PlacedCabinet }) {
             onChange={v => updateCabinet(cab.id, { y: v })}
             min={0}
             max={120}
+            disabled={cab.locked}
           />
           {cab.line === 'signature' && (
             <>
@@ -338,6 +339,7 @@ function CountertopEditor({ ct }: { ct: Countertop }) {
             onChange={v => updateCountertop(ct.id, { width: Math.max(6, v) })}
             min={6}
             max={480}
+            disabled={ct.locked}
           />
           <div className="cab-color-row" role="radiogroup" aria-label="Countertop material" style={{ marginTop: 8 }}>
             {CT_COLORS.map(c => (

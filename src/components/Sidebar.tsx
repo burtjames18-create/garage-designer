@@ -12,6 +12,7 @@ import ItemsPanel from './ItemsPanel'
 import OverheadRacksPanel from './OverheadRacksPanel'
 import GuidePanel from './GuidePanel'
 import MeasureInput from './MeasureInput'
+import { IconLocked, IconUnlocked } from './Icons'
 import './Sidebar.css'
 
 import type { SidebarTab } from '../store/garageStore'
@@ -128,9 +129,9 @@ const TABS: { id: SidebarTab; label: string }[] = [
   { id: 'guide',    label: 'Guide'    },
 ]
 
-function FloorStepItem({ step, isSel, onSelect, onDelete }: {
-  step: { id: string; label: string }; isSel: boolean
-  onSelect: () => void; onDelete: () => void
+function FloorStepItem({ step, isSel, onSelect, onDelete, onToggleLock }: {
+  step: { id: string; label: string; locked?: boolean }; isSel: boolean
+  onSelect: () => void; onDelete: () => void; onToggleLock: () => void
 }) {
   const scrollRef = useScrollToSelected<HTMLDivElement>(isSel)
   return (
@@ -144,6 +145,13 @@ function FloorStepItem({ step, isSel, onSelect, onDelete }: {
       aria-selected={isSel}
     >
       <span className="list-item-label">{step.label}</span>
+      <button
+        className={`step-lock-btn${step.locked ? ' locked' : ''}`}
+        onClick={e => { e.stopPropagation(); onToggleLock() }}
+        aria-label={step.locked ? 'Unlock position' : 'Lock position'}
+      >
+        {step.locked ? <IconLocked size={12} /> : <IconUnlocked size={12} />}
+      </button>
       <button
         className="delete-btn"
         onClick={e => { e.stopPropagation(); onDelete() }}
@@ -335,7 +343,8 @@ export default function Sidebar() {
                 <FloorStepItem key={step.id} step={step}
                   isSel={selectedFloorStepId === step.id}
                   onSelect={() => selectFloorStep(selectedFloorStepId === step.id ? null : step.id)}
-                  onDelete={() => deleteFloorStep(step.id)} />
+                  onDelete={() => deleteFloorStep(step.id)}
+                  onToggleLock={() => updateFloorStep(step.id, { locked: !step.locked })} />
               ))}
 
               {selectedFloorStepId && (() => {
@@ -343,7 +352,7 @@ export default function Sidebar() {
                 if (!step) return null
                 return (
                   <div className="field-group" style={{ marginTop: 8 }}>
-                    <MeasureInput label="Height" inches={step.height} onChange={v => updateFloorStep(step.id, { height: Math.max(0.5, v) })} min={0.5} max={48} />
+                    <MeasureInput label="Height" inches={step.height} onChange={v => updateFloorStep(step.id, { height: Math.max(0.5, v) })} min={0.5} max={48} disabled={step.locked} />
                     <p className="field-hint">Drag corners in the 3D view to reshape</p>
                   </div>
                 )

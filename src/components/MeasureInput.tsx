@@ -9,9 +9,10 @@ interface Props {
   min?: number
   max?: number
   compact?: boolean
+  disabled?: boolean
 }
 
-export default function MeasureInput({ label, inches, onChange, min = 0, max = 99999, compact }: Props) {
+export default function MeasureInput({ label, inches, onChange, min = 0, max = 99999, compact, disabled }: Props) {
   const [raw, setRaw] = useState(String(Math.round(inches)))
   const focused = useRef(false)
 
@@ -29,7 +30,7 @@ export default function MeasureInput({ label, inches, onChange, min = 0, max = 9
   }
 
   return (
-    <div className={`measure-input ${compact ? 'compact' : ''}`}>
+    <div className={`measure-input ${compact ? 'compact' : ''}${disabled ? ' disabled' : ''}`}>
       {label && <span className="measure-label">{label}</span>}
       <div className="measure-fields">
         <input
@@ -39,6 +40,7 @@ export default function MeasureInput({ label, inches, onChange, min = 0, max = 9
           min={min}
           max={max}
           step={1}
+          disabled={disabled}
           onFocus={e => { focused.current = true; e.target.select() }}
           onChange={e => setRaw(e.target.value)}
           onBlur={commit}

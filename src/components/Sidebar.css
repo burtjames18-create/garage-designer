@@ -315,6 +315,23 @@
   justify-content: center;
 }
 
+.step-lock-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  border-radius: 5px;
+  margin-right: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.step-lock-btn:hover { border-color: var(--border2); color: var(--text); }
+.step-lock-btn.locked { color: var(--warning); border-color: var(--warning); }
+
 /* ── Responsive sidebar ────────────────────────────────────────────────── */
 @media (max-width: 1400px) {
   .sidebar {

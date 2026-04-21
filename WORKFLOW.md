@@ -63,15 +63,27 @@ npm run electron:build   # Build + create installer → release/ folder
 > The auto-updater only triggers when the GitHub Release version is higher than what the
 > user has installed. If you forget to bump, the update will not be detected.
 
+> **Release notes source**: `CHANGELOG.md` accumulates changes under `## Unreleased`
+> between publishes. Before each release, review that section, then move it under a
+> new `## [x.y.z] — YYYY-MM-DD` heading and reset `Unreleased` to empty. Use the
+> same bullets in the commit message and the GitHub Release description.
+
+> **Save-format migration**: `garageStore.ts` defines `CURRENT_VERSION` and a
+> `MIGRATORS` registry. If this release introduces a schema change (new required
+> field, renamed field, type split), bump `CURRENT_VERSION` and add a migrator
+> entry so existing user projects continue to load. If the schema is unchanged,
+> leave `CURRENT_VERSION` alone — no migration work needed.
+
 1. **Make changes** and test locally
-2. **Bump version** in `package.json` — increment the patch number (e.g. `1.0.10` → `1.0.11`)
-3. **Commit and push** to GitHub:
+2. **Draft release notes** in `CHANGELOG.md` under `## Unreleased`
+3. **Bump version** in `package.json` — increment the patch number (e.g. `1.0.10` → `1.0.11`)
+4. **Commit and push** to GitHub:
    ```bash
    git add .
    git commit -m "v1.0.11: Description of changes"
    git push origin master
    ```
-4. **Build and publish** the release:
+5. **Build and publish** the release:
    ```bash
    # Retrieve the GitHub token from Windows Credential Manager and publish:
    GH_TOKEN=$(printf "protocol=https\nhost=github.com\n" | git credential fill | grep password | cut -d= -f2) npm run electron:publish
@@ -86,7 +98,15 @@ npm run electron:build   # Build + create installer → release/ folder
    > Git push works without this because Git uses its own credential helper, but electron-builder
    > requires the token as an environment variable.
 
-5. **Users auto-update**: When users open the app, `electron-updater` checks GitHub Releases, downloads the new version, and installs it on quit.
+6. **Finalize CHANGELOG**: move the contents of `## Unreleased` under a new
+   `## [x.y.z] — YYYY-MM-DD` heading, reset `Unreleased` to empty. Paste the
+   same bullets into the GitHub Release description.
+
+7. **Smoke test** on a second machine: confirm the auto-updater pulls the new
+   version, and that an old `.garage` save file opens without errors (this
+   exercises the migration pipeline).
+
+8. **Users auto-update**: When users open the app, `electron-updater` checks GitHub Releases, downloads the new version, and installs it on quit.
 
 ### Common mistake: forgetting to bump the version
 If you push code and run `electron:publish` without bumping the version, it will overwrite the existing release with the same version number. Users who already have that version installed will **not** receive the update because electron-updater sees the same version and skips it.

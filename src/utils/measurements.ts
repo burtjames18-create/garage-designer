@@ -30,39 +30,9 @@ export function wallLengthIn(x1: number, z1: number, x2: number, z2: number): nu
   return Math.sqrt((x2 - x1) ** 2 + (z2 - z1) ** 2)
 }
 
-// Convert feet + inches decimal to total inches
-export function ftInToInches(ft: number, inVal: number): number {
-  return ft * 12 + inVal
-}
-
-// Snap to nearest 1/16"
-export function snap16(inches: number): number {
-  return Math.round(inches * 16) / 16
-}
-
 // Snap to nearest 1/4" grid
 export function snapToGrid(inches: number, gridInches = 0.25): number {
   return Math.round(inches / gridInches) * gridInches
-}
-
-// Snap a point to the nearest wall endpoint or midpoint, returns snapped [x, z] or original if none close enough
-export function snapToWallEndpoints(
-  x: number, z: number,
-  walls: { id: string; x1: number; z1: number; x2: number; z2: number }[],
-  threshold = 2,
-  excludeWallId?: string,
-): [number, number] {
-  let best = threshold
-  let sx = x, sz = z
-  for (const w of walls) {
-    if (w.id === excludeWallId) continue
-    const mx = (w.x1 + w.x2) / 2, mz = (w.z1 + w.z2) / 2
-    for (const [ex, ez] of [[w.x1, w.z1], [w.x2, w.z2], [mx, mz]] as [number, number][]) {
-      const d = Math.hypot(ex - x, ez - z)
-      if (d < best) { best = d; sx = ex; sz = ez }
-    }
-  }
-  return [sx, sz]
 }
 
 // Snap a point to the nearest floor polygon edge (corners + edge midpoints)

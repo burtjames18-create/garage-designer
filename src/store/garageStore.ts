@@ -159,7 +159,7 @@ export interface Baseboard {
   rotY: number       // radians; 0 = length along +X
   length: number     // inches (default 36)
   height: number     // inches (default 4)
-  thickness: number  // inches (default 1)
+  thickness: number  // inches (default 0.5)
   color: string      // hex (default '#cccccc')
   flake: boolean     // when true, contributes front face area to flooring sqft
   /** When flake=true, ID of a flooring texture to render on the front face.
@@ -181,7 +181,7 @@ export interface StemWall {
   rotY: number       // radians; 0 = length along +X
   length: number     // inches (default 36)
   height: number     // inches (default 4 — same as baseboard default)
-  thickness: number  // inches (default 1 — same as baseboard)
+  thickness: number  // inches (default 0.125 — 1/4 of baseboard thickness so it reads as a thin surface coat)
   color: string      // hex
   flake: boolean     // contributes front face to flooring sqft when true
   /** When flake=true, ID of a flooring texture to render on the front face.
@@ -259,6 +259,7 @@ export interface GarageShape {
   color?: string       // hex color for solid fill
   textureId?: string   // wall texture id, or 'floor:<id>', or 'imported:<id>'
   textureScale?: number // multiplier for UV repeat (1 = default; <1 larger pattern; >1 tighter tiling)
+  locked?: boolean      // when true, shape cannot be moved
 }
 
 export interface FloorPoint {
@@ -302,6 +303,7 @@ export interface FloorStep {
   label: string
   corners: [number, number][]  // 4 corner points [x, z] in inches
   height: number               // inches (step rise height, default 4)
+  locked?: boolean             // when true, step cannot be moved or reshaped
   // Legacy fields — kept for backward compat during migration, not used at runtime:
   x?: number
   z?: number
@@ -324,11 +326,12 @@ export function stepBounds(step: FloorStep) {
 
 /** Migrate a legacy rect FloorStep to the new corners format. */
 export function migrateFloorStep(step: any): FloorStep {
-  if (step.corners) return step as FloorStep
+  if (step.corners) return { ...step, locked: step.locked ?? false } as FloorStep
   const x = step.x ?? 0, z = step.z ?? 0
   const hw = (step.width ?? 48) / 2, hd = (step.depth ?? 24) / 2
   return {
     id: step.id, label: step.label, height: step.height ?? 4,
+    locked: step.locked ?? false,
     corners: [[x - hw, z - hd], [x + hw, z - hd], [x + hw, z + hd], [x - hw, z + hd]],
   }
 }
@@ -421,8 +424,131 @@ export interface ImportedAsset {
   d?: number
 }
 
+/** A background reference image (photo or blueprint) for tracing walls over.
+ *  Renders beneath the floor plan in the 2D view only — never shown in the 3D
+ *  view or the exported PDF. Position and size are in inches, in world space,
+ *  matching the wall coordinate system. */
+export interface TracingImage {
+  id: string
+  dataUrl: string      // base64-encoded image data
+  x: number            // center X in inches
+  z: number            // center Z in inches
+  widthIn: number      // displayed width in inches
+  heightIn: number     // displayed height in inches (respects aspect ratio)
+  opacity: number      // 0.1 - 1.0, default 0.5
+  locked?: boolean
+}
+
 function uid(): string {
   return crypto.randomUUID()
+}
+
+/** Every selectable entity's id field. Spreading this into a select action's
+ *  set() call clears ALL sibling selections, so picking one entity
+ *  deterministically deselects all others. New selectable entities MUST be
+ *  added here — forgetting is how the old inline clears drifted and caused
+ *  selection cross-contamination bugs (see pre-M2 selectItem / accessory). */
+const SELECTION_CLEAR = {
+  selectedWallId: null,
+  selectedShapeId: null,
+  selectedSlatwallPanelId: null,
+  selectedStainlessBacksplashPanelId: null,
+  selectedAccessoryId: null,
+  selectedCabinetId: null,
+  selectedCountertopId: null,
+  selectedBaseboardId: null,
+  selectedStemWallId: null,
+  selectedFloorStepId: null,
+  selectedCeilingLightId: null,
+  selectedItemId: null,
+  selectedRackId: null,
+} as const
+
+// ─── Project save/load migration registry ─────────────────────────────────────
+// The save format is versioned by `_version`. On load, migrateProject() chains
+// MIGRATORS[n] → MIGRATORS[n+1] → … until the save reaches CURRENT_VERSION, at
+// which point normalizeLoadedProject() fills in any missing fields with
+// defaults. To introduce a breaking schema change: bump CURRENT_VERSION and
+// register a MIGRATORS[prev] that transforms old-shape data to new-shape.
+
+const CURRENT_VERSION = 1
+
+type Migrator = (data: Record<string, unknown>) => Record<string, unknown>
+
+/** Version-to-version migrators. Each key N produces v(N+1)-shaped data from
+ *  v(N)-shaped data. Empty today — slot reserved for future schema changes. */
+const MIGRATORS: Record<number, Migrator> = {
+  // Example for future: 1: (d) => ({ ...d, walls: (d.walls as any[]).map(w => ({ ...w, newField: defaultFor(w) })) })
+}
+
+function migrateProject(data: Record<string, unknown>): Record<string, unknown> {
+  let version = typeof data._version === 'number' ? data._version : 1
+  while (version < CURRENT_VERSION) {
+    const migrator = MIGRATORS[version]
+    if (!migrator) throw new Error(`Missing migrator for project version ${version}`)
+    data = migrator(data)
+    version++
+  }
+  if (version > CURRENT_VERSION) {
+    throw new Error(`Project file is from a newer app version (v${version}, this build supports up to v${CURRENT_VERSION}). Update the app to open it.`)
+  }
+  return { ...data, _version: CURRENT_VERSION }
+}
+
+/** Fill in defaults + run entity-level normalizations that don't rise to the
+ *  level of a schema migration. This is where optional-field fallbacks live
+ *  (e.g. walls.visible, cabinet.line). Runs AFTER migrateProject(). */
+function normalizeLoadedProject(d: Record<string, unknown>) {
+  const assets = (d.importedAssets as ImportedAsset[]) ?? []
+  // Re-hydrate 3D model base64 payloads into the blob cache and strip the
+  // heavy `data` strings off state — the cache is the source of truth at runtime.
+  for (const a of assets) {
+    if (a.assetType === '3d-model' && a.data) cacheModelBase64(a.id, a.data)
+  }
+  const importedAssets = assets.map(a => a.assetType === '3d-model' ? { ...a, data: '' } : a)
+
+  return {
+    customerName:     (d.customerName as string)     ?? '',
+    siteAddress:      (d.siteAddress as string)       ?? '',
+    consultantName:   (d.consultantName as string)    ?? 'Garage Living',
+    setupDone:        (d.setupDone as boolean)        ?? true,
+    garageWidth:      (d.garageWidth as number)       ?? 240,
+    garageDepth:      (d.garageDepth as number)       ?? 264,
+    ceilingHeight:    (d.ceilingHeight as number)     ?? 108,
+    floorPoints:      (d.floorPoints as FloorPoint[]) ?? [],
+    // Per-entity normalizations: ensure optional fields have their runtime
+    // defaults so the renderer doesn't have to branch on undefined.
+    walls:            ((d.walls as GarageWall[]) ?? []).map(w => ({ ...w, visible: w.visible ?? true })),
+    slatwallPanels:   (d.slatwallPanels as SlatwallPanel[]) ?? [],
+    stainlessBacksplashPanels: (d.stainlessBacksplashPanels as StainlessBacksplashPanel[]) ?? [],
+    floorSteps:       ((d.floorSteps as unknown[]) ?? []).map(migrateFloorStep),
+    shapes:           (d.shapes as GarageShape[])     ?? [],
+    cabinets:         ((d.cabinets as PlacedCabinet[]) ?? []).map(c => ({ ...c, line: c.line ?? 'technica' as const })),
+    countertops:      (d.countertops as Countertop[]) ?? [],
+    baseboards:       (d.baseboards as Baseboard[])   ?? [],
+    stemWalls:        (d.stemWalls as StemWall[])     ?? [],
+    items:            (d.items as PlacedItem[])       ?? [],
+    overheadRacks:    (d.overheadRacks as OverheadRack[]) ?? [],
+    importedAssets,
+    slatwallAccessories: (d.slatwallAccessories as SlatwallAccessory[]) ?? [],
+    flooringColor:    (d.flooringColor as string)     ?? 'quicksilver',
+    floorTextureScale:(d.floorTextureScale as number) ?? 6,
+    ceilingLights:    (d.ceilingLights as CeilingLight[]) ?? [],
+    ambientIntensity: (d.ambientIntensity as number)  ?? 0.02,
+    bounceIntensity:  (d.bounceIntensity as number)   ?? 4,
+    bounceDistance:   (d.bounceDistance as number)    ?? 30,
+    floorReflection:  (d.floorReflection as number)   ?? 0.1,
+    envReflection:    (d.envReflection as number)     ?? 0.05,
+    lightMultiplier:  (d.lightMultiplier as number)   ?? 15,
+    exposure:         (d.exposure as number)          ?? 1.0,
+    // Pre-exposure saves had scene-light intensity multiplied by 80 in the
+    // renderer; new path renders intensity as-is, so scale legacy values up.
+    sceneLights:      (d.exposure === undefined
+                        ? ((d.sceneLights as SceneLight[]) ?? []).map(l => ({ ...l, intensity: (l.intensity ?? 1) * 80 }))
+                        : ((d.sceneLights as SceneLight[]) ?? [])),
+    exportShots:      (d.exportShots as ExportShot[]) ?? [],
+    tracingImage:     (d.tracingImage as TracingImage) ?? null,
+  }
 }
 
 function makeDefaultWalls(widthIn: number, depthIn: number, heightIn: number): GarageWall[] {
@@ -672,6 +798,11 @@ interface GarageStore {
   deleteExportShot: (id: string) => void
   reorderExportShots: (ids: string[]) => void
 
+  // Floor-plan tracing reference image (2D view only, not exported)
+  tracingImage: TracingImage | null
+  setTracingImage: (img: TracingImage | null) => void
+  updateTracingImage: (changes: Partial<TracingImage>) => void
+
   // Quote / Pricing
   getQuote: () => { subtotal: number; labor: number; total: number; lineItems: { label: string; sku: string; price: number }[] }
 
@@ -871,7 +1002,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       selectedWallId: s.selectedWallId === id ? null : s.selectedWallId,
     })),
 
-  selectWall: (id) => set({ selectedWallId: id, selectedShapeId: null, selectedSlatwallPanelId: null, selectedStainlessBacksplashPanelId: null, selectedCabinetId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'walls' as SidebarTab } : {}) }),
+  selectWall: (id) => set({ ...SELECTION_CLEAR, selectedWallId: id, ...(id !== null ? { floorSelected: false, activeTab: 'walls' as SidebarTab } : {}) }),
 
   duplicateWall: (id) => {
     const wall = get().walls.find(w => w.id === id)
@@ -952,7 +1083,13 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
 
   selectSlatwallPanel: (id) => set(s => {
     const panel = id ? s.slatwallPanels.find(p => p.id === id) : null
-    return { selectedSlatwallPanelId: id, selectedStainlessBacksplashPanelId: null, selectedWallId: panel?.wallId ?? s.selectedWallId, selectedShapeId: null, selectedCabinetId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'walls' as SidebarTab } : {}) }
+    return {
+      ...SELECTION_CLEAR,
+      selectedSlatwallPanelId: id,
+      // Preserve the parent wall context so the sidebar stays on the right wall.
+      selectedWallId: panel?.wallId ?? s.selectedWallId,
+      ...(id !== null ? { floorSelected: false, activeTab: 'walls' as SidebarTab } : {}),
+    }
   }),
 
   addStainlessBacksplashPanel: (wallId, side = 'interior') => {
@@ -987,7 +1124,12 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
 
   selectStainlessBacksplashPanel: (id) => set(s => {
     const panel = id ? s.stainlessBacksplashPanels.find(p => p.id === id) : null
-    return { selectedStainlessBacksplashPanelId: id, selectedSlatwallPanelId: null, selectedWallId: panel?.wallId ?? s.selectedWallId, selectedShapeId: null, selectedCabinetId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'walls' as SidebarTab } : {}) }
+    return {
+      ...SELECTION_CLEAR,
+      selectedStainlessBacksplashPanelId: id,
+      selectedWallId: panel?.wallId ?? s.selectedWallId,
+      ...(id !== null ? { floorSelected: false, activeTab: 'walls' as SidebarTab } : {}),
+    }
   }),
 
   addFloorStep: () => {
@@ -999,6 +1141,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       label: `Step ${get().floorSteps.length + 1}`,
       corners: [[-hw, cz - hd], [hw, cz - hd], [hw, cz + hd], [-hw, cz + hd]],
       height: 4,
+      locked: false,
     }
     set(s => ({ floorSteps: [...s.floorSteps, step], selectedFloorStepId: step.id }))
   },
@@ -1013,15 +1156,8 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
     })),
 
   selectFloorStep: (id) => set({
+    ...SELECTION_CLEAR,
     selectedFloorStepId: id,
-    selectedWallId: null,
-    selectedSlatwallPanelId: null,
-    selectedStainlessBacksplashPanelId: null,
-    selectedShapeId: null,
-    selectedCabinetId: null,
-    selectedCeilingLightId: null,
-    selectedItemId: null,
-    selectedRackId: null,
     ...(id !== null ? { activeTab: 'flooring' as SidebarTab } : {}),
   }),
 
@@ -1036,6 +1172,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       w: 24, d: 24, h,
       r: 3,
       material: type === 'cylinder' ? 'steel' : 'drywall',
+      locked: false,
     }
     set(s => ({ shapes: [...s.shapes, shape], selectedShapeId: shape.id }))
   },
@@ -1049,7 +1186,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       selectedShapeId: s.selectedShapeId === id ? null : s.selectedShapeId,
     })),
 
-  selectShape: (id) => set({ selectedShapeId: id, selectedWallId: null, selectedSlatwallPanelId: null, selectedStainlessBacksplashPanelId: null, selectedCabinetId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'shapes' as SidebarTab } : {}) }),
+  selectShape: (id) => set({ ...SELECTION_CLEAR, selectedShapeId: id, ...(id !== null ? { floorSelected: false, activeTab: 'shapes' as SidebarTab } : {}) }),
 
   setActiveTab: (tab) => set({ activeTab: tab }),
 
@@ -1109,7 +1246,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       selectedCabinetId: s.selectedCabinetId === id ? null : s.selectedCabinetId,
     })),
 
-  selectCabinet: (id) => set({ selectedCabinetId: id, selectedWallId: null, selectedShapeId: null, selectedSlatwallPanelId: null, selectedStainlessBacksplashPanelId: null, selectedCountertopId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'cabinets' as SidebarTab } : {}) }),
+  selectCabinet: (id) => set({ ...SELECTION_CLEAR, selectedCabinetId: id, ...(id !== null ? { floorSelected: false, activeTab: 'cabinets' as SidebarTab } : {}) }),
 
   addCountertop: () => {
     const { garageDepth, walls } = get()
@@ -1131,7 +1268,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       countertops: s.countertops.filter(c => c.id !== id),
       selectedCountertopId: s.selectedCountertopId === id ? null : s.selectedCountertopId,
     })),
-  selectCountertop: (id) => set({ selectedCountertopId: id, selectedWallId: null, selectedShapeId: null, selectedSlatwallPanelId: null, selectedStainlessBacksplashPanelId: null, selectedCabinetId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'cabinets' as SidebarTab } : {}) }),
+  selectCountertop: (id) => set({ ...SELECTION_CLEAR, selectedCountertopId: id, ...(id !== null ? { floorSelected: false, activeTab: 'cabinets' as SidebarTab } : {}) }),
 
   addBaseboard: (overrides = {}) => {
     const { walls, baseboards } = get()
@@ -1196,7 +1333,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       baseboards: s.baseboards.filter(b => b.id !== id),
       selectedBaseboardId: s.selectedBaseboardId === id ? null : s.selectedBaseboardId,
     })),
-  selectBaseboard: (id) => set({ selectedBaseboardId: id, selectedWallId: null, selectedShapeId: null, selectedSlatwallPanelId: null, selectedStainlessBacksplashPanelId: null, selectedCabinetId: null, selectedCountertopId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'walls' as SidebarTab } : {}) }),
+  selectBaseboard: (id) => set({ ...SELECTION_CLEAR, selectedBaseboardId: id, ...(id !== null ? { floorSelected: false, activeTab: 'walls' as SidebarTab } : {}) }),
 
   addStemWall: (overrides = {}) => {
     const { walls, stemWalls } = get()
@@ -1216,15 +1353,9 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       const cz = (target.z1 + target.z2) / 2
       let nx = -uz, nz = ux
       if (cx * nx + cz * nz > 0) { nx = -nx; nz = -nz }
-      // Stem wall sits INSET 1" past the interior wall face. Center is at
-      // (wall.thickness/2 - 1") from the wall centerline, on the interior side.
-      // Interior face = wall.thickness/2 from centerline. Inset 1" deeper
-      // means center sits at (wall.thickness/2 - 1") - thickness/2 from the
-      // centerline. With default piece thickness 1", the front face ends up
-      // flush with the interior wall face minus 1".
-      // Stem wall sits FLUSH on the interior wall face (slight 1/16" forward
-       // bump to avoid z-fighting). Visual = wall surface painted with stem
-       // wall color/texture.
+      // Stem wall sits FLUSH on the interior wall face, with a tiny 1/16"
+      // forward bump to prevent z-fighting with the wall surface. Reads as a
+      // thin surface coat (default thickness 0.125" = 1/4 of a baseboard).
       const inset = target.thickness / 2 + 0.0625
       x = cx + nx * inset
       z = cz + nz * inset
@@ -1234,7 +1365,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       id: uid(),
       label: `Stem Wall ${stemWalls.length + 1}`,
       x, z, y: 0, rotY,
-      length: 36, height: 4, thickness: 0.5,
+      length: 36, height: 4, thickness: 0.125,
       color: '#a8a098',
       flake: false,
       ...overrides,
@@ -1264,7 +1395,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       stemWalls: s.stemWalls.filter(w => w.id !== id),
       selectedStemWallId: s.selectedStemWallId === id ? null : s.selectedStemWallId,
     })),
-  selectStemWall: (id) => set({ selectedStemWallId: id, selectedWallId: null, selectedShapeId: null, selectedSlatwallPanelId: null, selectedStainlessBacksplashPanelId: null, selectedCabinetId: null, selectedCountertopId: null, selectedBaseboardId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'walls' as SidebarTab } : {}) }),
+  selectStemWall: (id) => set({ ...SELECTION_CLEAR, selectedStemWallId: id, ...(id !== null ? { floorSelected: false, activeTab: 'walls' as SidebarTab } : {}) }),
 
   slatwallAccessories: [],
   selectedAccessoryId: null,
@@ -1290,7 +1421,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       slatwallAccessories: s.slatwallAccessories.filter(a => a.id !== id),
       selectedAccessoryId: s.selectedAccessoryId === id ? null : s.selectedAccessoryId,
     })),
-  selectSlatwallAccessory: (id) => set({ selectedAccessoryId: id, selectedCeilingLightId: null, selectedItemId: null, ...(id !== null ? { activeTab: 'walls' as SidebarTab } : {}) }),
+  selectSlatwallAccessory: (id) => set({ ...SELECTION_CLEAR, selectedAccessoryId: id, ...(id !== null ? { floorSelected: false, activeTab: 'walls' as SidebarTab } : {}) }),
 
   addImportedAsset: (asset) => set(s => ({ importedAssets: [...s.importedAssets, asset] })),
   deleteImportedAsset: (id) => set(s => ({ importedAssets: s.importedAssets.filter(a => a.id !== id) })),
@@ -1317,12 +1448,12 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       overheadRacks: s.overheadRacks.filter(r => r.id !== id),
       selectedRackId: s.selectedRackId === id ? null : s.selectedRackId,
     })),
-  selectRack: (id) => set({ selectedRackId: id, selectedWallId: null, selectedShapeId: null, selectedSlatwallPanelId: null, selectedStainlessBacksplashPanelId: null, selectedCabinetId: null, selectedCountertopId: null, selectedFloorStepId: null, selectedCeilingLightId: null, selectedItemId: null, ...(id !== null ? { floorSelected: false, activeTab: 'overhead' as SidebarTab } : {}) }),
+  selectRack: (id) => set({ ...SELECTION_CLEAR, selectedRackId: id, ...(id !== null ? { floorSelected: false, activeTab: 'overhead' as SidebarTab } : {}) }),
 
   addItem: (item) => set(s => ({ items: [...s.items, item] })),
   removeItem: (id) => set(s => ({ items: s.items.filter(i => i.id !== id) })),
   updateItem: (id, changes) => set(s => ({ items: s.items.map(i => i.id === id ? { ...i, ...changes } : i) })),
-  selectItem: (id) => set({ selectedItemId: id, selectedRackId: null, selectedCeilingLightId: null, selectedWallId: null, selectedShapeId: null, selectedCabinetId: null, selectedCountertopId: null, selectedFloorStepId: null, ...(id !== null ? { floorSelected: false, activeTab: 'vehicles' as SidebarTab } : {}) }),
+  selectItem: (id) => set({ ...SELECTION_CLEAR, selectedItemId: id, ...(id !== null ? { floorSelected: false, activeTab: 'vehicles' as SidebarTab } : {}) }),
 
   ceilingLights: buildPuckGrid(240 / 12, 264 / 12),  // matches default 20×22 ft garage
   selectedCeilingLightId: null,
@@ -1369,7 +1500,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       ceilingLights: s.ceilingLights.filter(l => l.id !== id),
       selectedCeilingLightId: s.selectedCeilingLightId === id ? null : s.selectedCeilingLightId,
     })),
-  selectCeilingLight: (id) => set({ selectedCeilingLightId: id, selectedWallId: null, selectedShapeId: null, selectedSlatwallPanelId: null, selectedStainlessBacksplashPanelId: null, selectedCabinetId: null, selectedCountertopId: null, selectedFloorStepId: null, selectedItemId: null, selectedRackId: null, ...(id !== null ? { floorSelected: false, activeTab: 'lighting' as SidebarTab } : {}) }),
+  selectCeilingLight: (id) => set({ ...SELECTION_CLEAR, selectedCeilingLightId: id, ...(id !== null ? { floorSelected: false, activeTab: 'lighting' as SidebarTab } : {}) }),
 
   autoLighting: () => {
     const { garageWidth, garageDepth, ceilingHeight } = get()
@@ -1427,6 +1558,11 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
 
   // Export shots
   exportShots: [],
+  tracingImage: null,
+  setTracingImage: (img) => set({ tracingImage: img }),
+  updateTracingImage: (changes) => set(s => ({
+    tracingImage: s.tracingImage ? { ...s.tracingImage, ...changes } : null,
+  })),
   addExportShot: (shot) => set(s => ({ exportShots: [...s.exportShots, shot] })),
   updateExportShot: (id, changes) =>
     set(s => ({ exportShots: s.exportShots.map(sh => sh.id === id ? { ...sh, ...changes } : sh) })),
@@ -1467,16 +1603,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       setupDone: false,
       projectName: null,
       // Selection state — clear so nothing references about-to-be-stale ids.
-      selectedWallId: null,
-      selectedShapeId: null,
-      selectedCabinetId: null,
-      selectedCountertopId: null,
-      selectedItemId: null,
-      selectedSlatwallPanelId: null,
-      selectedStainlessBacksplashPanelId: null,
-      selectedFloorStepId: null,
-      selectedCeilingLightId: null,
-      selectedRackId: null,
+      ...SELECTION_CLEAR,
     })
   },
   saveProject: async (overrideName?: string) => {
@@ -1494,7 +1621,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
     )
 
     const data = {
-      _version: 1,
+      _version: CURRENT_VERSION,
       customerName: s.customerName,
       siteAddress: s.siteAddress,
       consultantName: s.consultantName,
@@ -1528,6 +1655,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       exposure: s.exposure,
       sceneLights: s.sceneLights,
       exportShots: s.exportShots,
+      tracingImage: s.tracingImage,
     }
     const json = JSON.stringify(data, null, 2)
     const blob = new Blob([json], { type: 'application/json' })
@@ -1546,79 +1674,26 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
   },
 
   loadProject: (data: unknown, filename?: string) => {
-    const d = data as Record<string, unknown>
-    if (!d || typeof d !== 'object' || d._version !== 1) {
-      alert('Invalid or unsupported project file.')
+    const raw = data as Record<string, unknown> | null
+    if (!raw || typeof raw !== 'object') {
+      alert('Invalid project file.')
+      return
+    }
+    let normalized: ReturnType<typeof normalizeLoadedProject>
+    try {
+      const migrated = migrateProject(raw)
+      normalized = normalizeLoadedProject(migrated)
+    } catch (err) {
+      alert(`Cannot load project: ${(err as Error).message}`)
       return
     }
     // Derive project name from the loaded filename so subsequent saves
     // overwrite the same file instead of prompting.
-    const projectName = filename
-      ? filename.replace(/\.garage$/i, '')
-      : null
+    const projectName = filename ? filename.replace(/\.garage$/i, '') : null
     set({
       projectName,
-      customerName:     (d.customerName as string)     ?? '',
-      siteAddress:      (d.siteAddress as string)       ?? '',
-      consultantName:   (d.consultantName as string)    ?? 'Garage Living',
-      setupDone:        (d.setupDone as boolean)        ?? true,
-      garageWidth:      (d.garageWidth as number)       ?? 240,
-      garageDepth:      (d.garageDepth as number)       ?? 264,
-      ceilingHeight:    (d.ceilingHeight as number)     ?? 108,
-      floorPoints:      (d.floorPoints as FloorPoint[]) ?? [],
-      walls:            ((d.walls as GarageWall[]) ?? []).map(w => ({ ...w, visible: w.visible ?? true })),
-      slatwallPanels:   (d.slatwallPanels as SlatwallPanel[]) ?? [],
-      stainlessBacksplashPanels: (d.stainlessBacksplashPanels as StainlessBacksplashPanel[]) ?? [],
-      floorSteps:       ((d.floorSteps as any[]) ?? []).map(migrateFloorStep),
-      shapes:           (d.shapes as GarageShape[])     ?? [],
-      cabinets:         ((d.cabinets as PlacedCabinet[]) ?? []).map(c => ({ ...c, line: c.line ?? 'technica' as const })),
-      countertops:      (d.countertops as Countertop[]) ?? [],
-      baseboards:       (d.baseboards as Baseboard[]) ?? [],
-      selectedBaseboardId: null,
-      stemWalls:        (d.stemWalls as StemWall[]) ?? [],
-      selectedStemWallId: null,
-      items:            (d.items as PlacedItem[])       ?? [],
-      overheadRacks:    (d.overheadRacks as OverheadRack[]) ?? [],
-      importedAssets:   (() => {
-        const assets = (d.importedAssets as ImportedAsset[]) ?? []
-        // Restore 3D model data from save file into the blob cache
-        for (const a of assets) {
-          if (a.assetType === '3d-model' && a.data) {
-            cacheModelBase64(a.id, a.data)
-          }
-        }
-        // Clear the heavy data from state — it's now in the cache
-        return assets.map(a => a.assetType === '3d-model' ? { ...a, data: '' } : a)
-      })(),
-      slatwallAccessories: (d.slatwallAccessories as SlatwallAccessory[]) ?? [],
-      flooringColor:    (d.flooringColor as string)     ?? 'quicksilver',
-      floorTextureScale:(d.floorTextureScale as number) ?? 6,
-      ceilingLights:    (d.ceilingLights as CeilingLight[]) ?? [],
-      ambientIntensity: (d.ambientIntensity as number)  ?? 0.02,
-      bounceIntensity:  (d.bounceIntensity as number)  ?? 4,
-      bounceDistance:   (d.bounceDistance as number)    ?? 30,
-      floorReflection:  (d.floorReflection as number)  ?? 0.1,
-      envReflection:    (d.envReflection as number)    ?? 0.05,
-      lightMultiplier:  (d.lightMultiplier as number)  ?? 15,
-      exposure:         (d.exposure as number)         ?? 1.0,
-      // Migration: pre-exposure saves had scene-light intensity multiplied by
-      // 80 in the renderer. Now we render intensity as-is, so scale stored
-      // values up by 80 on legacy loads so brightness doesn't drop.
-      sceneLights:      (d.exposure === undefined
-                          ? ((d.sceneLights as SceneLight[]) ?? []).map(l => ({ ...l, intensity: (l.intensity ?? 1) * 80 }))
-                          : ((d.sceneLights as SceneLight[]) ?? [])),
-      exportShots:      (d.exportShots as ExportShot[]) ?? [],
-      // reset selection state
-      selectedWallId: null,
-      selectedSlatwallPanelId: null,
-      selectedStainlessBacksplashPanelId: null,
-      selectedFloorStepId: null,
-      selectedShapeId: null,
-      selectedCabinetId: null,
-      selectedCountertopId: null,
-      selectedItemId: null,
-      selectedCeilingLightId: null,
-      selectedRackId: null,
+      ...normalized,
+      ...SELECTION_CLEAR,
     })
   },
 }))

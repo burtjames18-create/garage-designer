@@ -19,6 +19,7 @@ import {
   snapToFloorEdge, snapAngle, snapRackToWalls,
   cameraFloorPos,
 } from '../utils/measurements'
+import { pointInPolygon, pointInPoly } from '../utils/wallGeometry'
 import { createButcherBlockTexture } from '../utils/butcherBlockTexture'
 import { effectiveFloorPolygon } from '../utils/floorPolygon'
 import * as THREE from 'three'
@@ -612,29 +613,8 @@ function cabinetOverlapsAny(
   return false
 }
 
-// ─── Point-in-polygon test (floor boundary) ───────────────────────────────────
-function pointInPolygon(x: number, z: number, pts: FloorPoint[]): boolean {
-  if (pts.length < 3) return true
-  let inside = false
-  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-    const xi = pts[i].x, zi = pts[i].z
-    const xj = pts[j].x, zj = pts[j].z
-    const intersect = ((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)
-    if (intersect) inside = !inside
-  }
-  return inside
-}
-
-/** Point-in-polygon test for [x,z] tuples (used by floor steps). */
-function pointInPoly(x: number, z: number, corners: [number, number][]): boolean {
-  let inside = false
-  for (let i = 0, j = corners.length - 1; i < corners.length; j = i++) {
-    const [xi, zi] = corners[i], [xj, zj] = corners[j]
-    const intersect = ((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)
-    if (intersect) inside = !inside
-  }
-  return inside
-}
+// pointInPolygon / pointInPoly live in src/utils/wallGeometry.ts — imported
+// above. Keeping this comment as a breadcrumb for greps.
 
 // ─── Build floor/ceiling ShapeGeometry from polygon points ───────────────────
 // Shape coords: (FT(x), -FT(z)) because Rx(-π/2) maps shape-Y → world-(-Z)
@@ -3279,7 +3259,7 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
       ))}
     </group>
 
-    {/* Selection face overlays — interior face = blue, exterior = red, so the
+    {/* Selection face overlays — interior face = blue, exterior = green, so the
        user can tell which side of the wall they're working on. */}
     {selected && !blueprint && !wireframe && (() => {
       const lenFt = FT(lengthIn)
@@ -3305,7 +3285,7 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
           </mesh>
           <mesh position={extCenter} rotation={[0, rotExt, 0]}>
             <planeGeometry args={[lenFt, hFt]} />
-            <meshBasicMaterial color="#ef4444" transparent opacity={0.35} side={THREE.DoubleSide} depthWrite={false} />
+            <meshBasicMaterial color="#22c55e" transparent opacity={0.35} side={THREE.DoubleSide} depthWrite={false} />
           </mesh>
         </>
       )
@@ -3405,22 +3385,19 @@ function FlakedBoxMesh({ lenFt, hFt, tFt, color, wireframe, flake, floorTex, wid
 }
 
 // ─── Drag handle sphere ───────────────────────────────────────────────────────
-function DragHandle({ position, color, size = 0.2, onPointerDown }: {
-  position: [number, number, number]; color: string; size?: number
+// All drag handles share one look: a light-blue sphere matching the floor-plan
+// view's blue circle handles. The `color` prop is accepted for back-compat but
+// intentionally ignored so every handle in the scene renders identically.
+function DragHandle({ position, size = 0.2, onPointerDown }: {
+  position: [number, number, number]; color?: string; size?: number
   onPointerDown: (e: ThreeEvent<PointerEvent>) => void
 }) {
   return (
     <group position={position} onPointerDown={onPointerDown}
       onClick={e => { e.stopPropagation() }}>
-      {/* Solid fill — one mesh, one material */}
       <mesh renderOrder={100} frustumCulled={false}>
         <sphereGeometry args={[size * 1.5, 18, 14]} />
-        <meshBasicMaterial color={color} depthTest={false} />
-      </mesh>
-      {/* Wireframe overlay — separate mesh so each has exactly one material */}
-      <mesh renderOrder={101} frustumCulled={false}>
-        <sphereGeometry args={[size * 1.8, 12, 8]} />
-        <meshBasicMaterial color={'#ffea00'} depthTest={false} wireframe={true} />
+        <meshBasicMaterial color={'#44aaff'} depthTest={false} />
       </mesh>
     </group>
   )
@@ -4656,8 +4633,20 @@ export default function GarageShell() {
   const floorStepCornerDragRef = useRef<FloorStepCornerDragState | null>(null)
   const suppressNextClick   = useRef(false)
 
-  const [_wallDragActive, setWallDragActive] = useState(false)
-  const [_activeSnapPt, setActiveSnapPt]     = useState<{x: number, z: number} | null>(null)
+  // Opening (door/window) currently being edited in the 3D view. When non-null,
+  // the parent wall's highlight (color tint, face overlays, endpoint handles)
+  // is suppressed so only the opening appears "selected". Cleared when the
+  // user clicks elsewhere or the selected wall/opening goes away.
+  const [selectedOpeningId, setSelectedOpeningId] = useState<string | null>(null)
+  // Sync: drop the selected opening if its parent wall is no longer selected or
+  // the opening itself was deleted.
+  useEffect(() => {
+    if (!selectedOpeningId) return
+    const wall = walls.find(w => w.id === selectedWallId)
+    if (!wall || !wall.openings.some(o => o.id === selectedOpeningId)) {
+      setSelectedOpeningId(null)
+    }
+  }, [selectedWallId, selectedOpeningId, walls])
 
   // Snap indicator lines for visual feedback during drag
   const [snapLines, setSnapLines] = useState<{ from: [number, number, number]; to: [number, number, number]; color: string }[]>([])
@@ -4796,8 +4785,7 @@ export default function GarageShell() {
       initX2: wall.x2, initZ2: wall.z2,
     }
     beginDrag()
-    setWallDragActive(true)
-  }, [beginDrag, setWallDragActive, floorHit])
+  }, [beginDrag, floorHit])
 
 
   // ── Start item drag ──────────────────────────────────────────────────────
@@ -4825,6 +4813,7 @@ export default function GarageShell() {
     selectFloorStep(stepId)   // select immediately on pointerdown (same pattern as walls/cabinets)
     const step = floorStepsRef.current.find(s => s.id === stepId)
     if (!step) return
+    if (step.locked) return
     const hit = floorHit(e.nativeEvent.clientX, e.nativeEvent.clientY)
     if (!hit) return
     floorStepDragRef.current = {
@@ -4841,6 +4830,8 @@ export default function GarageShell() {
     e: ThreeEvent<PointerEvent>,
   ) => {
     if (e.nativeEvent.button !== 0) return
+    const step = floorStepsRef.current.find(s => s.id === stepId)
+    if (step?.locked) return
     e.stopPropagation()
     e.nativeEvent.stopImmediatePropagation()
     floorStepCornerDragRef.current = { stepId, cornerIdx: corner }
@@ -4851,6 +4842,7 @@ export default function GarageShell() {
   const addFloorStepCorner = useCallback((stepId: string, afterIdx: number) => {
     const step = floorStepsRef.current.find(s => s.id === stepId)
     if (!step) return
+    if (step.locked) return
     const [ax, az] = step.corners[afterIdx]
     const [bx, bz] = step.corners[(afterIdx + 1) % step.corners.length]
     const newCorners = [...step.corners]
@@ -4861,6 +4853,7 @@ export default function GarageShell() {
   const removeFloorStepCorner = useCallback((stepId: string, idx: number) => {
     const step = floorStepsRef.current.find(s => s.id === stepId)
     if (!step || step.corners.length <= 3) return
+    if (step.locked) return
     const newCorners = step.corners.filter((_, i) => i !== idx)
     updateFloorStepRef.current(stepId, { corners: newCorners })
   }, [])
@@ -4875,6 +4868,7 @@ export default function GarageShell() {
     e.stopPropagation()
     e.nativeEvent.stopImmediatePropagation()
     selectWall(wallId)
+    setSelectedOpeningId(openingId)
 
     const dx = wall.x2 - wall.x1, dz = wall.z2 - wall.z1
     const len = Math.hypot(dx, dz)
@@ -4919,6 +4913,7 @@ export default function GarageShell() {
     e.stopPropagation()
     e.nativeEvent.stopImmediatePropagation()
     selectWall(wallId)
+    setSelectedOpeningId(openingId)
 
     const dx = wall.x2 - wall.x1, dz = wall.z2 - wall.z1
     const len = Math.hypot(dx, dz)
@@ -5605,6 +5600,49 @@ export default function GarageShell() {
               )
               snappedAlong = (s.start + s.end) / 2
             }
+            // Snap either end of the piece to another baseboard/stem-wall's
+            // end on the same wall face so they sit flush edge-to-edge.
+            if (!snappingDisabledRef.current) {
+              const SNAP_PIECE = 4
+              const sameFace = [
+                ...baseboardsRef.current,
+                ...stemWallsRef.current,
+              ]
+              for (const other of sameFace) {
+                if (other.id === piece.id) continue
+                const oVx = other.x - wall.x1, oVz = other.z - wall.z1
+                const oPerp = oVx * nx + oVz * nz
+                const otherTargetPerp = wall.thickness / 2 + other.thickness / 2
+                if (Math.abs(oPerp - otherTargetPerp) > 2) continue
+                const oUx = Math.cos(other.rotY), oUz = -Math.sin(other.rotY)
+                if (Math.abs(oUx * ux + oUz * uz) < 0.95) continue
+                const oAlong = oVx * ux + oVz * uz
+                const oHalf = other.length / 2
+                const candidates = [oAlong + oHalf + halfSnap, oAlong - oHalf - halfSnap]
+                for (const c of candidates) {
+                  if (Math.abs(snappedAlong - c) < SNAP_PIECE) snappedAlong = c
+                }
+              }
+            }
+            // Snap either end of the piece to a step-up corner along this wall.
+            // We project each step corner onto the wall axis and keep only those
+            // whose perpendicular distance puts them near the wall face line.
+            if (!snappingDisabledRef.current) {
+              const SNAP_STEP = 4
+              for (const step of floorStepsRef.current) {
+                for (const [scx, scz] of step.corners) {
+                  const sVx = scx - wall.x1, sVz = scz - wall.z1
+                  const sPerp = sVx * nx + sVz * nz
+                  // Only consider step corners close to this wall's interior face.
+                  if (Math.abs(sPerp - wall.thickness / 2) > 12) continue
+                  const sAlong = sVx * ux + sVz * uz
+                  const candidates = [sAlong - halfSnap, sAlong + halfSnap]
+                  for (const c of candidates) {
+                    if (Math.abs(snappedAlong - c) < SNAP_STEP) snappedAlong = c
+                  }
+                }
+              }
+            }
             // HARD CLAMP: piece cannot extend past interior corners on either side.
             snappedAlong = Math.max(startTarget, Math.min(endTarget, snappedAlong))
             const newX = wall.x1 + snappedAlong * ux + nx * targetPerp
@@ -5613,6 +5651,21 @@ export default function GarageShell() {
             // walls and baseboards.
             let newY = Math.max(0, snapToGrid(wh.yIn - piece.height / 2))
             if (newY < 4) newY = 0
+            // If the piece's footprint sits over a step-up, its bottom must
+            // sit ON TOP of the step — not clip into it. Snap to step height
+            // when within 4", hard-clamp otherwise.
+            {
+              let stepH = 0
+              for (const step of floorStepsRef.current) {
+                if (pointInPoly(newX, newZ, step.corners)) {
+                  stepH = Math.max(stepH, step.height)
+                }
+              }
+              if (stepH > 0) {
+                if (newY < stepH) newY = stepH
+                else if (newY - stepH < 4) newY = stepH
+              }
+            }
             const newRotY = -Math.atan2(uz, ux) + (wh.side === -1 ? Math.PI : 0)
             const lenUpdate = snappedLen !== piece.length ? { length: snappedLen } : {}
             updateRef.current(piece.id, { x: newX, z: newZ, y: newY, rotY: newRotY, ...lenUpdate })
@@ -5677,6 +5730,47 @@ export default function GarageShell() {
                   )
                   snappedAlong = (s.start + s.end) / 2
                 }
+                // Piece-end snap — align flush against another baseboard/stem-wall
+                // end that sits along this same wall face.
+                if (!snappingDisabledRef.current) {
+                  const SNAP_PIECE = 4
+                  const sameFace = [
+                    ...baseboardsRef.current,
+                    ...stemWallsRef.current,
+                  ]
+                  for (const other of sameFace) {
+                    if (other.id === piece.id) continue
+                    const oVx = other.x - w.x1, oVz = other.z - w.z1
+                    const oPerp = oVx * nx + oVz * nz
+                    const otherTargetPerp = w.thickness / 2 + other.thickness / 2
+                    if (Math.abs(oPerp - otherTargetPerp) > 2) continue
+                    const oUx = Math.cos(other.rotY), oUz = -Math.sin(other.rotY)
+                    if (Math.abs(oUx * ux + oUz * uz) < 0.95) continue
+                    const oAlong = oVx * ux + oVz * uz
+                    const oHalf = other.length / 2
+                    const candidates = [oAlong + oHalf + halfSnap, oAlong - oHalf - halfSnap]
+                    for (const c of candidates) {
+                      if (Math.abs(snappedAlong - c) < SNAP_PIECE) snappedAlong = c
+                    }
+                  }
+                }
+                // Step-up corner snap — piece end aligns with a step corner sitting
+                // along this wall face.
+                if (!snappingDisabledRef.current) {
+                  const SNAP_STEP = 4
+                  for (const step of floorStepsRef.current) {
+                    for (const [scx, scz] of step.corners) {
+                      const sVx = scx - w.x1, sVz = scz - w.z1
+                      const sPerp = sVx * nx + sVz * nz
+                      if (Math.abs(sPerp - w.thickness / 2) > 12) continue
+                      const sAlong = sVx * ux + sVz * uz
+                      const candidates = [sAlong - halfSnap, sAlong + halfSnap]
+                      for (const c of candidates) {
+                        if (Math.abs(snappedAlong - c) < SNAP_STEP) snappedAlong = c
+                      }
+                    }
+                  }
+                }
                 // HARD CLAMP: piece cannot extend past interior corners.
                 snappedAlong = Math.max(startTarget, Math.min(endTarget, snappedAlong))
                 newX = w.x1 + snappedAlong * ux + nx * targetPerp
@@ -5685,10 +5779,17 @@ export default function GarageShell() {
                 ;(bbDrag as { _pendingLen?: number })._pendingLen = snappedLen
               }
             }
-            // Snap Y back to floor when dragging on the floor plane.
+            // Y sits on the floor by default, or on top of any step-up whose
+            // footprint the piece is over (so it doesn't clip into the step).
+            let newY = 0
+            for (const step of floorStepsRef.current) {
+              if (pointInPoly(newX, newZ, step.corners)) {
+                newY = Math.max(newY, step.height)
+              }
+            }
             const pendingLen = (bbDrag as { _pendingLen?: number })._pendingLen
             const lenUpdate = pendingLen !== undefined && pendingLen !== piece.length ? { length: pendingLen } : {}
-            updateRef.current(piece.id, { x: newX, z: newZ, y: 0, ...(snappedRotY !== undefined ? { rotY: snappedRotY } : {}), ...lenUpdate })
+            updateRef.current(piece.id, { x: newX, z: newZ, y: newY, ...(snappedRotY !== undefined ? { rotY: snappedRotY } : {}), ...lenUpdate })
           }
         } else {
           // Resize end — floor-plane only (length axis is horizontal).
@@ -5753,6 +5854,59 @@ export default function GarageShell() {
               if (distToCorner < bestDist && Math.abs(candLen - newLen) < CORNER_SNAP) {
                 bestDist = distToCorner
                 snapLen = candLen
+              }
+            }
+          }
+          // Piece-end snap — lock moving end onto another baseboard/stem-wall's
+          // end when they sit along the same axis, so adjacent pieces butt up.
+          if (!snappingDisabledRef.current) {
+            const SNAP_PIECE = 4
+            const sameAxis = [
+              ...baseboardsRef.current,
+              ...stemWallsRef.current,
+            ]
+            for (const other of sameAxis) {
+              if (other.id === piece.id) continue
+              const oUx = Math.cos(other.rotY), oUz = -Math.sin(other.rotY)
+              if (Math.abs(oUx * ux + oUz * uz) < 0.95) continue
+              const oHalf = other.length / 2
+              // Two endpoints of other piece in world space:
+              const ends: [number, number][] = [
+                [other.x + oUx * oHalf, other.z + oUz * oHalf],
+                [other.x - oUx * oHalf, other.z - oUz * oHalf],
+              ]
+              for (const [ex, ez] of ends) {
+                const candAlong = (ex - fx) * ux + (ez - fz) * uz
+                if (Math.sign(candAlong) !== dir && candAlong !== 0) continue
+                const candLen = Math.abs(candAlong)
+                if (candLen < 3) continue
+                // Perpendicular distance from piece axis line — skip if the
+                // other piece's end isn't near the dragged piece's axis.
+                const perpDist = Math.hypot(
+                  (ex - fx) - ux * candAlong,
+                  (ez - fz) - uz * candAlong,
+                )
+                if (perpDist > 2) continue
+                if (Math.abs(candLen - snapLen) < SNAP_PIECE) snapLen = candLen
+              }
+            }
+          }
+          // Step-up corner snap — moving end latches onto a step-up corner
+          // that lies (nearly) on the dragged piece's axis.
+          if (!snappingDisabledRef.current) {
+            const SNAP_STEP = 4
+            for (const step of floorStepsRef.current) {
+              for (const [scx, scz] of step.corners) {
+                const candAlong = (scx - fx) * ux + (scz - fz) * uz
+                if (Math.sign(candAlong) !== dir && candAlong !== 0) continue
+                const candLen = Math.abs(candAlong)
+                if (candLen < 3) continue
+                const perpDist = Math.hypot(
+                  (scx - fx) - ux * candAlong,
+                  (scz - fz) - uz * candAlong,
+                )
+                if (perpDist > 2) continue
+                if (Math.abs(candLen - snapLen) < SNAP_STEP) snapLen = candLen
               }
             }
           }
@@ -6451,20 +6605,31 @@ export default function GarageShell() {
             }
             if (bestDist < SNAP) { hx = bestX; hz = bestZ; snapped = true }
           }
-          // 3. Single-axis snap to wall interior faces (axis-aligned walls)
+          // 3. Snap to any point along a wall's interior face — projection
+          //    works for walls at any angle, not just axis-aligned ones.
           if (!snapped) {
+            let bestDist = SNAP, bestX = hx, bestZ = hz
             for (const wall of wallsRef.current) {
-              if (Math.abs(wall.z1 - wall.z2) < 2) {
-                const wz = (wall.z1 + wall.z2) / 2
-                const faceZ = wz + (wz < 0 ? 1 : -1) * wall.thickness / 2
-                if (Math.abs(hz - faceZ) < SNAP) hz = faceZ
-              }
-              if (Math.abs(wall.x1 - wall.x2) < 2) {
-                const wx = (wall.x1 + wall.x2) / 2
-                const faceX = wx + (wx < 0 ? 1 : -1) * wall.thickness / 2
-                if (Math.abs(hx - faceX) < SNAP) hx = faceX
+              const wdx = wall.x2 - wall.x1, wdz = wall.z2 - wall.z1
+              const L = Math.hypot(wdx, wdz)
+              if (L < 0.1) continue
+              const ux = wdx / L, uz = wdz / L
+              const nx = -uz, nz = ux
+              const halfT = wall.thickness / 2
+              const relX = hx - wall.x1, relZ = hz - wall.z1
+              const along = relX * ux + relZ * uz
+              if (along < -SNAP || along > L + SNAP) continue
+              const perp = relX * nx + relZ * nz
+              for (const side of [halfT, -halfT]) {
+                const d = Math.abs(perp - side)
+                if (d < bestDist) {
+                  bestDist = d
+                  bestX = wall.x1 + along * ux + side * nx
+                  bestZ = wall.z1 + along * uz + side * nz
+                }
               }
             }
+            if (bestDist < SNAP) { hx = bestX; hz = bestZ }
           }
           const step = floorStepsRef.current.find(s => s.id === fscd.stepId)
           if (step) {
@@ -6493,32 +6658,75 @@ export default function GarageShell() {
           const minX = Math.min(...xs), maxX = Math.max(...xs)
           const minZ = Math.min(...zs), maxZ = Math.max(...zs)
           let snapDx = 0, snapDz = 0
+          // Wall snap — works at ANY wall angle. For each step corner and each
+          // wall, find the closest of:
+          //   • a wall endpoint (corner)
+          //   • an interior-face corner (endpoint offset by ±halfT along normal)
+          //   • anywhere along the interior-face line (perpendicular projection)
+          // Pick the single smallest snap across all corner/wall pairs.
+          let bestWallDist = SNAP
           for (const wall of wallsRef.current) {
-            if (Math.abs(wall.z1 - wall.z2) < 2) {
-              const wz = (wall.z1 + wall.z2) / 2
-              const faceZ = wz + (wz < 0 ? 1 : -1) * wall.thickness / 2
-              if (Math.abs(minZ - faceZ) < SNAP) snapDz = faceZ - minZ
-              else if (Math.abs(maxZ - faceZ) < SNAP) snapDz = faceZ - maxZ
-            }
-            if (Math.abs(wall.x1 - wall.x2) < 2) {
-              const wx = (wall.x1 + wall.x2) / 2
-              const faceX = wx + (wx < 0 ? 1 : -1) * wall.thickness / 2
-              if (Math.abs(minX - faceX) < SNAP) snapDx = faceX - minX
-              else if (Math.abs(maxX - faceX) < SNAP) snapDx = faceX - maxX
+            const wdx = wall.x2 - wall.x1, wdz = wall.z2 - wall.z1
+            const L = Math.hypot(wdx, wdz)
+            if (L < 0.1) continue
+            const ux = wdx / L, uz = wdz / L
+            const nx = -uz, nz = ux
+            const halfT = wall.thickness / 2
+            for (const [cx, cz] of newCorners) {
+              const relX = cx - wall.x1, relZ = cz - wall.z1
+              const along = relX * ux + relZ * uz
+              const perp = relX * nx + relZ * nz
+              // (a) perpendicular snap to face line (anywhere along segment)
+              if (along >= -SNAP && along <= L + SNAP) {
+                for (const side of [halfT, -halfT]) {
+                  const d = Math.abs(perp - side)
+                  if (d < bestWallDist) {
+                    bestWallDist = d
+                    const delta = side - perp
+                    snapDx = delta * nx
+                    snapDz = delta * nz
+                  }
+                }
+              }
+              // (b) wall endpoint (corner) snap — both axes together
+              for (const [wx, wz] of [[wall.x1, wall.z1], [wall.x2, wall.z2]]) {
+                const d = Math.hypot(cx - wx, cz - wz)
+                if (d < bestWallDist) {
+                  bestWallDist = d
+                  snapDx = wx - cx
+                  snapDz = wz - cz
+                }
+              }
+              // (c) interior-face corner snap — endpoint offset by ±halfT along normal
+              for (const [wx, wz] of [[wall.x1, wall.z1], [wall.x2, wall.z2]]) {
+                for (const side of [halfT, -halfT]) {
+                  const px = wx + side * nx
+                  const pz = wz + side * nz
+                  const d = Math.hypot(cx - px, cz - pz)
+                  if (d < bestWallDist) {
+                    bestWallDist = d
+                    snapDx = px - cx
+                    snapDz = pz - cz
+                  }
+                }
+              }
             }
           }
-          // Snap to other steps' bounding edges
+          const xLocked = Math.abs(snapDx) > 0.0001
+          const zLocked = Math.abs(snapDz) > 0.0001
+          // Snap to other steps' bounding edges — per-axis, fills in whichever
+          // axis the wall snap didn't already lock.
           for (const other of floorStepsRef.current) {
             if (other.id === fsd.stepId) continue
             const ob = stepBounds(other)
-            if (!snapDx && Math.abs(minX - ob.maxX) < SNAP) snapDx = ob.maxX - minX
-            if (!snapDx && Math.abs(maxX - ob.minX) < SNAP) snapDx = ob.minX - maxX
-            if (!snapDx && Math.abs(minX - ob.minX) < SNAP) snapDx = ob.minX - minX
-            if (!snapDx && Math.abs(maxX - ob.maxX) < SNAP) snapDx = ob.maxX - maxX
-            if (!snapDz && Math.abs(minZ - ob.maxZ) < SNAP) snapDz = ob.maxZ - minZ
-            if (!snapDz && Math.abs(maxZ - ob.minZ) < SNAP) snapDz = ob.minZ - maxZ
-            if (!snapDz && Math.abs(minZ - ob.minZ) < SNAP) snapDz = ob.minZ - minZ
-            if (!snapDz && Math.abs(maxZ - ob.maxZ) < SNAP) snapDz = ob.maxZ - maxZ
+            if (!xLocked && !snapDx && Math.abs(minX - ob.maxX) < SNAP) snapDx = ob.maxX - minX
+            if (!xLocked && !snapDx && Math.abs(maxX - ob.minX) < SNAP) snapDx = ob.minX - maxX
+            if (!xLocked && !snapDx && Math.abs(minX - ob.minX) < SNAP) snapDx = ob.minX - minX
+            if (!xLocked && !snapDx && Math.abs(maxX - ob.maxX) < SNAP) snapDx = ob.maxX - maxX
+            if (!zLocked && !snapDz && Math.abs(minZ - ob.maxZ) < SNAP) snapDz = ob.maxZ - minZ
+            if (!zLocked && !snapDz && Math.abs(maxZ - ob.minZ) < SNAP) snapDz = ob.minZ - maxZ
+            if (!zLocked && !snapDz && Math.abs(minZ - ob.minZ) < SNAP) snapDz = ob.minZ - minZ
+            if (!zLocked && !snapDz && Math.abs(maxZ - ob.maxZ) < SNAP) snapDz = ob.maxZ - maxZ
           }
           if (snapDx || snapDz) {
             for (const c of newCorners) { c[0] += snapDx; c[1] += snapDz }
@@ -6565,8 +6773,6 @@ export default function GarageShell() {
       floorStepDragRef.current = null
       floorStepCornerDragRef.current = null
       if (wasDragging) { endDrag(); suppressNextClick.current = true; setSnapLines([]) }
-      setWallDragActive(false)
-      setActiveSnapPt(null)
     }
 
     canvas.addEventListener('pointermove', onMove)
@@ -6762,6 +6968,7 @@ export default function GarageShell() {
         const handleWallDown = (e: ThreeEvent<PointerEvent>) => {
           if (e.nativeEvent.button !== 0) return  // ignore right-click (orbit) and middle-click
           selectWall(wall.id);
+          setSelectedOpeningId(null);
           const hit = floorHit(e.nativeEvent.clientX, e.nativeEvent.clientY)
           if (hit) {
             const hx = hit.x * 12, hz = hit.z * 12
@@ -6776,8 +6983,8 @@ export default function GarageShell() {
         return (
           <group key={wall.id} visible={wall.visible !== false}>
             <WallMesh wall={wall} wireframe={wireframe} blueprint={blueprint}
-              selected={isSel && !selectedSlatwallPanelId && !selectedStainlessBacksplashPanelId}
-              onClick={() => { if (suppressNextClick.current) { suppressNextClick.current = false; return } selectWall(wall.id) }}
+              selected={isSel && !selectedSlatwallPanelId && !selectedStainlessBacksplashPanelId && !selectedOpeningId}
+              onClick={() => { if (suppressNextClick.current) { suppressNextClick.current = false; return } selectWall(wall.id); setSelectedOpeningId(null) }}
               onPointerDown={handleWallDown}
               onOpeningPointerDown={(openingId, e) => startOpeningDrag(wall.id, openingId, e)}
               startTrim={startTrim} endTrim={endTrim}
@@ -6795,7 +7002,7 @@ export default function GarageShell() {
                 }
                 return { nx, nz }
               })()} />
-            {isSel && !selectedSlatwallPanelId && !selectedStainlessBacksplashPanelId && <>
+            {isSel && !selectedSlatwallPanelId && !selectedStainlessBacksplashPanelId && !selectedOpeningId && <>
               <DragHandle
                 position={[FT(wall.x1), 0.08, FT(wall.z1)]}
                 color='#ff8800'
@@ -6979,8 +7186,10 @@ export default function GarageShell() {
         )
       })}
 
-      {/* Opening (door/window) top-corner resize handles — only on selected wall */}
-      {!blueprint && walls.filter(w => w.id === selectedWallId).flatMap(wall => {
+      {/* Opening (door/window) top-corner resize handles — only for the
+          currently-selected opening, so picking a door shows its handles
+          without also showing every other door's on the same wall. */}
+      {!blueprint && selectedOpeningId && walls.filter(w => w.id === selectedWallId).flatMap(wall => {
         const wdx = wall.x2 - wall.x1, wdz = wall.z2 - wall.z1
         const wLen = Math.hypot(wdx, wdz)
         if (wLen < 1) return []
@@ -6990,7 +7199,7 @@ export default function GarageShell() {
         // Push handles just past the wall face on each side so they're clickable
         // from both interior and exterior views.
         return wall.openings
-          .filter(op => op.type === 'door' || op.type === 'window' || op.type === 'garage-door')
+          .filter(op => op.id === selectedOpeningId && (op.type === 'door' || op.type === 'window' || op.type === 'garage-door'))
           .map(op => {
             const topY = FT(op.yOffset + op.height)
             const leftX  = FT(-wLen / 2 + op.xOffset)
@@ -7385,6 +7594,7 @@ export default function GarageShell() {
           e.stopPropagation()
           e.nativeEvent.stopImmediatePropagation()
           selectShape(shape.id)
+          if (shape.locked) return
           const hit = floorHit(e.nativeEvent.clientX, e.nativeEvent.clientY)
           const curXIn = hit ? hit.x * 12 : shape.x
           const curZIn = hit ? hit.z * 12 : shape.z

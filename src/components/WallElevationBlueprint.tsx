@@ -1,50 +1,15 @@
-import type { GarageWall, SlatwallPanel, StainlessBacksplashPanel, PlacedCabinet, Countertop, FloorStep } from '../store/garageStore'
+import type { GarageWall, SlatwallPanel, StainlessBacksplashPanel, PlacedCabinet, Countertop, FloorStep, Baseboard, StemWall } from '../store/garageStore'
 import { COUNTERTOP_THICKNESS } from '../store/garageStore'
 import { slatwallColors } from '../data/slatwallColors'
 import { inchesToDisplay } from '../utils/measurements'
+import {
+  wallLen, wallDir,
+  isCabinetOnWall,
+  projectCountertop, isCountertopOnWall,
+  getStepWallProjection,
+} from '../utils/wallGeometry'
 import { cabinetFrontPaths } from './CabinetFrontSVG'
 
-// ── Geometry helpers ──────────────────────────────────────────────────────────
-function wallLen(w: GarageWall) { return Math.hypot(w.x2 - w.x1, w.z2 - w.z1) }
-function wallDir(w: GarageWall): [number, number] {
-  const l = wallLen(w); if (l < 0.01) return [1, 0]
-  return [(w.x2 - w.x1) / l, (w.z2 - w.z1) / l]
-}
-function wallNormal(w: GarageWall): [number, number] {
-  const [dx, dz] = wallDir(w)
-  const n1: [number, number] = [-dz, dx]
-  const mx = (w.x1 + w.x2) / 2, mz = (w.z1 + w.z2) / 2
-  return (n1[0] * (-mx) + n1[1] * (-mz)) > 0 ? n1 : [dz, -dx]
-}
-function projectCabinet(cab: PlacedCabinet, w: GarageWall) {
-  const len = wallLen(w); if (len < 0.01) return { along: 0, perp: 99999 }
-  const [dx, dz] = wallDir(w)
-  const vx = cab.x - w.x1, vz = cab.z - w.z1
-  return { along: vx * dx + vz * dz, perp: Math.abs(vx * (-dz) + vz * dx) }
-}
-function isCabinetOnWall(cab: PlacedCabinet, w: GarageWall) {
-  const len = wallLen(w)
-  const { along, perp } = projectCabinet(cab, w)
-  if (perp > cab.d / 2 + w.thickness / 2 + 10) return false
-  if (along <= -cab.w / 2 || along >= len + cab.w / 2) return false
-  // Cabinet must face this wall (within 45°) — prevents corner bleed
-  const [dx, dz] = wallDir(w)
-  const expectedRotY = Math.atan2(-dz, dx)
-  let diff = Math.abs(cab.rotY - expectedRotY) % (Math.PI * 2)
-  if (diff > Math.PI) diff = Math.PI * 2 - diff
-  return diff < Math.PI / 4
-}
-function projectCountertop(ct: Countertop, w: GarageWall) {
-  const len = wallLen(w); if (len < 0.01) return { along: 0, perp: 99999 }
-  const [dx, dz] = wallDir(w)
-  const vx = ct.x - w.x1, vz = ct.z - w.z1
-  return { along: vx * dx + vz * dz, perp: Math.abs(vx * (-dz) + vz * dx) }
-}
-function isCountertopOnWall(ct: Countertop, w: GarageWall) {
-  const len = wallLen(w)
-  const { along, perp } = projectCountertop(ct, w)
-  return perp <= 25 / 2 + w.thickness / 2 + 10 && along > -ct.width / 2 && along < len + ct.width / 2
-}
 function getWallStubs(wall: GarageWall, allWalls: GarageWall[]) {
   const wLen = wallLen(wall)
   const [dx, dz] = wallDir(wall)
@@ -69,30 +34,6 @@ const COUNTERTOP_HEX: Record<string, string> = {
   white: '#e8e8e4', black: '#2a2a2a', concrete: '#8a8a80',
 }
 
-/** Project a floor step onto a wall and return the along-wall range if adjacent */
-function getStepWallProjection(
-  step: FloorStep, w: GarageWall, tolerance = 6,
-): { alongStart: number; alongEnd: number; height: number } | null {
-  const len = wallLen(w)
-  if (len < 0.01) return null
-  const [ux, uz] = wallDir(w)
-  const nx = -uz, nz = ux
-  const corners = step.corners
-  let minU = Infinity, maxU = -Infinity
-  let minV = Infinity, maxV = -Infinity
-  for (const [px, pz] of corners) {
-    const u = (px - w.x1) * ux + (pz - w.z1) * uz
-    const v = (px - w.x1) * nx + (pz - w.z1) * nz
-    minU = Math.min(minU, u); maxU = Math.max(maxU, u)
-    minV = Math.min(minV, v); maxV = Math.max(maxV, v)
-  }
-  const halfThick = w.thickness / 2
-  if (maxV < -(halfThick + tolerance) || minV > halfThick + tolerance) return null
-  const u0 = Math.max(0, minU), u1 = Math.min(len, maxU)
-  if (u1 <= u0) return null
-  return { alongStart: u0, alongEnd: u1, height: step.height }
-}
-
 interface Props {
   wall: GarageWall
   slatwallPanels: SlatwallPanel[]
@@ -101,14 +42,15 @@ interface Props {
   countertops: Countertop[]
   allWalls: GarageWall[]
   floorSteps?: FloorStep[]
+  baseboards?: Baseboard[]
+  stemWalls?: StemWall[]
 }
 
 const PAD = 40  // padding for stacked dim tiers + corner stubs
 
-export default function WallElevationBlueprint({ wall, slatwallPanels, stainlessBacksplashPanels = [], cabinets, countertops, allWalls, floorSteps = [] }: Props) {
+export default function WallElevationBlueprint({ wall, slatwallPanels, stainlessBacksplashPanels = [], cabinets, countertops, allWalls, floorSteps = [], baseboards = [], stemWalls = [] }: Props) {
   const wLen = wallLen(wall)
   const wH = wall.height
-  const bbH = 0  // baseboards now standalone
   const svgW = wLen + 2 * PAD
 
   const toX = (a: number) => PAD + a
@@ -214,6 +156,8 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
     slat:    '#1d6f3d',
     ct:      '#8a6a3a',
     bb:      '#555',
+    sw:      '#2d5a8a',
+    step:    '#7a6a3a',
     gap:     '#888',
   }
 
@@ -233,7 +177,6 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
   const vBreaks = new Set<number>()
   const cabVRanges: Array<{ bottom: number; top: number }> = []
   vBreaks.add(0); vBreaks.add(wH)
-  if (bbH > 0) vBreaks.add(bbH)
   wallCabinets.forEach(cab => {
     const b = Math.max(0, cab.y)
     const t = Math.min(wH, cab.y + cab.h)
@@ -258,17 +201,63 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
     return hi - lo > 1 ? { bottom: lo, top: hi } : null
   })()
   if (slatVRange) { vBreaks.add(slatVRange.bottom); vBreaks.add(slatVRange.top) }
+  // Baseboards, stem walls, and step-ups on this wall — each contributes a
+  // height range so the left-side dim tier can label them individually.
+  const wallBbRanges: Array<{ bottom: number; top: number }> = []
+  const wallSwRanges: Array<{ bottom: number; top: number }> = []
+  const wallStepRanges: Array<{ bottom: number; top: number }> = []
+  const isPieceOnWall = (p: { x: number; z: number; rotY: number; length: number; thickness: number }) => {
+    const len = wallLen(wall); if (len < 0.01) return false
+    const [wux, wuz] = wallDir(wall)
+    const wnx = -wuz, wnz = wux
+    const perp = Math.abs((p.x - wall.x1) * wnx + (p.z - wall.z1) * wnz)
+    if (perp > wall.thickness / 2 + p.thickness + 6) return false
+    const pux = Math.cos(p.rotY), puz = -Math.sin(p.rotY)
+    const halfL = p.length / 2
+    const ends: [number, number][] = [
+      [p.x - pux * halfL, p.z - puz * halfL],
+      [p.x + pux * halfL, p.z + puz * halfL],
+    ]
+    let minU = Infinity, maxU = -Infinity
+    for (const [ex, ez] of ends) {
+      const u = (ex - wall.x1) * wux + (ez - wall.z1) * wuz
+      minU = Math.min(minU, u); maxU = Math.max(maxU, u)
+    }
+    return Math.min(len, maxU) - Math.max(0, minU) >= 0.5
+  }
+  baseboards.forEach(bb => {
+    if (!isPieceOnWall(bb)) return
+    const b = Math.max(0, bb.y), t = Math.min(wH, bb.y + bb.height)
+    if (t - b < 0.1) return
+    vBreaks.add(b); vBreaks.add(t)
+    wallBbRanges.push({ bottom: b, top: t })
+  })
+  stemWalls.forEach(sw => {
+    if (!isPieceOnWall(sw)) return
+    const b = Math.max(0, sw.y), t = Math.min(wH, sw.y + sw.height)
+    if (t - b < 0.1) return
+    vBreaks.add(b); vBreaks.add(t)
+    wallSwRanges.push({ bottom: b, top: t })
+  })
+  floorSteps.forEach(step => {
+    const proj = getStepWallProjection(step, wall)
+    if (!proj) return
+    const b = 0, t = Math.min(wH, proj.height)
+    if (t - b < 0.1) return
+    vBreaks.add(b); vBreaks.add(t)
+    wallStepRanges.push({ bottom: b, top: t })
+  })
   const vSorted = [...vBreaks].sort((a, b) => a - b)
   const hasVSegs = vSorted.length > 2
-  const classifyVSeg = (bot: number, top: number): 'cab' | 'ct' | 'slat' | 'bb' | 'gap' => {
-    for (const r of cabVRanges) {
-      if (Math.abs(bot - r.bottom) < 0.1 && Math.abs(top - r.top) < 0.1) return 'cab'
-    }
-    for (const r of ctVRanges) {
-      if (Math.abs(bot - r.bottom) < 0.1 && Math.abs(top - r.top) < 0.1) return 'ct'
-    }
+  const classifyVSeg = (bot: number, top: number): 'cab' | 'ct' | 'slat' | 'step' | 'bb' | 'sw' | 'gap' => {
+    const match = (r: { bottom: number; top: number }) =>
+      Math.abs(bot - r.bottom) < 0.1 && Math.abs(top - r.top) < 0.1
+    for (const r of cabVRanges) if (match(r)) return 'cab'
+    for (const r of ctVRanges)  if (match(r)) return 'ct'
     if (slatVRange && Math.abs(bot - slatVRange.bottom) < 0.1 && Math.abs(top - slatVRange.top) < 0.1) return 'slat'
-    if (bbH > 0 && Math.abs(bot) < 0.1 && Math.abs(top - bbH) < 0.1) return 'bb'
+    for (const r of wallStepRanges) if (match(r)) return 'step'
+    for (const r of wallBbRanges)   if (match(r)) return 'bb'
+    for (const r of wallSwRanges)   if (match(r)) return 'sw'
     return 'gap'
   }
 
@@ -530,7 +519,7 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
         const segPx = y2 - y1
         const kind = classifyVSeg(bot, top)
         const color = TIER_COLOR[kind]
-        const prefix = kind === 'cab' ? 'CAB ' : kind === 'door' ? 'DOOR ' : kind === 'slat' ? 'SW ' : kind === 'ct' ? 'CT ' : kind === 'bb' ? 'BB ' : ''
+        const prefix = kind === 'cab' ? 'CAB ' : kind === 'door' ? 'DOOR ' : kind === 'slat' ? 'SW ' : kind === 'ct' ? 'CT ' : kind === 'bb' ? 'BB ' : kind === 'sw' ? 'SW ' : kind === 'step' ? 'STEP ' : ''
         const labelText = `${prefix}${inchesToDisplay(top - bot)}`
         const needed = labelText.length * fs * 0.55
         const inline = segPx > needed + 2

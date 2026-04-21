@@ -73,6 +73,7 @@
 }
 .wall-actions button:hover { border-color: var(--border2); color: var(--text); }
 .wall-actions .delete-btn:hover { border-color: var(--danger); color: #f87171; }
+.wall-lock-btn.locked { color: var(--warning); border-color: var(--warning); }
 
 .wall-detail {
   padding: 4px 0 0;

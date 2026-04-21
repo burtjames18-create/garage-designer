@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import jsPDF from 'jspdf'
 import { useGarageStore } from '../store/garageStore'
-import type { GarageWall, PlacedCabinet, Countertop } from '../store/garageStore'
 import { exportCaptureRef } from '../utils/exportCapture'
 import WallElevationBlueprint from './WallElevationBlueprint'
 import FloorPlanBlueprint from './FloorPlanBlueprint'
@@ -98,34 +97,7 @@ interface ExportModalProps {
   onCapturesReady?: () => void
 }
 
-// ── Geometry helpers (to detect which walls have content) ────────────────────
-function wallLen(w: GarageWall) { return Math.hypot(w.x2 - w.x1, w.z2 - w.z1) }
-function wallDir(w: GarageWall): [number, number] {
-  const l = wallLen(w); if (l < 0.01) return [1, 0]
-  return [(w.x2 - w.x1) / l, (w.z2 - w.z1) / l]
-}
-function cabinetOnWall(cab: PlacedCabinet, w: GarageWall) {
-  const len = wallLen(w)
-  const [dx, dz] = wallDir(w)
-  const vx = cab.x - w.x1, vz = cab.z - w.z1
-  const along = vx * dx + vz * dz
-  const perp = Math.abs(vx * (-dz) + vz * dx)
-  if (perp > cab.d / 2 + w.thickness / 2 + 10) return false
-  if (along <= -cab.w / 2 || along >= len + cab.w / 2) return false
-  // Cabinet must face this wall (within 45°) — prevents corner bleed
-  const expectedRotY = Math.atan2(-dz, dx)
-  let diff = Math.abs(cab.rotY - expectedRotY) % (Math.PI * 2)
-  if (diff > Math.PI) diff = Math.PI * 2 - diff
-  return diff < Math.PI / 4
-}
-function countertopOnWall(ct: Countertop, w: GarageWall) {
-  const len = wallLen(w)
-  const [dx, dz] = wallDir(w)
-  const vx = ct.x - w.x1, vz = ct.z - w.z1
-  const along = vx * dx + vz * dz
-  const perp = Math.abs(vx * (-dz) + vz * dx)
-  return perp <= 25 / 2 + w.thickness / 2 + 10 && along > -ct.width / 2 && along < len + ct.width / 2
-}
+import { isCabinetOnWall, isCountertopOnWall } from '../utils/wallGeometry'
 
 export default function ExportModal({ onClose, onCapturesReady }: ExportModalProps) {
   const { customerName, siteAddress, consultantName,
@@ -148,8 +120,8 @@ export default function ExportModal({ onClose, onCapturesReady }: ExportModalPro
   const activeWalls = walls.filter(w =>
     slatwallPanels.some(p => p.wallId === w.id) ||
     stainlessBacksplashPanels.some(p => p.wallId === w.id) ||
-    cabinets.some(c => cabinetOnWall(c, w)) ||
-    countertops.some(ct => countertopOnWall(ct, w))
+    cabinets.some(c => isCabinetOnWall(c, w)) ||
+    countertops.some(ct => isCountertopOnWall(ct, w))
   )
 
   // Focus trap + Escape to close
@@ -484,6 +456,7 @@ export default function ExportModal({ onClose, onCapturesReady }: ExportModalPro
                   overheadRacks={overheadRacks}
                   baseboards={baseboards}
                   stemWalls={stemWalls}
+                  showTracing={false}
                 />
               </div>
               <Footer />
@@ -503,6 +476,8 @@ export default function ExportModal({ onClose, onCapturesReady }: ExportModalPro
                   countertops={countertops}
                   allWalls={walls}
                   floorSteps={floorSteps}
+                  baseboards={baseboards}
+                  stemWalls={stemWalls}
                 />
               </div>
               <Footer />

@@ -76,18 +76,6 @@ export async function loadModelFile(file: File): Promise<THREE.Object3D> {
   }
 }
 
-/** Get bounding box dimensions of an Object3D in inches (assumes model units = meters, 1m = 39.37in) */
-export function getModelDimensions(obj: THREE.Object3D): { w: number; h: number; d: number } {
-  const box = new THREE.Box3().setFromObject(obj)
-  const size = box.getSize(new THREE.Vector3())
-  // Most 3D models use meters; convert to inches
-  return {
-    w: Math.round(size.x * 39.37),
-    h: Math.round(size.y * 39.37),
-    d: Math.round(size.z * 39.37),
-  }
-}
-
 /** Center a model on origin and optionally normalize its scale */
 export function centerModel(obj: THREE.Object3D): void {
   const box = new THREE.Box3().setFromObject(obj)

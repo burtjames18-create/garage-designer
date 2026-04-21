@@ -2,12 +2,7 @@ import { useRef, useCallback, useState } from 'react'
 import type { GarageWall, PlacedCabinet, Countertop, FloorPoint, FloorStep, SlatwallPanel, StainlessBacksplashPanel, OverheadRack, Baseboard, StemWall } from '../store/garageStore'
 import { COUNTERTOP_DEPTH, useGarageStore } from '../store/garageStore'
 import { inchesToDisplay, snapToGrid, snapRackToWalls, type RackSnapResult } from '../utils/measurements'
-
-function wallLen(w: GarageWall) { return Math.hypot(w.x2 - w.x1, w.z2 - w.z1) }
-function wallDir(w: GarageWall): [number, number] {
-  const l = wallLen(w); if (l < 0.01) return [1, 0]
-  return [(w.x2 - w.x1) / l, (w.z2 - w.z1) / l]
-}
+import { wallLen, wallDir, wallNormal } from '../utils/wallGeometry'
 
 /** Normalize rotation so text is never upside-down (keeps it between -90° and +90°) */
 function readableAngle(deg: number) {
@@ -27,14 +22,17 @@ interface Props {
   overheadRacks?: OverheadRack[]
   baseboards?: Baseboard[]
   stemWalls?: StemWall[]
+  /** When false, the tracing reference image is omitted (used by PDF export). */
+  showTracing?: boolean
 }
 
 const PAD = 40  // compact padding to keep dim tiers close to wall edges
 const SLATWALL_DEPTH = 3  // visual depth of slatwall on floor plan (inches)
 
-export default function FloorPlanBlueprint({ walls, cabinets, countertops, floorPoints, floorSteps = [], slatwallPanels = [], stainlessBacksplashPanels = [], overheadRacks = [], baseboards = [], stemWalls = [] }: Props) {
+export default function FloorPlanBlueprint({ walls, cabinets, countertops, floorPoints, floorSteps = [], slatwallPanels = [], stainlessBacksplashPanels = [], overheadRacks = [], baseboards = [], stemWalls = [], showTracing = true }: Props) {
   const { selectRack, updateRack, selectedRackId,
     selectCabinet, updateCabinet, selectedCabinetId, snappingEnabled,
+    tracingImage, updateTracingImage,
     updateWall, selectedWallId, selectWall,
     wallAngleSnapEnabled, cornerAngleLabelsVisible } = useGarageStore()
   const svgRef = useRef<SVGSVGElement>(null)
@@ -70,16 +68,34 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
   // as the endpoint moves outside the current bounding box.
   const frozenBoundsRef = useRef<{ minX: number; maxX: number; minZ: number; maxZ: number } | null>(null)
 
+  // Tracing-image drag (body move + corner resize keeping aspect ratio).
+  const tracingDragRef = useRef<{
+    mode: 'move' | 'resize'
+    startMouseX: number; startMouseZ: number
+    initX: number; initZ: number
+    initW: number; initH: number
+  } | null>(null)
+
   if (walls.length === 0) return null
 
-  // Bounding box of all wall endpoints (or frozen bounds during drag)
+  // Bounding box of all wall endpoints (or frozen bounds during drag). If a
+  // tracing image is visible and extends past the walls, expand the view to
+  // fit it — otherwise the image's overflow gets clipped at the SVG edges.
   const allX = walls.flatMap(w => [w.x1, w.x2])
   const allZ = walls.flatMap(w => [w.z1, w.z2])
   const fb = frozenBoundsRef.current
-  const minX = fb ? fb.minX : Math.min(...allX)
-  const maxX = fb ? fb.maxX : Math.max(...allX)
-  const minZ = fb ? fb.minZ : Math.min(...allZ)
-  const maxZ = fb ? fb.maxZ : Math.max(...allZ)
+  let minX = fb ? fb.minX : Math.min(...allX)
+  let maxX = fb ? fb.maxX : Math.max(...allX)
+  let minZ = fb ? fb.minZ : Math.min(...allZ)
+  let maxZ = fb ? fb.maxZ : Math.max(...allZ)
+  if (!fb && showTracing && tracingImage) {
+    const halfW = tracingImage.widthIn / 2
+    const halfH = tracingImage.heightIn / 2
+    minX = Math.min(minX, tracingImage.x - halfW)
+    maxX = Math.max(maxX, tracingImage.x + halfW)
+    minZ = Math.min(minZ, tracingImage.z - halfH)
+    maxZ = Math.max(maxZ, tracingImage.z + halfH)
+  }
   const rangeX = maxX - minX || 1
   const rangeZ = maxZ - minZ || 1
 
@@ -280,6 +296,7 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
   const onWallEndPointerDown = useCallback((
     e: React.PointerEvent, wall: GarageWall, end: 'start' | 'end',
   ) => {
+    if (wall.locked) return
     e.stopPropagation()
     e.preventDefault()
     selectWall(wall.id)
@@ -411,6 +428,10 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
     e: React.PointerEvent, wall: GarageWall,
   ) => {
     if (e.button !== 0) return
+    if (wall.locked) {
+      selectWall(wall.id)
+      return
+    }
     e.stopPropagation()
     e.preventDefault()
     selectWall(wall.id)
@@ -676,10 +697,92 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
       preserveAspectRatio="xMidYMid meet"
       style={{ width: '100%', height: '100%', display: 'block' }}
     >
-      {/* Background — wall selection is intentionally preserved when clicking
-          empty space so the wall info panel stays open. Use Escape to close. */}
-      <rect x={0} y={0} width={SVG_W} height={SVG_H} fill="#ffffff" />
+      {/* Background — clicking empty space deselects the current wall.
+          Clicks on walls, cabinets, racks, etc. bubble from the child element,
+          not from this rect, so those selections are unaffected. */}
+      <rect x={0} y={0} width={SVG_W} height={SVG_H} fill="#ffffff"
+        onClick={() => selectWall(null)} />
 
+      {/* Tracing reference image — rendered BEHIND everything so the user can
+          draw walls on top. Hidden in PDF export (showTracing=false). */}
+      {showTracing && tracingImage && (() => {
+        const img = tracingImage
+        const halfW = img.widthIn / 2
+        const halfH = img.heightIn / 2
+        const x0 = sx(img.x - halfW), y0 = sz(img.z - halfH)
+        const x1 = sx(img.x + halfW), y1 = sz(img.z + halfH)
+        const startDrag = (mode: 'move' | 'resize') => (e: React.PointerEvent) => {
+          if (img.locked) return
+          e.stopPropagation(); e.preventDefault()
+          const pos = mouseToSvg(e)
+          if (!pos) return
+          tracingDragRef.current = {
+            mode,
+            startMouseX: pos.x, startMouseZ: pos.z,
+            initX: img.x, initZ: img.z,
+            initW: img.widthIn, initH: img.heightIn,
+          }
+          // Freeze the view bounds for the duration of the drag so the walls
+          // don't reshuffle as the image moves/resizes.
+          frozenBoundsRef.current = { minX, maxX, minZ, maxZ }
+          ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
+        }
+        const onMove = (e: React.PointerEvent) => {
+          const td = tracingDragRef.current
+          if (!td) return
+          const pos = mouseToSvg(e); if (!pos) return
+          const dx = pos.x - td.startMouseX
+          const dz = pos.z - td.startMouseZ
+          if (td.mode === 'move') {
+            updateTracingImage({ x: td.initX + dx, z: td.initZ + dz })
+          } else {
+            // Corner drag — grow/shrink uniformly, preserve aspect ratio.
+            const aspect = td.initH / td.initW
+            // Use the larger of the two axis deltas so diagonal motion feels natural.
+            const newW = Math.max(12, td.initW + dx * 2)
+            const newH = newW * aspect
+            updateTracingImage({ widthIn: newW, heightIn: newH })
+          }
+        }
+        const onUp = (e: React.PointerEvent) => {
+          tracingDragRef.current = null
+          frozenBoundsRef.current = null
+          try { (e.currentTarget as Element).releasePointerCapture(e.pointerId) } catch (_) {}
+        }
+        const pxW = x1 - x0, pxH = y1 - y0
+        return (
+          <g>
+            <image
+              href={img.dataUrl}
+              x={x0} y={y0} width={pxW} height={pxH}
+              preserveAspectRatio="none"
+              opacity={img.opacity}
+              pointerEvents="all"
+              style={{ cursor: img.locked ? 'default' : 'grab' }}
+              onPointerDown={startDrag('move')}
+              onPointerMove={onMove}
+              onPointerUp={onUp}
+              onPointerCancel={onUp}
+            />
+            {!img.locked && (
+              <>
+                <rect x={x0} y={y0} width={pxW} height={pxH}
+                  fill="none" stroke="#44aaff" strokeWidth={0.8} strokeDasharray="4 3"
+                  pointerEvents="none" />
+                <circle cx={x1} cy={y1} r={6}
+                  fill="#44aaff" stroke="#fff" strokeWidth={1.2}
+                  style={{ cursor: 'nwse-resize' }}
+                  pointerEvents="all"
+                  onPointerDown={startDrag('resize')}
+                  onPointerMove={onMove}
+                  onPointerUp={onUp}
+                  onPointerCancel={onUp}
+                />
+              </>
+            )}
+          </g>
+        )
+      })()}
 
       {/* Floor steps */}
       {floorSteps.map(step => (
@@ -816,6 +919,130 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
           )
         })
       })()}
+
+      {/* Openings (doors, windows, garage doors) — blueprint-style symbols
+          overlaid on the walls. Each opening gets a white cover that erases
+          the wall face lines across its span, perpendicular jamb lines at
+          each edge, a type-specific symbol (door swing arc / window mullion /
+          garage-door dashed line), and a width label above the exterior face.
+          Opening width labels also appear in the dim tier below. */}
+      {walls.flatMap(w => {
+        const len = wallLen(w)
+        if (len < 0.5) return []
+        const [dx, dz] = wallDir(w)
+        const halfT = w.thickness / 2
+        const perpX = -dz, perpZ = dx
+        // Interior-facing perpendicular (points toward garage center).
+        const [nx, nz] = wallNormal(w)
+        const intSign = (perpX * nx + perpZ * nz) > 0 ? 1 : -1
+
+        return w.openings.map(op => {
+          const a0 = op.xOffset
+          const a1 = op.xOffset + op.width
+          // Opening corners on the wall face lines (inches, world).
+          const pA0 = { x: w.x1 + dx * a0 + perpX * halfT, z: w.z1 + dz * a0 + perpZ * halfT }
+          const pA1 = { x: w.x1 + dx * a1 + perpX * halfT, z: w.z1 + dz * a1 + perpZ * halfT }
+          const nA0 = { x: w.x1 + dx * a0 - perpX * halfT, z: w.z1 + dz * a0 - perpZ * halfT }
+          const nA1 = { x: w.x1 + dx * a1 - perpX * halfT, z: w.z1 + dz * a1 - perpZ * halfT }
+          // Interior/exterior corners (picked per-wall by intSign).
+          const intStart = intSign > 0 ? pA0 : nA0
+          const intEnd   = intSign > 0 ? pA1 : nA1
+          const extStart = intSign > 0 ? nA0 : pA0
+          const extEnd   = intSign > 0 ? nA1 : pA1
+          // Unit interior-normal (direction into the garage).
+          const nxIn = perpX * intSign, nzIn = perpZ * intSign
+
+          // White cutout polygon — erases the wall face lines across this opening.
+          const coverPts = [pA0, pA1, nA1, nA0]
+            .map(p => `${sx(p.x)},${sz(p.z)}`).join(' ')
+
+          // Blueprint symbol per opening type.
+          let symbol: JSX.Element | null = null
+          if (op.type === 'door') {
+            // Door leaf perpendicular into the interior, swing arc back to
+            // the far jamb. Standard "90° open" plan convention.
+            const hinge = intStart
+            const tipX = hinge.x + nxIn * op.width
+            const tipZ = hinge.z + nzIn * op.width
+            const startAng = Math.atan2(nzIn, nxIn)
+            const endAng = Math.atan2(intEnd.z - hinge.z, intEnd.x - hinge.x)
+            let delta = endAng - startAng
+            while (delta > Math.PI) delta -= 2 * Math.PI
+            while (delta < -Math.PI) delta += 2 * Math.PI
+            const STEPS = 14
+            const arcPts: string[] = []
+            for (let i = 0; i <= STEPS; i++) {
+              const t = i / STEPS
+              const a = startAng + delta * t
+              arcPts.push(`${sx(hinge.x + op.width * Math.cos(a))},${sz(hinge.z + op.width * Math.sin(a))}`)
+            }
+            symbol = (
+              <>
+                <line x1={sx(hinge.x)} y1={sz(hinge.z)} x2={sx(tipX)} y2={sz(tipZ)}
+                  stroke="#222" strokeWidth={0.8} />
+                <polyline points={arcPts.join(' ')}
+                  fill="none" stroke="#222" strokeWidth={0.4} strokeDasharray="2 1.5" />
+              </>
+            )
+          } else if (op.type === 'window') {
+            // Three parallel lines across the opening: both wall faces + a
+            // center line representing the glazing plane.
+            const midStart = { x: (pA0.x + nA0.x) / 2, z: (pA0.z + nA0.z) / 2 }
+            const midEnd   = { x: (pA1.x + nA1.x) / 2, z: (pA1.z + nA1.z) / 2 }
+            symbol = (
+              <>
+                <line x1={sx(pA0.x)} y1={sz(pA0.z)} x2={sx(pA1.x)} y2={sz(pA1.z)}
+                  stroke="#222" strokeWidth={0.5} />
+                <line x1={sx(nA0.x)} y1={sz(nA0.z)} x2={sx(nA1.x)} y2={sz(nA1.z)}
+                  stroke="#222" strokeWidth={0.5} />
+                <line x1={sx(midStart.x)} y1={sz(midStart.z)} x2={sx(midEnd.x)} y2={sz(midEnd.z)}
+                  stroke="#222" strokeWidth={0.5} />
+              </>
+            )
+          } else if (op.type === 'garage-door') {
+            // Bold dashed line on the exterior face represents the closed door
+            // panel. A lighter dashed line on the interior face indicates the
+            // track/header.
+            symbol = (
+              <>
+                <line x1={sx(extStart.x)} y1={sz(extStart.z)} x2={sx(extEnd.x)} y2={sz(extEnd.z)}
+                  stroke="#222" strokeWidth={1.2} strokeDasharray="4 2" />
+                <line x1={sx(intStart.x)} y1={sz(intStart.z)} x2={sx(intEnd.x)} y2={sz(intEnd.z)}
+                  stroke="#888" strokeWidth={0.4} strokeDasharray="1 1.5" />
+              </>
+            )
+          }
+
+          // Width label — positioned on the exterior side of the wall, aligned
+          // with wall direction so it reads left-to-right.
+          const centerX = (pA0.x + pA1.x + nA0.x + nA1.x) / 4
+          const centerZ = (pA0.z + pA1.z + nA0.z + nA1.z) / 4
+          const labelOffset = halfT + 7   // inches outside the exterior face
+          const labelX = centerX - nxIn * labelOffset
+          const labelZ = centerZ - nzIn * labelOffset
+          const wallDeg = Math.atan2(dz, dx) * 180 / Math.PI
+          const readableDeg = (wallDeg > 90 || wallDeg < -90) ? wallDeg + 180 : wallDeg
+          const prefix = op.type === 'garage-door' ? 'GD ' : op.type === 'window' ? 'W ' : ''
+
+          return (
+            <g key={`op-${op.id}`} pointerEvents="none">
+              <polygon points={coverPts} fill="#ffffff" stroke="none" />
+              {/* Jambs at each edge */}
+              <line x1={sx(pA0.x)} y1={sz(pA0.z)} x2={sx(nA0.x)} y2={sz(nA0.z)}
+                stroke="#222" strokeWidth={0.8} />
+              <line x1={sx(pA1.x)} y1={sz(pA1.z)} x2={sx(nA1.x)} y2={sz(nA1.z)}
+                stroke="#222" strokeWidth={0.8} />
+              {symbol}
+              <text x={sx(labelX)} y={sz(labelZ)}
+                textAnchor="middle" dominantBaseline="central"
+                fontSize={4.5} fontWeight={600} fill="#444"
+                transform={`rotate(${readableDeg} ${sx(labelX)} ${sz(labelZ)})`}>
+                {prefix}{inchesToDisplay(op.width)}
+              </text>
+            </g>
+          )
+        })
+      })}
 
       {/* Slatwall panels — shown as thin strips along the wall interior */}
       {slatwallPanels.map(panel => {
@@ -1056,35 +1283,43 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
             tierStrips.push(slatSegs)
           }
 
-          // ── Doors tier: labeled segments for each door + gaps ──
-          // For procedural doors, the dimension spans the outer edges of the
-          // casing trim (2.5" past the rough opening on each side).
-          const wDoors = w.openings.filter(op => op.type === 'door')
-          if (wDoors.length > 0) {
-            const items = wDoors.map(op => {
+          // ── Openings tier: labeled segments for each door / window /
+          // garage-door plus the gaps between them. All three opening types
+          // land on the same tier, distinguished by prefix and color.
+          const wOpenings = w.openings
+          if (wOpenings.length > 0) {
+            const OP_PREFIX: Record<string, { prefix: string; color: string }> = {
+              'door':        { prefix: 'DOOR ',   color: '#b22' },
+              'window':      { prefix: 'WINDOW ', color: '#247' },
+              'garage-door': { prefix: 'GD ',     color: '#742' },
+            }
+            const items = wOpenings.map(op => {
               const ext = op.modelId === 'custom-plain' ? 2.5 : 0
+              const meta = OP_PREFIX[op.type] ?? { prefix: '', color: '#333' }
               return {
                 start: Math.max(iStart, op.xOffset - ext),
                 end:   Math.min(iEnd,   op.xOffset + op.width + ext),
+                prefix: meta.prefix,
+                color: meta.color,
               }
             }).filter(p => p.end - p.start > 0.5)
               .sort((a, b) => a.start - b.start)
             if (items.length > 0) {
-              const doorSegs: Strip[] = []
+              const opSegs: Strip[] = []
               if (items[0].start - iStart > 1) {
-                doorSegs.push({ start: iStart, end: items[0].start,
+                opSegs.push({ start: iStart, end: items[0].start,
                   label: inchesToDisplay(items[0].start - iStart),
                   bold: false, color: dimColorLight })
               }
               for (let i = 0; i < items.length; i++) {
                 const it = items[i]
-                doorSegs.push({ start: it.start, end: it.end,
-                  label: 'DOOR ' + inchesToDisplay(it.end - it.start),
-                  bold: true, color: '#b22' })
+                opSegs.push({ start: it.start, end: it.end,
+                  label: it.prefix + inchesToDisplay(it.end - it.start),
+                  bold: true, color: it.color })
                 if (i < items.length - 1) {
                   const gs = items[i].end, ge = items[i + 1].start
                   if (ge - gs > 1) {
-                    doorSegs.push({ start: gs, end: ge,
+                    opSegs.push({ start: gs, end: ge,
                       label: inchesToDisplay(ge - gs),
                       bold: false, color: dimColorLight })
                   }
@@ -1092,11 +1327,11 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
               }
               const lastEnd = items[items.length - 1].end
               if (iEnd - lastEnd > 1) {
-                doorSegs.push({ start: lastEnd, end: iEnd,
+                opSegs.push({ start: lastEnd, end: iEnd,
                   label: inchesToDisplay(iEnd - lastEnd),
                   bold: false, color: dimColorLight })
               }
-              tierStrips.push(doorSegs)
+              tierStrips.push(opSegs)
             }
           }
 

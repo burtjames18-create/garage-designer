@@ -4,7 +4,7 @@ import { useScrollToSelected } from '../hooks/useScrollToSelected'
 import type { GarageShape, ShapeType } from '../store/garageStore'
 import type { ImportedAsset } from '../store/garageStore'
 import MeasureInput from './MeasureInput'
-import { IconDelete } from './Icons'
+import { IconDelete, IconLocked, IconUnlocked } from './Icons'
 import ConfirmDialog from './ConfirmDialog'
 import { wallTextures, texturePath } from '../data/textureCatalog'
 import { flooringColors, flooringTexturePath } from '../data/flooringColors'
@@ -95,6 +95,13 @@ function ShapeEditor({ shape }: { shape: GarageShape }) {
           onClick={e => e.stopPropagation()}
           aria-label="Shape name"
         />
+        <button
+          className={`step-lock-btn${shape.locked ? ' locked' : ''}`}
+          onClick={e => { e.stopPropagation(); updateShape(shape.id, { locked: !shape.locked }) }}
+          aria-label={shape.locked ? 'Unlock position' : 'Lock position'}
+        >
+          {shape.locked ? <IconLocked size={12} /> : <IconUnlocked size={12} />}
+        </button>
         <button className="delete-btn"
           onClick={e => { e.stopPropagation(); setConfirmDelete(true) }}
           aria-label={`Delete ${shape.label}`}>
@@ -107,14 +114,14 @@ function ShapeEditor({ shape }: { shape: GarageShape }) {
           <div className="dim-grid">
             {(shape.type === 'box' || shape.type === 'beam') ? (
               <>
-                <MeasureInput label="Width"  inches={shape.w} onChange={v => updateShape(shape.id, { w: v })} min={0.5} />
-                <MeasureInput label="Height" inches={shape.h} onChange={v => updateShape(shape.id, { h: v })} min={0.5} />
-                <MeasureInput label="Depth"  inches={shape.d} onChange={v => updateShape(shape.id, { d: v })} min={0.5} />
+                <MeasureInput label="Width"  inches={shape.w} onChange={v => updateShape(shape.id, { w: v })} min={0.5} disabled={shape.locked} />
+                <MeasureInput label="Height" inches={shape.h} onChange={v => updateShape(shape.id, { h: v })} min={0.5} disabled={shape.locked} />
+                <MeasureInput label="Depth"  inches={shape.d} onChange={v => updateShape(shape.id, { d: v })} min={0.5} disabled={shape.locked} />
               </>
             ) : (
               <>
-                <MeasureInput label="Diameter" inches={shape.r * 2} onChange={v => updateShape(shape.id, { r: v / 2 })} min={1} />
-                <MeasureInput label="Height"   inches={shape.h}     onChange={v => updateShape(shape.id, { h: v })}     min={0.5} />
+                <MeasureInput label="Diameter" inches={shape.r * 2} onChange={v => updateShape(shape.id, { r: v / 2 })} min={1}   disabled={shape.locked} />
+                <MeasureInput label="Height"   inches={shape.h}     onChange={v => updateShape(shape.id, { h: v })}     min={0.5} disabled={shape.locked} />
               </>
             )}
             <MeasureInput
@@ -122,6 +129,7 @@ function ShapeEditor({ shape }: { shape: GarageShape }) {
               inches={shape.y - shape.h / 2}
               onChange={v => updateShape(shape.id, { y: v + shape.h / 2 })}
               min={0}
+              disabled={shape.locked}
             />
           </div>
 
