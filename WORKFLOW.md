@@ -74,16 +74,23 @@ npm run electron:build   # Build + create installer → release/ folder
 > entry so existing user projects continue to load. If the schema is unchanged,
 > leave `CURRENT_VERSION` alone — no migration work needed.
 
+> **In-app launcher patch notes**: `src/data/patchNotes.ts` drives the release
+> notes panel shown on the launcher / setup screen. Add a new `PatchNote` entry
+> at the top of `PATCH_NOTES` for every published version — short, glanceable
+> user-facing bullets (NOT the full CHANGELOG). Forgetting this ships a build
+> whose launcher still advertises the previous version's notes.
+
 1. **Make changes** and test locally
 2. **Draft release notes** in `CHANGELOG.md` under `## Unreleased`
-3. **Bump version** in `package.json` — increment the patch number (e.g. `1.0.10` → `1.0.11`)
-4. **Commit and push** to GitHub:
+3. **Add a `PatchNote` entry** at the top of `src/data/patchNotes.ts` (user-facing, glanceable bullets — these are what the launcher shows)
+4. **Bump version** in `package.json` — increment the patch number (e.g. `1.0.10` → `1.0.11`)
+5. **Commit and push** to GitHub:
    ```bash
    git add .
    git commit -m "v1.0.11: Description of changes"
    git push origin master
    ```
-5. **Build and publish** the release:
+6. **Build and publish** the release:
    ```bash
    # Retrieve the GitHub token from Windows Credential Manager and publish:
    GH_TOKEN=$(printf "protocol=https\nhost=github.com\n" | git credential fill | grep password | cut -d= -f2) npm run electron:publish
@@ -98,15 +105,16 @@ npm run electron:build   # Build + create installer → release/ folder
    > Git push works without this because Git uses its own credential helper, but electron-builder
    > requires the token as an environment variable.
 
-6. **Finalize CHANGELOG**: move the contents of `## Unreleased` under a new
+7. **Finalize CHANGELOG**: move the contents of `## Unreleased` under a new
    `## [x.y.z] — YYYY-MM-DD` heading, reset `Unreleased` to empty. Paste the
    same bullets into the GitHub Release description.
 
-7. **Smoke test** on a second machine: confirm the auto-updater pulls the new
+8. **Smoke test** on a second machine: confirm the auto-updater pulls the new
    version, and that an old `.garage` save file opens without errors (this
-   exercises the migration pipeline).
+   exercises the migration pipeline). Also verify the launcher's patch-notes
+   panel shows the new version at the top.
 
-8. **Users auto-update**: When users open the app, `electron-updater` checks GitHub Releases, downloads the new version, and installs it on quit.
+9. **Users auto-update**: When users open the app, `electron-updater` checks GitHub Releases, downloads the new version, and installs it on quit.
 
 ### Common mistake: forgetting to bump the version
 If you push code and run `electron:publish` without bumping the version, it will overwrite the existing release with the same version number. Users who already have that version installed will **not** receive the update because electron-updater sees the same version and skips it.

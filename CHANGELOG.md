@@ -14,6 +14,18 @@ _(No changes yet.)_
 
 ---
 
+## [1.2.8.1] — 2026-04-21
+
+Patch release — no user-visible code changes. Adds a `1.2.8` entry to the
+in-app launcher patch-notes panel (`src/data/patchNotes.ts`) which was
+missed during the 1.2.8 publish, so existing 1.2.8 users see the real
+1.2.8 highlights instead of the stale 1.2.7 notes.
+
+WORKFLOW.md updated so future releases include `patchNotes.ts` in the
+publish checklist.
+
+---
+
 ## [1.2.8] — 2026-04-21
 
 Patch release — no save-format change (reads 1.2.7 projects unchanged).

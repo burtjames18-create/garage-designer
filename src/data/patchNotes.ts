@@ -9,6 +9,26 @@ export interface PatchNote {
 
 export const PATCH_NOTES: PatchNote[] = [
   {
+    version: '1.2.8',
+    date: '2026-04-21',
+    items: [
+      'Floor plan: doors, windows, and garage doors now render as blueprint symbols (door swing arcs, window mullions, garage-door dashed lines) with width labels',
+      'Window and garage-door widths now shown in the left-side dim tier (previously only people doors)',
+      'Reference image: upload a photo or blueprint of an existing garage, trace walls over it in the 2D floor plan (hidden in export PDF)',
+      'Fill Lowers / Uppers / Lockers buttons on each wall — auto-packs stock-size cabinets around existing doors/windows',
+      'Baseboards & stem walls now adjustable in wall edit mode (drag to move, edge handles to resize, snap to everything)',
+      'Step-ups snap to walls at any angle (not just axis-aligned); new lock toggle',
+      'Lock buttons added to shapes, step-ups, racks, baseboards, and stem walls',
+      'Stem wall default thickness reduced to 1/8" (reads as a wall surface coat)',
+      'Clicking empty space in the 2D floor plan deselects the wall',
+      'Clicking a door/window in 3D highlights only the opening, not the wall',
+      'Exterior wall face overlay changed from red to green (you can put things on that side)',
+      'STEP / BB / SW segments now labeled in the wall-edit dim tier (and the exported PDF)',
+      'Fixed: two selection bugs where an item and a wall could both stay selected',
+      'Fixed: clicking a wall now properly deselects any previously selected baseboard/stem wall',
+    ],
+  },
+  {
     version: '1.2.7',
     date: '2026-04-19',
     items: [
