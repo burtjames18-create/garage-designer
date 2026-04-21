@@ -14,7 +14,7 @@ _(No changes yet.)_
 
 ---
 
-## [1.2.8.1] — 2026-04-21
+## [1.2.9] — 2026-04-21
 
 Patch release — no user-visible code changes. Adds a `1.2.8` entry to the
 in-app launcher patch-notes panel (`src/data/patchNotes.ts`) which was
