@@ -5917,10 +5917,13 @@ export default function GarageShell() {
               if (df < bestSnapDist) { bestSnapDist = df; bestSnap = farEndCenter }
             }
             if (bestSnap !== null) snappedAlong = bestSnap
-            // Snap either end of the piece to a doorway/window opening edge.
+            // Snap either end of the piece to a doorway/window/garage-door
+            // opening edge — wider threshold so the baseboard lands flush
+            // against the opening's inside edge without requiring pixel-perfect
+            // pointer aim.
             if (!snappingDisabledRef.current) {
               const s = snapSpanToOpeningEdges(
-                snappedAlong - halfSnap, snappedAlong + halfSnap, wall.openings,
+                snappedAlong - halfSnap, snappedAlong + halfSnap, wall.openings, 8,
               )
               snappedAlong = (s.start + s.end) / 2
             }
@@ -6074,7 +6077,7 @@ export default function GarageShell() {
                 if (bestSnap !== null) snappedAlong = bestSnap
                 if (!snappingDisabledRef.current) {
                   const s = snapSpanToOpeningEdges(
-                    snappedAlong - halfSnap, snappedAlong + halfSnap, w.openings,
+                    snappedAlong - halfSnap, snappedAlong + halfSnap, w.openings, 8,
                   )
                   snappedAlong = (s.start + s.end) / 2
                 }
@@ -6276,6 +6279,38 @@ export default function GarageShell() {
                 )
                 if (perpDist > 2) continue
                 if (Math.abs(candLen - snapLen) < SNAP_STEP) snapLen = candLen
+              }
+            }
+          }
+          // Opening-edge snap — moving end latches onto the inside edge of a
+          // door, window, or garage-door opening on any wall the piece is
+          // running along. Each opening edge is projected onto the piece axis
+          // from the fixed end; the closest within SNAP_OPENING wins.
+          if (!snappingDisabledRef.current) {
+            const SNAP_OPENING = 8
+            for (const w of wallsRef.current) {
+              const wdx = w.x2 - w.x1, wdz = w.z2 - w.z1
+              const wlen = Math.hypot(wdx, wdz)
+              if (wlen < 1) continue
+              const wux = wdx / wlen, wuz = wdz / wlen
+              if (Math.abs(wux * ux + wuz * uz) < 0.95) continue
+              const wnx = -wuz, wnz = wux
+              const perpDist = Math.abs((fx - w.x1) * wnx + (fz - w.z1) * wnz)
+              if (perpDist > w.thickness / 2 + piece.thickness + 6) continue
+              for (const op of w.openings) {
+                const ext = openingCasingExt(op)
+                const leftAlong  = op.xOffset - ext
+                const rightAlong = op.xOffset + op.width + ext
+                for (const alongOnWall of [leftAlong, rightAlong]) {
+                  // World position of this opening edge at wall A's centerline.
+                  const ex = w.x1 + wux * alongOnWall
+                  const ez = w.z1 + wuz * alongOnWall
+                  const candAlong = (ex - fx) * ux + (ez - fz) * uz
+                  if (Math.sign(candAlong) !== dir && candAlong !== 0) continue
+                  const candLen = Math.abs(candAlong)
+                  if (candLen < 3) continue
+                  if (Math.abs(candLen - snapLen) < SNAP_OPENING) snapLen = candLen
+                }
               }
             }
           }

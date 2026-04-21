@@ -371,7 +371,8 @@ function CountertopEditor({ ct }: { ct: Countertop }) {
 
 export default function CabinetsPanel() {
   const { cabinets, addCabinet, updateCabinet, countertops, addCountertop, getQuote, viewMode, walls, elevationWallIndex, elevationSide } = useGarageStore()
-  const [activeLine, setActiveLine] = useState<CabinetLine>('technica')
+  const [activeLine, setActiveLine] = useState<CabinetLine>('signature')
+  const [sigVariant, setSigVariant] = useState<'standard' | 'shallow'>('standard')
   const quote = cabinets.length > 0 ? getQuote() : null
 
   const isWallEdit = viewMode === 'elevation'
@@ -398,24 +399,53 @@ export default function CabinetsPanel() {
 
   return (
     <div className="cabinets-panel">
-      {/* Cabinet line tabs */}
+      {/* Cabinet line tabs — Signature first, then Technica */}
       <div className="cab-line-tabs" role="tablist" aria-label="Cabinet line">
-        <button
-          role="tab"
-          aria-selected={activeLine === 'technica'}
-          className={`cab-line-tab${activeLine === 'technica' ? ' active' : ''}`}
-          onClick={() => setActiveLine('technica')}
-        >Technica</button>
         <button
           role="tab"
           aria-selected={activeLine === 'signature'}
           className={`cab-line-tab${activeLine === 'signature' ? ' active' : ''}`}
           onClick={() => setActiveLine('signature')}
         >Signature</button>
+        <button
+          role="tab"
+          aria-selected={activeLine === 'technica'}
+          className={`cab-line-tab${activeLine === 'technica' ? ' active' : ''}`}
+          onClick={() => setActiveLine('technica')}
+        >Technica</button>
       </div>
 
+      {/* Signature sub-variant buttons — only under the Signature tab */}
+      {activeLine === 'signature' && (
+        <div className="cab-line-tabs cab-line-subtabs" role="tablist" aria-label="Signature variant">
+          <button
+            role="tab"
+            aria-selected={sigVariant === 'standard'}
+            className={`cab-line-tab${sigVariant === 'standard' ? ' active' : ''}`}
+            onClick={() => setSigVariant('standard')}
+          >Signature</button>
+          <button
+            role="tab"
+            aria-selected={sigVariant === 'shallow'}
+            className={`cab-line-tab${sigVariant === 'shallow' ? ' active' : ''}`}
+            onClick={() => setSigVariant('shallow')}
+          >Signature Shallow</button>
+        </div>
+      )}
+
       {STYLE_GROUPS.map(group => {
-        const presets = CABINET_PRESETS.filter(p => p.style === group.style && p.line === activeLine)
+        const presets = CABINET_PRESETS.filter(p => {
+          if (p.style !== group.style) return false
+          if (p.line !== activeLine) return false
+          // Signature sub-variant filter. Uppers and corner-uppers are shared
+          // across both Signature variants (14" deep regardless), so they
+          // always show. Lowers and lockers split by `shallow` flag.
+          if (activeLine === 'signature') {
+            if (group.style === 'upper' || group.style === 'corner-upper') return true
+            return sigVariant === 'shallow' ? !!p.shallow : !p.shallow
+          }
+          return true
+        })
         return (
           <div key={group.style} className="cab-group">
             <span className="cab-group-label">{group.label}</span>

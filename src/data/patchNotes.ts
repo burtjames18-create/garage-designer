@@ -9,6 +9,15 @@ export interface PatchNote {
 
 export const PATCH_NOTES: PatchNote[] = [
   {
+    version: '1.2.14',
+    date: '2026-04-21',
+    items: [
+      'New Signature Shallow cabinet line — 18" deep lowers and lockers (shared uppers); sub-button row under the Signature tab switches between Signature and Signature Shallow',
+      'Signature tab now shows first, before Technica',
+      'Baseboards & stem walls snap to garage door inside edges and stay visible on walls with a garage door in wall edit mode',
+    ],
+  },
+  {
     version: '1.2.13',
     date: '2026-04-21',
     items: [

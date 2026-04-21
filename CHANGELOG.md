@@ -14,6 +14,33 @@ _(No changes yet.)_
 
 ---
 
+## [1.2.14] — 2026-04-21
+
+### Features
+
+- **Signature Shallow cabinet line.** New sub-variant under the Signature
+  tab with 18"-deep lowers and lockers (instead of 24"). Upper cabinets
+  and corner uppers are shared between both variants. Signature now
+  appears first in the tab row, with a sub-button row that switches
+  between **Signature** and **Signature Shallow**. Each shallow SKU is
+  suffixed `-S` and priced ~$20–40 less than its standard counterpart.
+- **Baseboards & stem walls snap to garage door inside edges.** The 2D
+  elevation snap loop was skipping `garage-door`; now included. The 3D
+  opening-edge snap threshold was also widened from 2" to 8" so the
+  moving end locks onto the door inside edge reliably.
+- **Baseboards stay visible on walls with a garage door.** In wall edit
+  mode, baseboards and stem walls now render after openings in SVG order
+  so the opening's opaque fill doesn't cover them.
+
+### Bug fixes
+
+- **Resize snap to opening edges.** The resize path only snapped to
+  wall endpoints, joint corners, pieces, and steps — door/window/garage
+  edges were missing. Now snaps to any opening's inside edge on the
+  wall the piece is running along.
+
+---
+
 ## [1.2.13] — 2026-04-21
 
 ### Features

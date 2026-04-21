@@ -269,10 +269,11 @@ export default function WallElevationView() {
       snaps.push({ target: oA + ct.width / 2 - halfW, forEdge: 'right' })
     }
 
-    // Doors & windows — snap to the outer edges of the opening (casing
-    // outside for procedural doors, rough-opening edges otherwise).
+    // Doors, windows, and garage doors — snap to the outer edges of the
+    // opening (casing outside for procedural doors; rough-opening edges
+    // otherwise, which for garage doors IS the inside edge of the opening).
     for (const op of wall.openings) {
-      if (op.type !== 'door' && op.type !== 'window') continue
+      if (op.type !== 'door' && op.type !== 'window' && op.type !== 'garage-door') continue
       if (op.id === selfId) continue
       const entry = op.modelId ? getOpeningModelById(op.modelId) : undefined
       const ext = entry?.kind === 'procedural' ? 2.5 : 0  // PDOOR.CASING_W
@@ -1213,11 +1214,97 @@ export default function WallElevationView() {
             )
           })}
 
-          {/* Baseboards — project onto wall and render as rectangles */}
+          {/* Openings */}
+          {wall.openings.map(op => {
+            const draggable = op.type === 'door' || op.type === 'window' || op.type === 'garage-door'
+            const hitRect = draggable ? (
+              <rect
+                x={toX(op.xOffset)} y={toY(op.yOffset + op.height)}
+                width={op.width} height={op.height}
+                fill="transparent"
+                style={{ cursor: 'move', pointerEvents: 'all' }}
+                onMouseDown={e => onOpeningDown(e, op)}
+                onClick={e => e.stopPropagation()}
+              />
+            ) : null
+            if (op.type === 'door' && (op.modelId === 'custom-plain' || op.modelId === 'custom-double')) {
+              const casW = 2.5
+              const jambT = 0.75, gap = 0.125, bottomGap = 0.75
+              const slabX = op.xOffset + jambT + gap
+              const slabW = op.width - 2 * (jambT + gap)
+              const slabTopY = op.yOffset + op.height - jambT - gap
+              const slabBotY = op.yOffset + bottomGap
+              return (
+                <g key={op.id}>
+                  {/* Casing / frame */}
+                  <rect
+                    x={toX(op.xOffset - casW)}
+                    y={toY(op.yOffset + op.height + casW)}
+                    width={op.width + 2 * casW}
+                    height={op.height + casW}
+                    fill={op.frameColor ?? '#f0ede4'}
+                    stroke="#666" strokeWidth={0.5}
+                  />
+                  {/* Slab */}
+                  <rect
+                    x={toX(slabX)} y={toY(slabTopY)}
+                    width={slabW} height={slabTopY - slabBotY}
+                    fill={op.doorColor ?? '#e0dedd'}
+                    stroke="#444" strokeWidth={0.5}
+                  />
+                  {/* Handle at 36" from floor */}
+                  <circle
+                    cx={toX(slabX + slabW - 2.75)} cy={toY(36)} r={1.1}
+                    fill="#B8B8B0" stroke="#222" strokeWidth={0.3}
+                  />
+                  {hitRect}
+                </g>
+              )
+            }
+            return (
+              <g key={op.id}>
+                <rect
+                  x={toX(op.xOffset)} y={toY(op.yOffset + op.height)}
+                  width={op.width} height={op.height}
+                  fill="#f4f4f2" stroke="#aaa" strokeWidth={0.5}
+                  style={draggable ? { cursor: 'move' } : undefined}
+                  onMouseDown={draggable ? (e => onOpeningDown(e, op)) : undefined}
+                  onClick={draggable ? (e => e.stopPropagation()) : undefined}
+                />
+              </g>
+            )
+          })}
+
+          {/* Opening resize handles — top-left & top-right, only on selected door/window */}
+          {wall.openings
+            .filter(op => (op.type === 'door' || op.type === 'window' || op.type === 'garage-door') && op.id === selectedOpeningId)
+            .map(op => {
+              const left  = toX(op.xOffset)
+              const right = toX(op.xOffset + op.width)
+              const top   = toY(op.yOffset + op.height)
+              const corners: [0 | 1, number, number][] = [
+                [0, left, top], [1, right, top],
+              ]
+              return (
+                <g key={`dh-${op.id}`}>
+                  {corners.map(([c, cx, cy]) => (
+                    <circle key={c} cx={cx} cy={cy} r={2.4}
+                      fill="#fff" stroke="#44aaff" strokeWidth={0.8}
+                      style={{ cursor: c === 0 ? 'nwse-resize' : 'nesw-resize' }}
+                      onMouseDown={e => onOpeningCornerDown(e, op, c)}
+                      onClick={e => e.stopPropagation()}
+                    />
+                  ))}
+                </g>
+              )
+            })}
+
+          {/* Baseboards — rendered AFTER openings so they stay visible on walls
+              with a garage door/opening (the opening's opaque fill used to
+              cover them when they rendered first). */}
           {baseboards.map(bb => {
             const ux = Math.cos(bb.rotY), uz = -Math.sin(bb.rotY)
             const halfL = bb.length / 2
-            // Two endpoints of the baseboard centerline
             const ends: [number, number][] = [
               [bb.x - ux * halfL, bb.z - uz * halfL],
               [bb.x + ux * halfL, bb.z + uz * halfL],
@@ -1227,13 +1314,11 @@ export default function WallElevationView() {
             if (wLen2 < 0.1) return null
             const wux = wdx / wLen2, wuz = wdz / wLen2
             const wnx = -wuz, wnz = wux
-            // Project endpoints onto wall along-axis and normal
             let minU = Infinity, maxU = -Infinity
             for (const [px, pz] of ends) {
               const u = (px - wall.x1) * wux + (pz - wall.z1) * wuz
               minU = Math.min(minU, u); maxU = Math.max(maxU, u)
             }
-            // Check perpendicular distance — baseboard center must be near wall
             const perpDist = Math.abs((bb.x - wall.x1) * wnx + (bb.z - wall.z1) * wnz)
             if (perpDist > wall.thickness / 2 + bb.thickness + 6) return null
             const u0 = Math.max(0, minU), u1 = Math.min(wLen, maxU)
@@ -1352,92 +1437,6 @@ export default function WallElevationView() {
               </g>
             )
           })}
-
-          {/* Openings */}
-          {wall.openings.map(op => {
-            const draggable = op.type === 'door' || op.type === 'window' || op.type === 'garage-door'
-            const hitRect = draggable ? (
-              <rect
-                x={toX(op.xOffset)} y={toY(op.yOffset + op.height)}
-                width={op.width} height={op.height}
-                fill="transparent"
-                style={{ cursor: 'move', pointerEvents: 'all' }}
-                onMouseDown={e => onOpeningDown(e, op)}
-                onClick={e => e.stopPropagation()}
-              />
-            ) : null
-            if (op.type === 'door' && (op.modelId === 'custom-plain' || op.modelId === 'custom-double')) {
-              const casW = 2.5
-              const jambT = 0.75, gap = 0.125, bottomGap = 0.75
-              const slabX = op.xOffset + jambT + gap
-              const slabW = op.width - 2 * (jambT + gap)
-              const slabTopY = op.yOffset + op.height - jambT - gap
-              const slabBotY = op.yOffset + bottomGap
-              return (
-                <g key={op.id}>
-                  {/* Casing / frame */}
-                  <rect
-                    x={toX(op.xOffset - casW)}
-                    y={toY(op.yOffset + op.height + casW)}
-                    width={op.width + 2 * casW}
-                    height={op.height + casW}
-                    fill={op.frameColor ?? '#f0ede4'}
-                    stroke="#666" strokeWidth={0.5}
-                  />
-                  {/* Slab */}
-                  <rect
-                    x={toX(slabX)} y={toY(slabTopY)}
-                    width={slabW} height={slabTopY - slabBotY}
-                    fill={op.doorColor ?? '#e0dedd'}
-                    stroke="#444" strokeWidth={0.5}
-                  />
-                  {/* Handle at 36" from floor */}
-                  <circle
-                    cx={toX(slabX + slabW - 2.75)} cy={toY(36)} r={1.1}
-                    fill="#B8B8B0" stroke="#222" strokeWidth={0.3}
-                  />
-                  {hitRect}
-                </g>
-              )
-            }
-            return (
-              <g key={op.id}>
-                <rect
-                  x={toX(op.xOffset)} y={toY(op.yOffset + op.height)}
-                  width={op.width} height={op.height}
-                  fill="#f4f4f2" stroke="#aaa" strokeWidth={0.5}
-                  style={draggable ? { cursor: 'move' } : undefined}
-                  onMouseDown={draggable ? (e => onOpeningDown(e, op)) : undefined}
-                  onClick={draggable ? (e => e.stopPropagation()) : undefined}
-                />
-              </g>
-            )
-          })}
-
-          {/* Opening resize handles — top-left & top-right, only on selected door/window */}
-          {wall.openings
-            .filter(op => (op.type === 'door' || op.type === 'window' || op.type === 'garage-door') && op.id === selectedOpeningId)
-            .map(op => {
-              const left  = toX(op.xOffset)
-              const right = toX(op.xOffset + op.width)
-              const top   = toY(op.yOffset + op.height)
-              const corners: [0 | 1, number, number][] = [
-                [0, left, top], [1, right, top],
-              ]
-              return (
-                <g key={`dh-${op.id}`}>
-                  {corners.map(([c, cx, cy]) => (
-                    <circle key={c} cx={cx} cy={cy} r={2.4}
-                      fill="#fff" stroke="#44aaff" strokeWidth={0.8}
-                      style={{ cursor: c === 0 ? 'nwse-resize' : 'nesw-resize' }}
-                      onMouseDown={e => onOpeningCornerDown(e, op, c)}
-                      onClick={e => e.stopPropagation()}
-                    />
-                  ))}
-                </g>
-              )
-            })}
-
 
           {/* All wall elements clipped to wall face */}
           <g clipPath="url(#wall-face-clip)">

@@ -35,6 +35,17 @@
   box-shadow: 0 0 0 2px var(--accent-dim);
 }
 
+/* Signature sub-variant row — nested under the main line tabs. */
+.cab-line-subtabs {
+  margin-top: -6px;
+  padding: 2px;
+  background: var(--surface3);
+}
+.cab-line-subtabs .cab-line-tab {
+  font-size: 9px;
+  padding: 5px 0;
+}
+
 .cab-group-label {
   font-family: 'Plus Jakarta Sans', sans-serif;
   font-size: 9px;
