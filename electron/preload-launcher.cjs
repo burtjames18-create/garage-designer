@@ -13,4 +13,11 @@ contextBridge.exposeInMainWorld('launcher', {
   openSignup: () => ipcRenderer.invoke('open-signup'),
   quit: () => ipcRenderer.invoke('app-quit'),
   uninstall: () => ipcRenderer.invoke('app-uninstall'),
+
+  // Project file handling (Electron only)
+  openProject: () => ipcRenderer.invoke('project-open'),
+  saveProjectAs: (suggestedName, content) =>
+    ipcRenderer.invoke('project-save-as', suggestedName, content),
+  saveProject: (filePath, content) =>
+    ipcRenderer.invoke('project-save', filePath, content),
 })

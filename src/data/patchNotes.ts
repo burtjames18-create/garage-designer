@@ -9,6 +9,14 @@ export interface PatchNote {
 
 export const PATCH_NOTES: PatchNote[] = [
   {
+    version: '1.2.13',
+    date: '2026-04-21',
+    items: [
+      'Baseboards & stem walls now show in the wall-elevation pages of the export PDF (with flake texture when enabled)',
+      'Save now silently overwrites the original file after opening a project — no new download each time',
+    ],
+  },
+  {
     version: '1.2.12',
     date: '2026-04-21',
     items: [

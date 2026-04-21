@@ -812,9 +812,12 @@ interface GarageStore {
 
   // Save / Load
   projectName: string | null  // current project filename (without .garage extension)
+  /** Absolute path to the file the project was opened from (Electron only).
+   *  When set, subsequent saves overwrite this file directly — no dialog. */
+  projectFilePath: string | null
   setProjectName: (v: string | null) => void
   saveProject: (overrideName?: string) => Promise<void>
-  loadProject: (data: unknown, filename?: string) => void
+  loadProject: (data: unknown, filename?: string, filePath?: string) => void
   newProject: () => void
 }
 
@@ -1598,6 +1601,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
   },
 
   projectName: null,
+  projectFilePath: null,
   setProjectName: (v) => set({ projectName: v }),
   newProject: () => {
     // Return to the setup screen with a clean slate. Clears the project name
@@ -1606,6 +1610,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
     set({
       setupDone: false,
       projectName: null,
+      projectFilePath: null,
       // Selection state — clear so nothing references about-to-be-stale ids.
       ...SELECTION_CLEAR,
     })
@@ -1662,22 +1667,48 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       tracingImage: s.tracingImage,
     }
     const json = JSON.stringify(data, null, 2)
-    const blob = new Blob([json], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
     // Priority: explicit override → existing projectName → customerName → default.
     const baseName = overrideName
       ?? s.projectName
       ?? (s.customerName ? s.customerName.replace(/[^a-z0-9]/gi, '_') : 'garage-design')
+
+    // Electron path — write directly to disk. If we have a known file path
+    // and the user didn't pass an override, silently overwrite that file.
+    // Otherwise show a Save As dialog.
+    const launcher = (globalThis as unknown as { launcher?: {
+      saveProject?: (path: string, content: string) => Promise<boolean>
+      saveProjectAs?: (suggestedName: string, content: string) => Promise<string | null | { error: string }>
+    } }).launcher
+    if (launcher && launcher.saveProject && launcher.saveProjectAs) {
+      if (!overrideName && s.projectFilePath) {
+        // Silent overwrite of the originally opened/saved file.
+        const ok = await launcher.saveProject(s.projectFilePath, json)
+        if (ok) return
+        // If the write failed (file moved, perms), fall through to Save As.
+      }
+      const result = await launcher.saveProjectAs(baseName, json)
+      const newPath = typeof result === 'string' ? result : null
+      if (newPath) {
+        const fileName = newPath.split(/[\\/]/).pop() ?? baseName
+        const name = fileName.replace(/\.garage$/i, '')
+        set({ projectFilePath: newPath, projectName: name })
+      }
+      return
+    }
+
+    // Browser fallback — trigger a download with the computed base name.
+    const blob = new Blob([json], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
     a.href = url
     a.download = baseName + '.garage'
     a.click()
     URL.revokeObjectURL(url)
-    // Remember this name so subsequent saves overwrite the same file.
+    // Remember this name so subsequent saves reuse it as the suggested filename.
     if (overrideName || !s.projectName) set({ projectName: baseName })
   },
 
-  loadProject: (data: unknown, filename?: string) => {
+  loadProject: (data: unknown, filename?: string, filePath?: string) => {
     const raw = data as Record<string, unknown> | null
     if (!raw || typeof raw !== 'object') {
       alert('Invalid project file.')
@@ -1696,6 +1727,10 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
     const projectName = filename ? filename.replace(/\.garage$/i, '') : null
     set({
       projectName,
+      // File path is only available when opened via Electron's dialog IPC.
+      // The browser/file-input flow passes only the filename, so saves fall
+      // back to a download with the remembered base name.
+      projectFilePath: filePath ?? null,
       ...normalized,
       ...SELECTION_CLEAR,
     })

@@ -9,6 +9,7 @@ import {
   getStepWallProjection,
 } from '../utils/wallGeometry'
 import { cabinetFrontPaths } from './CabinetFrontSVG'
+import { flooringTexturePathById } from '../data/flooringColors'
 
 function getWallStubs(wall: GarageWall, allWalls: GarageWall[]) {
   const wLen = wallLen(wall)
@@ -44,11 +45,15 @@ interface Props {
   floorSteps?: FloorStep[]
   baseboards?: Baseboard[]
   stemWalls?: StemWall[]
+  /** Global floor flooring color ID — used as fallback flake texture when a
+   *  baseboard/stem wall has flake=true but no per-piece override. */
+  flooringColor?: string
+  floorTextureScale?: number
 }
 
 const PAD = 40  // padding for stacked dim tiers + corner stubs
 
-export default function WallElevationBlueprint({ wall, slatwallPanels, stainlessBacksplashPanels = [], cabinets, countertops, allWalls, floorSteps = [], baseboards = [], stemWalls = [] }: Props) {
+export default function WallElevationBlueprint({ wall, slatwallPanels, stainlessBacksplashPanels = [], cabinets, countertops, allWalls, floorSteps = [], baseboards = [], stemWalls = [], flooringColor, floorTextureScale = 6 }: Props) {
   const wLen = wallLen(wall)
   const wH = wall.height
   const svgW = wLen + 2 * PAD
@@ -338,7 +343,99 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
         )
       })}
 
-      {/* Baseboards now standalone — not rendered in wall elevation. */}
+      {/* Baseboards + stem walls projected onto this wall, with flake texture
+          when enabled so the elevation export matches the 3D view. */}
+      {(() => {
+        const pieces: Array<{
+          id: string
+          u0: number; u1: number
+          yBot: number; h: number
+          color: string
+          flake: boolean
+          flakeTextureId?: string
+          dashed: boolean
+        }> = []
+        const addPiece = (
+          p: { id: string; x: number; z: number; rotY: number; length: number; thickness: number; y: number; height: number; color: string; flake?: boolean; flakeTextureId?: string },
+          dashed: boolean,
+        ) => {
+          const pux = Math.cos(p.rotY), puz = -Math.sin(p.rotY)
+          const halfL = p.length / 2
+          const ends: [number, number][] = [
+            [p.x - pux * halfL, p.z - puz * halfL],
+            [p.x + pux * halfL, p.z + puz * halfL],
+          ]
+          const [wux, wuz] = wallDir(wall)
+          const wnx = -wuz, wnz = wux
+          const perp = Math.abs((p.x - wall.x1) * wnx + (p.z - wall.z1) * wnz)
+          if (perp > wall.thickness / 2 + p.thickness + 6) return
+          let minU = Infinity, maxU = -Infinity
+          for (const [ex, ez] of ends) {
+            const u = (ex - wall.x1) * wux + (ez - wall.z1) * wuz
+            minU = Math.min(minU, u); maxU = Math.max(maxU, u)
+          }
+          const u0 = Math.max(0, minU), u1 = Math.min(wLen, maxU)
+          if (u1 - u0 < 0.5) return
+          const yBot = Math.max(0, p.y)
+          const yTop = Math.min(wH, p.y + p.height)
+          if (yTop - yBot < 0.1) return
+          pieces.push({
+            id: p.id,
+            u0, u1,
+            yBot, h: yTop - yBot,
+            color: p.color,
+            flake: !!p.flake,
+            flakeTextureId: p.flakeTextureId,
+            dashed,
+          })
+        }
+        baseboards.forEach(bb => addPiece(bb, false))
+        stemWalls.forEach(sw => addPiece(sw, true))
+        if (pieces.length === 0) return null
+        // Build unique flake pattern defs keyed by texture id.
+        const BASE_URL = import.meta.env.BASE_URL || ''
+        const patternDefs: JSX.Element[] = []
+        const patternIds = new Map<string, string>()
+        pieces.forEach(pc => {
+          if (!pc.flake) return
+          const texId = pc.flakeTextureId || flooringColor
+          if (!texId || texId.startsWith('imported:')) return
+          if (patternIds.has(texId)) return
+          const patternId = `bb-flake-${wall.id}-${texId}`.replace(/[^A-Za-z0-9-]/g, '_')
+          patternIds.set(texId, patternId)
+          const texPath = `${BASE_URL}${flooringTexturePathById(texId)}`
+          // floorTextureScale = inches per texture tile. Match 3D render density.
+          const tilePx = Math.max(6, floorTextureScale)
+          patternDefs.push(
+            <pattern key={patternId} id={patternId} patternUnits="userSpaceOnUse"
+              width={tilePx} height={tilePx}>
+              <image href={texPath} x={0} y={0} width={tilePx} height={tilePx}
+                preserveAspectRatio="xMidYMid slice" />
+            </pattern>
+          )
+        })
+        return (
+          <g>
+            {patternDefs.length > 0 && <defs>{patternDefs}</defs>}
+            {pieces.map(pc => {
+              const texId = pc.flakeTextureId || flooringColor
+              const patId = pc.flake && texId ? patternIds.get(texId) : undefined
+              return (
+                <g key={pc.id}>
+                  <rect
+                    x={toX(pc.u0)} y={toY(pc.yBot + pc.h)}
+                    width={pc.u1 - pc.u0} height={pc.h}
+                    fill={patId ? `url(#${patId})` : pc.color}
+                    stroke="#777" strokeWidth={0.4}
+                    strokeDasharray={pc.dashed ? '2 1' : undefined}
+                    opacity={patId ? 0.95 : 0.85}
+                  />
+                </g>
+              )
+            })}
+          </g>
+        )
+      })()}
 
       {/* Openings */}
       {wall.openings.map(op => {

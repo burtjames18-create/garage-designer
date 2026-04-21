@@ -102,7 +102,7 @@ import { isCabinetOnWall, isCountertopOnWall } from '../utils/wallGeometry'
 export default function ExportModal({ onClose, onCapturesReady }: ExportModalProps) {
   const { customerName, siteAddress, consultantName,
     walls, slatwallPanels, stainlessBacksplashPanels, cabinets, countertops, floorPoints, floorSteps,
-    overheadRacks, baseboards, stemWalls, exportShots } = useGarageStore()
+    overheadRacks, baseboards, stemWalls, exportShots, flooringColor, floorTextureScale } = useGarageStore()
   const [captures, setCaptures] = useState<string[]>([])
   const [status, setStatus] = useState<'capturing' | 'ready' | 'no-shots'>('capturing')
   const [progress, setProgress] = useState(0)
@@ -478,6 +478,8 @@ export default function ExportModal({ onClose, onCapturesReady }: ExportModalPro
                   floorSteps={floorSteps}
                   baseboards={baseboards}
                   stemWalls={stemWalls}
+                  flooringColor={flooringColor}
+                  floorTextureScale={floorTextureScale}
                 />
               </div>
               <Footer />

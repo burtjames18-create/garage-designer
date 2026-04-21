@@ -35,7 +35,30 @@ export default function Topbar() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const preExportQuality = useRef<typeof qualityPreset | null>(null)
 
-  function handleLoadClick() {
+  async function handleLoadClick() {
+    // In Electron, use the native Open dialog so we capture the real file path
+    // (lets subsequent saves overwrite the same file silently). In the browser,
+    // fall back to the hidden file input.
+    const launcher = (window as unknown as { launcher?: {
+      openProject?: () => Promise<{ path: string; content: string } | { error: string } | null>
+    } }).launcher
+    if (launcher?.openProject) {
+      const result = await launcher.openProject()
+      if (!result) return
+      if ('error' in result) {
+        showToast('Could not read project file.', 'error')
+        return
+      }
+      try {
+        const parsed = JSON.parse(result.content)
+        const filename = result.path.split(/[\\/]/).pop() ?? ''
+        loadProject(parsed, filename, result.path)
+        showToast('Project loaded', 'success')
+      } catch {
+        showToast('Could not read project file. Make sure it is a valid .garage file.', 'error')
+      }
+      return
+    }
     fileInputRef.current?.click()
   }
 
@@ -51,12 +74,24 @@ export default function Topbar() {
 
   function handleSaveOption(mode: 'save' | 'saveAs') {
     setShowSaveMenu(false)
+    const isElectron = !!(window as unknown as { launcher?: { saveProject?: unknown } }).launcher?.saveProject
+    if (isElectron) {
+      // Electron: native Save As dialog handles naming. Save does a silent
+      // overwrite when a file path is already known (from Open or prior save).
+      if (mode === 'saveAs') {
+        const suggested = projectName
+          ?? (customerName ? customerName.replace(/[^a-z0-9]/gi, '_') : '')
+        doSave(suggested || undefined)
+      } else {
+        doSave()
+      }
+      return
+    }
+    // Browser fallback: keep the in-app name prompt.
     if (mode === 'save' && projectName) {
-      // Existing project — silent overwrite to same filename.
       doSave()
       return
     }
-    // New project OR Save As New — prompt for a name.
     const suggested = projectName
       ?? (customerName ? customerName.replace(/[^a-z0-9]/gi, '_') : '')
     setPromptName(suggested)

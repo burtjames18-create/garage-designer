@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron')
+const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron')
 const path = require('path')
 const fs = require('fs')
 
@@ -147,6 +147,53 @@ ipcMain.handle('open-signup', () => {
 })
 
 ipcMain.handle('get-saved-credentials', () => loadCredentials())
+
+// ---------------------------------------------------------------------------
+// Project file handling — open / save-as / save (silent overwrite).
+// ---------------------------------------------------------------------------
+ipcMain.handle('project-open', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Open Garage Project',
+    filters: [
+      { name: 'Garage Project', extensions: ['garage', 'json'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+    properties: ['openFile'],
+  })
+  if (result.canceled || !result.filePaths[0]) return null
+  const filePath = result.filePaths[0]
+  try {
+    const content = fs.readFileSync(filePath, 'utf8')
+    return { path: filePath, content }
+  } catch (err) {
+    return { error: String(err) }
+  }
+})
+
+ipcMain.handle('project-save-as', async (_event, suggestedName, content) => {
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Save Garage Project',
+    defaultPath: (suggestedName || 'garage-design') + '.garage',
+    filters: [{ name: 'Garage Project', extensions: ['garage'] }],
+  })
+  if (result.canceled || !result.filePath) return null
+  try {
+    fs.writeFileSync(result.filePath, content, 'utf8')
+    return result.filePath
+  } catch (err) {
+    return { error: String(err) }
+  }
+})
+
+ipcMain.handle('project-save', async (_event, filePath, content) => {
+  if (!filePath) return false
+  try {
+    fs.writeFileSync(filePath, content, 'utf8')
+    return true
+  } catch {
+    return false
+  }
+})
 
 // Validate license against the server
 ipcMain.handle('validate-license', async (_event, email, token) => {

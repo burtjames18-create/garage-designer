@@ -8,7 +8,31 @@ export default function GarageSetup() {
   const { setCustomerInfo, initializeGarage, completeSetup, loadProject } = useGarageStore()
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const handleOpenProject = () => fileInputRef.current?.click()
+  const handleOpenProject = async () => {
+    // Prefer Electron's native Open dialog so we get the real file path and
+    // future saves can overwrite the same file silently.
+    const launcher = (window as unknown as { launcher?: {
+      openProject?: () => Promise<{ path: string; content: string } | { error: string } | null>
+    } }).launcher
+    if (launcher?.openProject) {
+      const result = await launcher.openProject()
+      if (!result) return
+      if ('error' in result) {
+        showToast('Could not read project file.', 'error')
+        return
+      }
+      try {
+        const parsed = JSON.parse(result.content)
+        const filename = result.path.split(/[\\/]/).pop() ?? ''
+        loadProject(parsed, filename, result.path)
+        showToast('Project loaded', 'success')
+      } catch {
+        showToast('Could not read project file. Make sure it is a valid .garage file.', 'error')
+      }
+      return
+    }
+    fileInputRef.current?.click()
+  }
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return

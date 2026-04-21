@@ -14,6 +14,24 @@ _(No changes yet.)_
 
 ---
 
+## [1.2.13] — 2026-04-21
+
+### Features
+
+- **Baseboards & stem walls now render in the wall-elevation export.**
+  Projected onto each wall and drawn as rectangles at the correct height.
+  When a piece has `flake` enabled, an SVG pattern is built from the
+  flooring texture so the elevation export matches the 3D view; stem
+  walls use a dashed stroke to match the floor-plan convention.
+- **Save silently overwrites the original file.** When a project is
+  opened via the native Electron dialog (or saved for the first time),
+  the file path is remembered and subsequent Saves write directly to
+  that file — no download, no "(1)"/"(2)" suffixes, no dialog.
+  Three new Electron IPC handlers: `project-open`, `project-save-as`,
+  `project-save`.
+
+---
+
 ## [1.2.12] — 2026-04-21
 
 ### Features
