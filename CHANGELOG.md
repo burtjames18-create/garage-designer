@@ -10,10 +10,13 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
-Target version bump: **1.2.7 → 1.2.8** (patch — no breaking user-facing change).
+_(No changes yet.)_
 
-> When you run `npm run electron:publish`, remember to first bump `package.json`
-> version. The auto-updater needs the new number to trigger delivery.
+---
+
+## [1.2.8] — 2026-04-21
+
+Patch release — no save-format change (reads 1.2.7 projects unchanged).
 
 ### Features
 
@@ -125,21 +128,6 @@ Target version bump: **1.2.7 → 1.2.8** (patch — no breaking user-facing chan
 - **Artifact files** generated during the review session (not required for the
   build): `REVIEW.html`, `REVIEW.pdf`. Safe to commit or `.gitignore` at your
   discretion — neither is imported by the app.
-
-### Publish checklist for this release
-
-1. Bump `package.json` version: `1.2.7` → `1.2.8`.
-2. Stage all modified files + the new `src/utils/wallGeometry.ts`.
-3. Commit with a summary message, e.g.
-   `v1.2.8: step-up snap at any angle, lock on all entities, selection bug fixes, geometry util consolidation`.
-4. `git push origin master`.
-5. Run `GH_TOKEN=$(printf "protocol=https\nhost=github.com\n" | git credential fill | grep password | cut -d= -f2) npm run electron:publish`.
-6. Verify `latest.yml` on GitHub Releases shows `1.2.8`.
-7. On a test machine, open the old app and confirm auto-update pulls 1.2.8.
-8. Smoke test: open a pre-1.2.8 save file → confirm it loads without error
-   (regression test for the new migration path).
-9. Move this section into a new `## [1.2.8] — YYYY-MM-DD` heading below and
-   reset `Unreleased` to empty.
 
 ---
 
