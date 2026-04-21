@@ -14,6 +14,40 @@ _(No changes yet.)_
 
 ---
 
+## [1.2.12] — 2026-04-21
+
+### Features
+
+- **Double Closet Door style.** New "Double Closet" tile in the door settings
+  renders two slabs meeting at the center with trim, outer hinges, and
+  center-pull knobs. Size-adjustable and color-customizable like the Custom
+  Plain door. Shows as a blueprint symbol in the 2D floor plan.
+- **Baseboards & stem walls now snap to wall corners** using the same
+  face-face intersection math as step-up corner snap. Snaps to visible
+  joint corners (interior and exterior) at any wall angle — drag the piece
+  or its resize handle near a corner and it locks to the exact point where
+  the wall faces meet.
+
+### Bug fixes
+
+- **Door knob moves with the door.** When repositioning a procedural door
+  vertically, the knob now rides with the slab (previously stayed at a
+  fixed 36" world height).
+- **Baseboards & stem walls can now reach visible corners** — the hard
+  clamp at wall centerline endpoints was blocking the piece from
+  extending to joint-corner positions that sit past the endpoint (obtuse
+  corners and mitered face extensions). Clamps now span the joint-corner
+  along range on each wall.
+- **Baseboards & stem walls snap to doorframe edges** — the snap logic
+  was hard-coded to `custom-plain` and missed the new `custom-double`
+  plus any future procedural doors; now detects procedural doors via
+  `getOpeningModelById` so the casing trim edge is a snap target.
+- **Wider adjacent-wall detection** for corner snap — increased endpoint
+  proximity threshold from 6" to 18" plus T-joint detection (where
+  another wall's endpoint sits on this wall's line near an endpoint).
+
+---
+
 ## [1.2.11] — 2026-04-21
 
 ### Features

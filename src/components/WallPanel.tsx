@@ -62,7 +62,7 @@ function DoorStyleTile({ active, label, onClick, kind, doorColor, frameColor }: 
   active: boolean
   label: string
   onClick: () => void
-  kind: 'flat' | 'plain'
+  kind: 'flat' | 'plain' | 'double'
   doorColor?: string
   frameColor?: string
 }) {
@@ -83,6 +83,37 @@ function DoorStyleTile({ active, label, onClick, kind, doorColor, frameColor }: 
             {/* Bare cut-out — dark void, no frame, no slab */}
             <rect x="8" y="10" width="24" height="46" fill="#0a0d12" />
             <rect x="8" y="10" width="24" height="46" fill="none" stroke="rgba(0,0,0,0.5)" strokeWidth="0.4" />
+          </>
+        ) : kind === 'double' ? (
+          <>
+            {/* Casing / frame — inverted "U" hugging three sides of the opening */}
+            <path
+              d="M3 5 L37 5 L37 56 L33 56 L33 9 L7 9 L7 56 L3 56 Z"
+              fill={frameColor ?? '#f0ede4'}
+              stroke="rgba(0,0,0,0.35)"
+              strokeWidth="0.5"
+              strokeLinejoin="miter"
+            />
+            {/* Head-casing shadow */}
+            <rect x="7.5" y="9" width="25" height="1.5" fill="rgba(0,0,0,0.15)" />
+            {/* Two slabs meeting at center */}
+            <rect x="8"  y="10" width="11.6" height="46" fill={doorColor ?? '#e0dedd'} />
+            <rect x="20.4" y="10" width="11.6" height="46" fill={doorColor ?? '#e0dedd'} />
+            {/* Center gap */}
+            <rect x="19.6" y="10" width="0.8" height="46" fill="rgba(0,0,0,0.35)" />
+            {/* Slab edge shading */}
+            <rect x="8"  y="10" width="11.6" height="46" fill="none" stroke="rgba(0,0,0,0.28)" strokeWidth="0.4" />
+            <rect x="20.4" y="10" width="11.6" height="46" fill="none" stroke="rgba(0,0,0,0.28)" strokeWidth="0.4" />
+            {/* Hinges on outer edges */}
+            <rect x="7.7" y="14.5" width="1.2" height="2.8" fill="#555" opacity="0.75" />
+            <rect x="7.7" y="32"   width="1.2" height="2.8" fill="#555" opacity="0.75" />
+            <rect x="7.7" y="49.5" width="1.2" height="2.8" fill="#555" opacity="0.75" />
+            <rect x="31.1" y="14.5" width="1.2" height="2.8" fill="#555" opacity="0.75" />
+            <rect x="31.1" y="32"   width="1.2" height="2.8" fill="#555" opacity="0.75" />
+            <rect x="31.1" y="49.5" width="1.2" height="2.8" fill="#555" opacity="0.75" />
+            {/* Center-pull knobs */}
+            <circle cx="17.6" cy="34.75" r="1.1" fill="#B8B8B0" stroke="rgba(0,0,0,0.35)" strokeWidth="0.25" />
+            <circle cx="22.4" cy="34.75" r="1.1" fill="#B8B8B0" stroke="rgba(0,0,0,0.35)" strokeWidth="0.25" />
           </>
         ) : (
           <>
@@ -508,6 +539,14 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
                           doorColor={op.doorColor ?? '#e0dedd'}
                           frameColor={op.frameColor ?? '#f0ede4'}
                         />
+                        <DoorStyleTile
+                          active={op.modelId === 'custom-double'}
+                          label="Double Closet"
+                          onClick={() => updateOpening(wall.id, op.id, { modelId: 'custom-double' })}
+                          kind="double"
+                          doorColor={op.doorColor ?? '#e0dedd'}
+                          frameColor={op.frameColor ?? '#f0ede4'}
+                        />
                       </div>
                     </div>
                   )}
@@ -545,7 +584,7 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
                   )}
 
                   {/* Procedural door colors — door slab + frame (separate swatches) */}
-                  {op.type === 'door' && op.modelId === 'custom-plain' && (
+                  {op.type === 'door' && (op.modelId === 'custom-plain' || op.modelId === 'custom-double') && (
                     <>
                       <div style={{ marginTop: 6 }}>
                         <span className="coord-label">Door Color</span>

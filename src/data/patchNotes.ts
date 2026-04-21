@@ -9,6 +9,16 @@ export interface PatchNote {
 
 export const PATCH_NOTES: PatchNote[] = [
   {
+    version: '1.2.12',
+    date: '2026-04-21',
+    items: [
+      'Double Closet door style — new tile in the door settings renders two slabs with trim, outer hinges, and center-pull knobs',
+      'Baseboards & stem walls now snap to wall corners at any angle, using the same face-face intersection logic as step-up corner snap',
+      'Door knob rides with the door when repositioning vertically (previously stayed at a fixed 36" world height)',
+      'Baseboards & stem walls snap to the outer casing edge of any procedural door (including the new Double Closet)',
+    ],
+  },
+  {
     version: '1.2.11',
     date: '2026-04-21',
     items: [

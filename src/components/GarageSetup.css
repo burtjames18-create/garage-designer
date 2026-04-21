@@ -144,6 +144,26 @@
   transform: translateY(0);
 }
 
+.setup-btn-secondary {
+  width: 100%;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 11px;
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.setup-btn-secondary:hover {
+  border-color: var(--accent);
+  color: var(--text);
+  background: rgba(30, 111, 220, 0.1);
+}
+
 /* ── Validation errors ─────────────────────────────────────────────── */
 .setup-error {
   font-size: 10.5px;
@@ -160,7 +180,10 @@
 .setup-layout {
   display: flex;
   gap: 24px;
-  align-items: flex-start;
+  /* Stretch so the right column matches the left modal's height; the
+     feedback panel below picks up the leftover space so its bottom aligns
+     with the modal's bottom edge. */
+  align-items: stretch;
   max-width: 96vw;
 }
 
@@ -188,6 +211,18 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
+  /* Feedback panel takes the remaining height so the right column's
+     bottom edge lines up with the left modal's bottom edge. */
+}
+.setup-right-col > .setup-feedback {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.setup-right-col > .setup-feedback .feedback-textarea {
+  flex: 1;
+  min-height: 60px;
 }
 
 .setup-feedback {

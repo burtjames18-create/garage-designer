@@ -23,6 +23,14 @@ export const openingModels: OpeningModel[] = [
     preview: '#e0dedd',
     kind: 'procedural',
   },
+  {
+    id: 'custom-double',
+    name: 'Double Door Closet',
+    file: '',
+    type: 'door',
+    preview: '#dcd5c6',
+    kind: 'procedural',
+  },
 
   // ── Windows ────────────────────────────────────────────────────────────────
   {

@@ -10,6 +10,7 @@ import {
   getStepWallProjection,
 } from '../utils/wallGeometry'
 import { cabinetFrontPaths } from './CabinetFrontSVG'
+import { getOpeningModelById } from '../data/openingModels'
 import './WallElevationView.css'
 import './Viewer3D.css'
 
@@ -273,7 +274,8 @@ export default function WallElevationView() {
     for (const op of wall.openings) {
       if (op.type !== 'door' && op.type !== 'window') continue
       if (op.id === selfId) continue
-      const ext = op.modelId === 'custom-plain' ? 2.5 : 0
+      const entry = op.modelId ? getOpeningModelById(op.modelId) : undefined
+      const ext = entry?.kind === 'procedural' ? 2.5 : 0  // PDOOR.CASING_W
       const leftSide  = op.xOffset - ext
       const rightSide = op.xOffset + op.width + ext
       snaps.push({ target: rightSide + halfW, forEdge: 'left' })   // left edge → opening right
@@ -393,19 +395,25 @@ export default function WallElevationView() {
     return snaps
   }
 
-  /** Best snapped center position for a body-drag (checks both edges). */
-  const findBestAlong = (rawCenter: number, halfW: number, selfId: string) => {
+  /** Best snapped center position for a body-drag (checks both edges).
+   *  `clampToWall=true` uses wall endpoints as the clamp (for baseboards/stem
+   *  walls which should reach perpendicular wall faces to close visible
+   *  gaps); default uses stub-inset edges so cabinets/panels can't clip into
+   *  perpendicular walls. */
+  const findBestAlong = (rawCenter: number, halfW: number, selfId: string, clampToWall = false) => {
     const { snaps, leftEdge, rightEdge } = buildAlongSnaps(halfW, selfId)
     let best = snapToGrid(rawCenter), bestDist = SNAP_DIST + 1
     for (const { target } of snaps) {
       const d = Math.abs(rawCenter - target)
       if (d < SNAP_DIST && d < bestDist) { bestDist = d; best = target }
     }
-    return Math.max(leftEdge + halfW, Math.min(best, rightEdge - halfW))
+    const lo = clampToWall ? halfW : leftEdge + halfW
+    const hi = clampToWall ? wLen - halfW : rightEdge - halfW
+    return Math.max(lo, Math.min(best, hi))
   }
 
   /** Best snapped position for a specific edge being dragged. */
-  const findBestEdge = (rawEdge: number, selfId: string, edge: 'left' | 'right') => {
+  const findBestEdge = (rawEdge: number, selfId: string, edge: 'left' | 'right', clampToWall = false) => {
     const { snaps, leftEdge, rightEdge } = buildAlongSnaps(0, selfId)
     const candidates = snaps.filter(s => s.forEdge === edge)
     let best = snapToGrid(rawEdge), bestDist = SNAP_DIST + 1
@@ -413,7 +421,9 @@ export default function WallElevationView() {
       const d = Math.abs(rawEdge - target)
       if (d < SNAP_DIST && d < bestDist) { bestDist = d; best = target }
     }
-    return edge === 'left' ? Math.max(leftEdge, best) : Math.min(rightEdge, best)
+    const lo = clampToWall ? 0 : leftEdge
+    const hi = clampToWall ? wLen : rightEdge
+    return edge === 'left' ? Math.max(lo, best) : Math.min(hi, best)
   }
 
   /** Best snapped bottom position, checking both bottom and top edges.
@@ -799,7 +809,15 @@ export default function WallElevationView() {
       if (!op) return
       const rawX = drag.startXOffset! + dAlong
       const newX = Math.max(0, Math.min(wLen - drag.startWidth!, Math.round(rawX * 4) / 4))
-      updateOpening(wall.id, drag.id, { xOffset: newX })
+      // Vertical move too, so a door can be lifted up onto a baseboard,
+      // stem wall, or step-up. findBestY handles snapping to baseboard/
+      // stem-wall tops, cabinet bottoms, wall floor/ceiling, and step tops.
+      const rawY = drag.startOpYOffset! + dHeight
+      const halfW = drag.startWidth! / 2
+      const centerAlong = newX + halfW
+      const snappedY = findBestY(rawY, drag.startOpHeight!, op.id, centerAlong, halfW)
+      const newY = Math.max(0, Math.min(wH - drag.startOpHeight!, snappedY))
+      updateOpening(wall.id, drag.id, { xOffset: newX, yOffset: newY })
     }
 
     // ── Opening corner drag (resize) ──────────────────────────────────────
@@ -893,7 +911,9 @@ export default function WallElevationView() {
       const halfL = drag.startBbLength! / 2
       const rawAlong = drag.startBbAlong! + dAlong
       // Snap to wall edges, other pieces, openings, cabinets, steps, etc.
-      const snappedAlong = findBestAlong(rawAlong, halfL, drag.id)
+      // Baseboards/stem walls clamp to wall endpoints so they can reach the
+      // full wall length at corners.
+      const snappedAlong = findBestAlong(rawAlong, halfL, drag.id, true)
       const newCenter = Math.max(halfL, Math.min(wLen - halfL, snappedAlong))
       const delta = newCenter - drag.startBbAlong!
       const rawY = drag.startBbY! + dHeight
@@ -918,7 +938,9 @@ export default function WallElevationView() {
       const fixedEnd = side === 'left' ? startCenter + startLen / 2 : startCenter - startLen / 2
       const movingEndRaw = (side === 'left' ? startCenter - startLen / 2 : startCenter + startLen / 2) + dAlong
       // Snap the moving edge to other pieces, wall edges, step edges, etc.
-      const snappedMoving = findBestEdge(movingEndRaw, drag.id, side)
+      // Baseboards/stem walls clamp to wall endpoints so they can reach the
+      // full wall length at corners.
+      const snappedMoving = findBestEdge(movingEndRaw, drag.id, side, true)
       // Clamp moving end to the wall span and enforce a 3" minimum length.
       const clampedMoving = Math.max(0, Math.min(wLen, snappedMoving))
       const newLen = Math.max(3, Math.abs(fixedEnd - clampedMoving))
@@ -1344,7 +1366,7 @@ export default function WallElevationView() {
                 onClick={e => e.stopPropagation()}
               />
             ) : null
-            if (op.type === 'door' && op.modelId === 'custom-plain') {
+            if (op.type === 'door' && (op.modelId === 'custom-plain' || op.modelId === 'custom-double')) {
               const casW = 2.5
               const jambT = 0.75, gap = 0.125, bottomGap = 0.75
               const slabX = op.xOffset + jambT + gap
@@ -1655,7 +1677,7 @@ export default function WallElevationView() {
             })
             const doorRanges: Range[] = []
             wallDoors.forEach(op => {
-              const ext = op.modelId === 'custom-plain' ? 2.5 : 0
+              const ext = (op.modelId === 'custom-plain' || op.modelId === 'custom-double') ? 2.5 : 0
               const s = Math.max(leftEdge, op.xOffset - ext)
               const e = Math.min(rightEdge, op.xOffset + op.width + ext)
               if (e - s > 0.5) {

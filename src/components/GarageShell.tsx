@@ -19,7 +19,7 @@ import {
   snapToFloorEdge, snapAngle, snapRackToWalls,
   cameraFloorPos,
 } from '../utils/measurements'
-import { pointInPolygon, pointInPoly } from '../utils/wallGeometry'
+import { pointInPolygon, pointInPoly, wallDir, wallNormal } from '../utils/wallGeometry'
 import { createButcherBlockTexture } from '../utils/butcherBlockTexture'
 import { effectiveFloorPolygon } from '../utils/floorPolygon'
 import * as THREE from 'three'
@@ -250,6 +250,11 @@ function findWallChains(walls: GarageWall[], thresh = 6): ChainEntry[][] {
 
 
 // ─── Snap: wall endpoints + shape centers + floor edges ──────────────────────
+/** Return value: [snappedX, snappedZ, snappedToWall, lockDirection]. When
+ *  `lockDirection` is true the snapped point is a DISCRETE fixed target
+ *  (centerline endpoint or face corner) and callers should use the snap
+ *  as-is. When false the snap is a face-line projection; callers should
+ *  apply the 45° angle constraint first and then re-project onto the face. */
 function snapToTargets(
   x: number, z: number,
   walls: GarageWall[],
@@ -258,7 +263,7 @@ function snapToTargets(
   excludeWallId?: string,
   excludeShapeId?: string,
   threshold = 6,
-): [number, number, boolean] {
+): [number, number, boolean, boolean] {
   // Deduplicate wall endpoints — merge any that are within 2" of each other
   // so a shared corner counts as ONE snap target, not two
   const wallPts: [number, number][] = []
@@ -276,13 +281,65 @@ function snapToTargets(
   let bestDist = wallThresh
   let bx = x, bz = z
   let snappedToWall = false
+  let lockDirection = false  // true = discrete corner; false = face-line slide
 
+  // (1) Centerline endpoints — end-to-end wall corner connection
   for (const [wx, wz] of wallPts) {
     const d = Math.hypot(x - wx, z - wz)
-    if (d < bestDist) { bestDist = d; bx = wx; bz = wz; snappedToWall = true }
+    if (d < bestDist) { bestDist = d; bx = wx; bz = wz; snappedToWall = true; lockDirection = true }
   }
 
-  // Only check shapes and floor edges when not already snapped to a wall corner
+  // (2) Face corners — each wall endpoint offset ±halfT along the normal.
+  //     These catch T-junctions where one wall abuts another wall's face
+  //     at the far wall's end. Same magnetic threshold as centerline corners.
+  for (const w of walls) {
+    if (w.id === excludeWallId) continue
+    const wdx = w.x2 - w.x1, wdz = w.z2 - w.z1
+    const len = Math.hypot(wdx, wdz)
+    if (len < 0.1) continue
+    const ux = wdx / len, uz = wdz / len
+    const nx = -uz, nz = ux
+    const halfT = w.thickness / 2
+    const fc: [number, number][] = [
+      [w.x1 + nx * halfT, w.z1 + nz * halfT],
+      [w.x1 - nx * halfT, w.z1 - nz * halfT],
+      [w.x2 + nx * halfT, w.z2 + nz * halfT],
+      [w.x2 - nx * halfT, w.z2 - nz * halfT],
+    ]
+    for (const [fx, fz] of fc) {
+      const d = Math.hypot(x - fx, z - fz)
+      if (d < bestDist) { bestDist = d; bx = fx; bz = fz; snappedToWall = true; lockDirection = true }
+    }
+  }
+
+  // (3) Face-line projection — dragged endpoint lands on another wall's
+  //     interior/exterior face at the cursor's perpendicular foot (clamped
+  //     to segment). Runs after centerline/face-corner checks so the
+  //     discrete fixed points win when you're near them; face snap kicks
+  //     in only when you're clearly along the middle of a wall face.
+  //     `lockDirection` stays FALSE for these so callers can apply a 45°
+  //     angle snap on top (then re-project onto the face).
+  for (const w of walls) {
+    if (w.id === excludeWallId) continue
+    const wdx = w.x2 - w.x1, wdz = w.z2 - w.z1
+    const len = Math.hypot(wdx, wdz)
+    if (len < 0.1) continue
+    const ux = wdx / len, uz = wdz / len
+    const nx = -uz, nz = ux
+    const halfT = w.thickness / 2
+    const relX = x - w.x1, relZ = z - w.z1
+    const along = relX * ux + relZ * uz
+    if (along < -threshold || along > len + threshold) continue
+    const alongClamped = Math.max(0, Math.min(len, along))
+    for (const side of [halfT, -halfT]) {
+      const fx = w.x1 + ux * alongClamped + nx * side
+      const fz = w.z1 + uz * alongClamped + nz * side
+      const d = Math.hypot(x - fx, z - fz)
+      if (d < bestDist) { bestDist = d; bx = fx; bz = fz; snappedToWall = true; lockDirection = false }
+    }
+  }
+
+  // (4) Shapes + floor edges — only when no wall target is in range
   if (!snappedToWall) {
     for (const sh of shapes) {
       if (sh.id === excludeShapeId) continue
@@ -294,7 +351,7 @@ function snapToTargets(
     if (fd < bestDist) { bx = fx; bz = fz }
   }
 
-  return [bx, bz, snappedToWall]
+  return [bx, bz, snappedToWall, lockDirection]
 }
 
 // ─── Snap shape edge to nearest wall face (with corner alignment) ─────────────
@@ -2722,7 +2779,7 @@ const PDOOR = {
   HINGE_LEAF: 3.5,
 } as const
 
-function ProceduralPlainDoor({ widthIn, heightIn, yOffsetIn, wallThickIn, doorColor, frameColor, wireframe }: {
+function ProceduralPlainDoor({ widthIn, heightIn, wallThickIn, doorColor, frameColor, wireframe }: {
   widthIn: number; heightIn: number; yOffsetIn: number; wallThickIn: number
   doorColor: string; frameColor: string; wireframe: boolean
 }) {
@@ -2742,9 +2799,9 @@ function ProceduralPlainDoor({ widthIn, heightIn, yOffsetIn, wallThickIn, doorCo
   const slabH = slabTop - slabBot
   const slabYc = (slabTop + slabBot) / 2
 
-  // Handle Y relative to door center. Door center y (in wall-local coords) is
-  // yOffset + height/2; we want hardware at 36" from floor.
-  const handleY = FT(PDOOR.KNOB_FROM_FLOOR) - FT(yOffsetIn) - H / 2
+  // Knob sits 36" up from the door's own base, so it moves with the door
+  // when repositioned vertically.
+  const handleY = FT(PDOOR.KNOB_FROM_FLOOR) - H / 2
   const handleSide = 1 // +x = handle side, -x = hinge side
   const handleX = handleSide * (slabW / 2 - FT(PDOOR.KNOB_FROM_SLAB_EDGE))
 
@@ -2843,6 +2900,154 @@ function ProceduralPlainDoor({ widthIn, heightIn, yOffsetIn, wallThickIn, doorCo
       {/* ── Hinges: thin strips in the gap between slab and jamb ── */}
       {[hingeTopY, hingeMidY, hingeBotY].map((hy, i) => (
         <mesh key={`hinge-${i}`} position={[hingeEdgeX, hy, 0]}>
+          <boxGeometry args={[sideGap, FT(PDOOR.HINGE_LEAF), slabT]} />
+          {metalMat}
+        </mesh>
+      ))}
+    </group>
+  )
+}
+
+/** Procedural double-door closet — same trim/jamb/casing style as the plain
+ *  door, but two slabs meeting at the center, each with its own handle and
+ *  hinges. Size-adjustable like other procedural doors. */
+function ProceduralClosetDouble({ widthIn, heightIn, wallThickIn, doorColor, frameColor, wireframe }: {
+  widthIn: number; heightIn: number; yOffsetIn: number; wallThickIn: number
+  doorColor: string; frameColor: string; wireframe: boolean
+}) {
+  const W = FT(widthIn), H = FT(heightIn)
+  const wallT = FT(wallThickIn)
+  const jambT  = FT(PDOOR.JAMB_T)
+  const casW   = FT(PDOOR.CASING_W)
+  const casT   = FT(PDOOR.CASING_T)
+  const slabT  = FT(PDOOR.SLAB_T)
+  const sideGap = FT(PDOOR.SIDE_GAP)
+  const botGap  = FT(PDOOR.BOTTOM_GAP)
+  const centerGap = FT(0.1875) // 3/16" between the two slabs
+
+  // Vertical extent identical to plain door.
+  const slabTop = H / 2 - jambT - sideGap
+  const slabBot = -H / 2 + botGap
+  const slabH = slabTop - slabBot
+  const slabYc = (slabTop + slabBot) / 2
+
+  // Each slab is half of the usable opening width (less the side gaps and
+  // the center gap between the two slabs).
+  const innerW = W - 2 * jambT - 2 * sideGap - centerGap
+  const slabW = innerW / 2
+  // Slab centers: left sits in (-, 0), right sits in (+, 0).
+  const leftXc  = -(centerGap / 2 + slabW / 2)
+  const rightXc = +(centerGap / 2 + slabW / 2)
+
+  // Knob sits 36" up from the door's own base so it moves with the door
+  // when repositioned vertically.
+  const handleY = FT(PDOOR.KNOB_FROM_FLOOR) - H / 2
+
+  // Hinges live in the side gap against each outer jamb.
+  const leftHingeX  = -(W / 2 - jambT - sideGap / 2)
+  const rightHingeX =  (W / 2 - jambT - sideGap / 2)
+  const hingeTopY = slabTop - FT(PDOOR.HINGE_FROM_TOP)
+  const hingeBotY = slabBot + FT(PDOOR.HINGE_FROM_BOTTOM)
+  const hingeMidY = (hingeTopY + hingeBotY) / 2
+
+  const frameMat = (
+    wireframe
+      ? <meshBasicMaterial color="#4ab4ff" wireframe />
+      : <meshStandardMaterial color={frameColor} roughness={0.7} metalness={0} />
+  )
+  const slabMat = (
+    wireframe
+      ? <meshBasicMaterial color="#4ab4ff" wireframe />
+      : <meshStandardMaterial color={doorColor} roughness={0.55} metalness={0} />
+  )
+  const metalMat = (
+    wireframe
+      ? <meshBasicMaterial color="#ffcc00" wireframe />
+      : <meshStandardMaterial color="#B8B8B0" roughness={0.35} metalness={1} />
+  )
+
+  // Handles point INWARD (toward the center gap) on each slab — typical
+  // closet pull location. Handle X is an absolute position (not relative).
+  const leftHandleX  = -centerGap / 2 - FT(PDOOR.KNOB_FROM_SLAB_EDGE)
+  const rightHandleX =  centerGap / 2 + FT(PDOOR.KNOB_FROM_SLAB_EDGE)
+
+  return (
+    <group>
+      {/* Jamb (inside the wall thickness) */}
+      <mesh position={[-(W / 2 - jambT / 2), 0, 0]}>
+        <boxGeometry args={[jambT, H, wallT]} />
+        {frameMat}
+      </mesh>
+      <mesh position={[W / 2 - jambT / 2, 0, 0]}>
+        <boxGeometry args={[jambT, H, wallT]} />
+        {frameMat}
+      </mesh>
+      <mesh position={[0, H / 2 - jambT / 2, 0]}>
+        <boxGeometry args={[W - 2 * jambT, jambT, wallT]} />
+        {frameMat}
+      </mesh>
+
+      {/* Casing on both wall faces */}
+      {[1, -1].map(sign => (
+        <group key={`cas-${sign}`} position={[0, 0, sign * (wallT / 2 + casT / 2)]}>
+          <mesh position={[0, H / 2 + casW / 2, 0]}>
+            <boxGeometry args={[W + 2 * casW, casW, casT]} />
+            {frameMat}
+          </mesh>
+          <mesh position={[-(W / 2 + casW / 2), 0, 0]}>
+            <boxGeometry args={[casW, H, casT]} />
+            {frameMat}
+          </mesh>
+          <mesh position={[W / 2 + casW / 2, 0, 0]}>
+            <boxGeometry args={[casW, H, casT]} />
+            {frameMat}
+          </mesh>
+        </group>
+      ))}
+
+      {/* Sill / floor plate under the opening */}
+      <mesh position={[0, -H / 2 + FT(0.5) / 2, 0]}>
+        <boxGeometry args={[W - 2 * jambT, FT(0.5), wallT]} />
+        {frameMat}
+      </mesh>
+
+      {/* Two slabs meeting at the center */}
+      <mesh position={[leftXc, slabYc, 0]}>
+        <boxGeometry args={[slabW, slabH, slabT]} />
+        {slabMat}
+      </mesh>
+      <mesh position={[rightXc, slabYc, 0]}>
+        <boxGeometry args={[slabW, slabH, slabT]} />
+        {slabMat}
+      </mesh>
+
+      {/* Two handles at the center — pulls on the inner edge of each slab */}
+      {[1, -1].map(sign => (
+        <group key={`hw-L-${sign}`} position={[leftHandleX, handleY, sign * (slabT / 2 + FT(0.1))]}>
+          <mesh rotation={[Math.PI / 2, 0, 0]}>
+            <cylinderGeometry args={[FT(1.1), FT(1.1), FT(0.2), 20]} />
+            {metalMat}
+          </mesh>
+        </group>
+      ))}
+      {[1, -1].map(sign => (
+        <group key={`hw-R-${sign}`} position={[rightHandleX, handleY, sign * (slabT / 2 + FT(0.1))]}>
+          <mesh rotation={[Math.PI / 2, 0, 0]}>
+            <cylinderGeometry args={[FT(1.1), FT(1.1), FT(0.2), 20]} />
+            {metalMat}
+          </mesh>
+        </group>
+      ))}
+
+      {/* Hinges on each outer jamb */}
+      {[hingeTopY, hingeMidY, hingeBotY].map((hy, i) => (
+        <mesh key={`hingeL-${i}`} position={[leftHingeX, hy, 0]}>
+          <boxGeometry args={[sideGap, FT(PDOOR.HINGE_LEAF), slabT]} />
+          {metalMat}
+        </mesh>
+      ))}
+      {[hingeTopY, hingeMidY, hingeBotY].map((hy, i) => (
+        <mesh key={`hingeR-${i}`} position={[rightHingeX, hy, 0]}>
           <boxGeometry args={[sideGap, FT(PDOOR.HINGE_LEAF), slabT]} />
           {metalMat}
         </mesh>
@@ -3015,9 +3220,10 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
     if (op.modelId) {
       const entry = getOpeningModelById(op.modelId)
       if (entry?.kind === 'procedural' && op.type === 'door') {
+        const DoorComp = op.modelId === 'custom-double' ? ProceduralClosetDouble : ProceduralPlainDoor
         return (
           <group key={op.id || i} position={[FT(along), FT(y), 0]} onPointerDown={onOpDown}>
-            <ProceduralPlainDoor
+            <DoorComp
               widthIn={op.width}
               heightIn={op.height}
               yOffsetIn={op.yOffset}
@@ -3038,8 +3244,19 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
       }
     }
 
-    // Doors with no model: render nothing in the opening — it stays a cut-out.
-    if (op.type === 'door') return null
+    // Doors with no model: still render an invisible hit mesh filling the
+    // cut-out so the user can click/drag the opening in 3D. Without this
+    // the opening is a pure hole and gets no pointer events.
+    if (op.type === 'door') {
+      return (
+        <group key={op.id || i} position={[FT(along), FT(y), 0]} onPointerDown={onOpDown}>
+          <mesh>
+            <boxGeometry args={[opW, opH, thickFt]} />
+            <meshBasicMaterial transparent opacity={0} />
+          </mesh>
+        </group>
+      )
+    }
 
     // Windows: translucent pane + frame, centered in the wall thickness so
     // the frame sits flush on both the interior and exterior faces.
@@ -4232,6 +4449,12 @@ interface OpeningDragState {
   startXOffsetIn: number
   widthIn: number
   hitAlongIn: number
+  // Vertical drag fields — needed so a door can be lifted up onto a
+  // baseboard, stem wall, step-up, or raised to any Y on the wall.
+  startYOffsetIn: number
+  heightIn: number
+  hitYIn: number          // cursor Y at drag start, in inches
+  wallHeightIn: number
 }
 
 interface SlatwallBodyDragState {
@@ -4640,6 +4863,13 @@ export default function GarageShell() {
   // is suppressed so only the opening appears "selected". Cleared when the
   // user clicks elsewhere or the selected wall/opening goes away.
   const [selectedOpeningId, setSelectedOpeningId] = useState<string | null>(null)
+
+  // Wall-endpoint snap target in world inches, set whenever the current
+  // wall drag is locked onto a discrete snap point (centerline endpoint or
+  // face corner). Rendered as a bright ring so the snap is unmistakably
+  // visible — and so users can confirm the endpoint landed on the target
+  // they wanted (the drag handle itself sits on the wall endpoint).
+  const [wallSnapTarget, setWallSnapTarget] = useState<[number, number] | null>(null)
   // Sync: drop the selected opening if its parent wall is no longer selected or
   // the opening itself was deleted.
   useEffect(() => {
@@ -4898,6 +5128,10 @@ export default function GarageShell() {
       startXOffsetIn: op.xOffset,
       widthIn: op.width,
       hitAlongIn,
+      startYOffsetIn: op.yOffset,
+      heightIn: op.height,
+      hitYIn: e.point.y * 12,
+      wallHeightIn: wall.height,
     }
     beginDrag()
   }, [selectWall, beginDrag])
@@ -5218,18 +5452,87 @@ export default function GarageShell() {
           const curAlong = (relX * od.wallUx + relZ * od.wallUz) * 12 + od.wallLenIn / 2
           const dAlong = curAlong - od.hitAlongIn
           let newX = snapToGrid(od.startXOffsetIn + dAlong)
-          // Snap to other openings' edges on this wall (exclude ourselves).
-          if (!snappingDisabledRef.current) {
-            const wall = wallsRef.current.find(w => w.id === od.wallId)
-            if (wall) {
-              const others = wall.openings.filter(o => o.id !== od.openingId)
-              const leftSnap = snapSpanToOpeningEdges(newX, newX + od.widthIn, others)
-              newX = leftSnap.start
+          // ── Vertical drag ──
+          const curYIn = hitPt.y * 12
+          const dY = curYIn - od.hitYIn
+          let newY = snapToGrid(od.startYOffsetIn + dY)
+          const wall = wallsRef.current.find(w => w.id === od.wallId)
+          if (!snappingDisabledRef.current && wall) {
+            // ── Along-wall snap ──
+            const others = wall.openings.filter(o => o.id !== od.openingId)
+            const leftSnap = snapSpanToOpeningEdges(newX, newX + od.widthIn, others)
+            newX = leftSnap.start
+            const SNAP = 4
+            const adjHT = (ex: number, ez: number): number => {
+              let best = 0
+              for (const o of wallsRef.current) {
+                if (o.id === wall.id) continue
+                if (
+                  Math.hypot(o.x1 - ex, o.z1 - ez) < 6 ||
+                  Math.hypot(o.x2 - ex, o.z2 - ez) < 6
+                ) {
+                  best = Math.max(best, o.thickness / 2)
+                }
+              }
+              return best
             }
+            const startInset = adjHT(wall.x1, wall.z1)
+            const endInset = adjHT(wall.x2, wall.z2)
+            const xCandidates: number[] = [
+              0,
+              startInset,
+              od.wallLenIn - od.widthIn,
+              od.wallLenIn - endInset - od.widthIn,
+            ]
+            for (const c of xCandidates) {
+              if (Math.abs(newX - c) < SNAP) { newX = c; break }
+            }
+
+            // ── Vertical snap targets ──
+            //   • Floor (0) or step-up top when a step covers this along-wall
+            //     position (door must sit on top of the step).
+            //   • Wall top minus door height (ceiling-flush).
+            //   • Baseboard / stem-wall tops that span the door along-region.
+            const opLeft = newX
+            const opRight = newX + od.widthIn
+            // Step coverage — use max height of steps whose projection on
+            // this wall overlaps the door.
+            let stepFloor = 0
+            for (const step of floorStepsRef.current) {
+              const bos = getStepWallOverlaps(wall, step, od.wallLenIn)
+              for (const b of bos) {
+                if (b.u1 > opLeft && b.u0 < opRight) {
+                  stepFloor = Math.max(stepFloor, b.stepHeight)
+                }
+              }
+            }
+            // Baseboard / stem-wall tops — snap only if their along-wall
+            // extent overlaps the door.
+            const yCandidates: number[] = [stepFloor, od.wallHeightIn - od.heightIn]
+            const pieces = [
+              ...baseboardsRef.current.map(p => ({ ...p })),
+              ...stemWallsRef.current.map(p => ({ ...p })),
+            ]
+            for (const bb of pieces) {
+              const bos = getBaseboardWallOverlaps(wall, [{
+                x: bb.x, z: bb.z, rotY: bb.rotY, length: bb.length,
+                height: bb.height, y: bb.y, thickness: bb.thickness,
+              }], od.wallLenIn)
+              for (const b of bos) {
+                if (b.u1 > opLeft && b.u0 < opRight) yCandidates.push(b.bbTop)
+              }
+            }
+            const SNAP_Y = 4
+            for (const c of yCandidates) {
+              if (Math.abs(newY - c) < SNAP_Y) { newY = c; break }
+            }
+            // Floor constraint — door can't sit BELOW any step that overlaps it.
+            if (newY < stepFloor) newY = stepFloor
           }
           // Clamp so opening stays fully inside the wall.
           newX = Math.max(0, Math.min(od.wallLenIn - od.widthIn, newX))
-          updateOpeningRef.current(od.wallId, od.openingId, { xOffset: newX })
+          newY = Math.max(0, Math.min(od.wallHeightIn - od.heightIn, newY))
+          updateOpeningRef.current(od.wallId, od.openingId, { xOffset: newX, yOffset: newY })
         }
         return
       }
@@ -5562,39 +5865,58 @@ export default function GarageShell() {
             // Sit flush against the wall face — matches addBaseboard's initial
             // placement exactly (inner face coplanar with wall surface).
             const targetPerp = wall.thickness / 2 + piece.thickness / 2
-            // Snap along-wall position so the piece's end lands at the
-            // INTERIOR CORNER of the garage — the point where this wall's
-            // interior face meets the adjacent wall's interior face.
-            // For perpendicular adjacent walls, that corner is offset inward
-            // from the centerline endpoint by the adjacent wall's half-thickness.
-            const halfL = piece.length / 2
+            // Snap piece's end to visible wall-joint corners (face-face
+            // intersections) — same logic as step-up's corner snap. Works for
+            // any wall angle (not just 90°) and handles both interior and
+            // exterior corners.
             let snappedAlong = wh.along
-            const adjHalfThick = (ep: [number, number]): number => {
-              let best = 0
-              for (const o of wallsRef.current) {
-                if (o.id === wall.id) continue
-                const onEndpoint =
-                  Math.hypot(o.x1 - ep[0], o.z1 - ep[1]) < 6 ||
-                  Math.hypot(o.x2 - ep[0], o.z2 - ep[1]) < 6
-                if (onEndpoint) best = Math.max(best, o.thickness / 2)
-              }
-              return best
-            }
-            const startInset = adjHalfThick([wall.x1, wall.z1])
-            const endInset   = adjHalfThick([wall.x2, wall.z2])
-            const interiorLen = wlen - startInset - endInset
             let snappedLen = piece.length
-            // If the piece is longer than the wall's interior length, shrink
-            // it to fit exactly and center between interior corners.
-            if (piece.length > interiorLen + 0.01) {
-              snappedLen = Math.max(3, interiorLen)
+            if (piece.length > wlen + 0.01) {
+              snappedLen = Math.max(3, wlen)
             }
             const halfSnap = snappedLen / 2
-            const startTarget = startInset + halfSnap
-            const endTarget   = wlen - endInset - halfSnap
-            const CORNER_SNAP = 8
-            if (Math.abs(snappedAlong - startTarget) < CORNER_SNAP) snappedAlong = startTarget
-            else if (Math.abs(snappedAlong - endTarget) < CORNER_SNAP) snappedAlong = endTarget
+            const CORNER_SNAP = 10
+            // Collect joint-corner along-positions for this wall — uses the
+            // same face-face intersection math as step-up's corner snap, with
+            // interior-pointing normals so sign=+1 consistently means both
+            // interior sides.
+            const [nxA, nzA] = wallNormal(wall)
+            const hA = wall.thickness / 2
+            const TOL = 12
+            const jointAlong: number[] = []
+            for (const wB of wallsRef.current) {
+              if (wB.id === wall.id) continue
+              const [nxB, nzB] = wallNormal(wB)
+              const hB = wB.thickness / 2
+              const connected =
+                Math.hypot(wall.x1 - wB.x1, wall.z1 - wB.z1) < TOL ||
+                Math.hypot(wall.x1 - wB.x2, wall.z1 - wB.z2) < TOL ||
+                Math.hypot(wall.x2 - wB.x1, wall.z2 - wB.z1) < TOL ||
+                Math.hypot(wall.x2 - wB.x2, wall.z2 - wB.z2) < TOL
+              if (!connected) continue
+              const det = nxA * nzB - nzA * nxB
+              if (Math.abs(det) < 0.001) continue
+              for (const sign of [+1, -1]) {
+                const sA = sign * hA, sB = sign * hB
+                const cA = sA + wall.x1 * nxA + wall.z1 * nzA
+                const cB = sB + wB.x1 * nxB + wB.z1 * nzB
+                const px = (cA * nzB - cB * nzA) / det
+                const pz = (nxA * cB - nxB * cA) / det
+                jointAlong.push((px - wall.x1) * ux + (pz - wall.z1) * uz)
+              }
+            }
+            // Piece's near or far end snaps to any joint-corner along-position.
+            let bestSnapDist = CORNER_SNAP
+            let bestSnap: number | null = null
+            for (const jAlong of jointAlong) {
+              const nearEndCenter = jAlong + halfSnap  // piece's LEFT end at jAlong
+              const farEndCenter  = jAlong - halfSnap  // piece's RIGHT end at jAlong
+              const dn = Math.abs(snappedAlong - nearEndCenter)
+              const df = Math.abs(snappedAlong - farEndCenter)
+              if (dn < bestSnapDist) { bestSnapDist = dn; bestSnap = nearEndCenter }
+              if (df < bestSnapDist) { bestSnapDist = df; bestSnap = farEndCenter }
+            }
+            if (bestSnap !== null) snappedAlong = bestSnap
             // Snap either end of the piece to a doorway/window opening edge.
             if (!snappingDisabledRef.current) {
               const s = snapSpanToOpeningEdges(
@@ -5645,8 +5967,12 @@ export default function GarageShell() {
                 }
               }
             }
-            // HARD CLAMP: piece cannot extend past interior corners on either side.
-            snappedAlong = Math.max(startTarget, Math.min(endTarget, snappedAlong))
+            // Soft clamp: allow the piece's end to extend out to any visible
+            // joint corner (which can sit past the wall's centerline endpoint
+            // at obtuse corners), plus some slack so user-drag isn't blocked.
+            const loEnd = jointAlong.length ? Math.min(0, ...jointAlong) : 0
+            const hiEnd = jointAlong.length ? Math.max(wlen, ...jointAlong) : wlen
+            snappedAlong = Math.max(loEnd + halfSnap, Math.min(hiEnd - halfSnap, snappedAlong))
             const newX = wall.x1 + snappedAlong * ux + nx * targetPerp
             const newZ = wall.z1 + snappedAlong * uz + nz * targetPerp
             // Snap Y to floor when within 4" of floor — common case for stem
@@ -5698,34 +6024,54 @@ export default function GarageShell() {
               const targetPerp = w.thickness / 2 + piece.thickness / 2
               if (Math.abs(perp - targetPerp) <= bestPerp) {
                 bestPerp = Math.abs(perp - targetPerp)
-                // Corner snap — land the piece's end at the INTERIOR CORNER
-                // (offset inward from centerline endpoint by adjacent wall's
-                // half-thickness).
-                const halfL = piece.length / 2
-                const adjHT = (ep: [number, number]): number => {
-                  let best = 0
-                  for (const o of wallsRef.current) {
-                    if (o.id === w.id) continue
-                    if (Math.hypot(o.x1 - ep[0], o.z1 - ep[1]) < 6 ||
-                        Math.hypot(o.x2 - ep[0], o.z2 - ep[1]) < 6) {
-                      best = Math.max(best, o.thickness / 2)
-                    }
-                  }
-                  return best
-                }
-                const startInset = adjHT([w.x1, w.z1])
-                const endInset = adjHT([w.x2, w.z2])
-                const interiorLen = wlen - startInset - endInset
+                // Corner snap — snap piece end to visible wall-joint corners
+                // (face-face intersections) exactly like step-up does. Works
+                // for any wall angle, interior and exterior corners.
                 let snappedLen = piece.length
-                if (piece.length > interiorLen + 0.01) {
-                  snappedLen = Math.max(3, interiorLen)
+                if (piece.length > wlen + 0.01) {
+                  snappedLen = Math.max(3, wlen)
                 }
                 const halfSnap = snappedLen / 2
-                const startTarget = startInset + halfSnap
-                const endTarget = wlen - endInset - halfSnap
                 let snappedAlong = along
-                if (Math.abs(snappedAlong - startTarget) < CORNER_SNAP) snappedAlong = startTarget
-                else if (Math.abs(snappedAlong - endTarget) < CORNER_SNAP) snappedAlong = endTarget
+                // Collect joint-corner along-positions — same face-face
+                // intersection math as step-up's corner snap.
+                const [nxA, nzA] = wallNormal(w)
+                const hA = w.thickness / 2
+                const TOL = 12
+                const jointAlong: number[] = []
+                for (const wB of wallsRef.current) {
+                  if (wB.id === w.id) continue
+                  const [nxB, nzB] = wallNormal(wB)
+                  const hB = wB.thickness / 2
+                  const connected =
+                    Math.hypot(w.x1 - wB.x1, w.z1 - wB.z1) < TOL ||
+                    Math.hypot(w.x1 - wB.x2, w.z1 - wB.z2) < TOL ||
+                    Math.hypot(w.x2 - wB.x1, w.z2 - wB.z1) < TOL ||
+                    Math.hypot(w.x2 - wB.x2, w.z2 - wB.z2) < TOL
+                  if (!connected) continue
+                  const det = nxA * nzB - nzA * nxB
+                  if (Math.abs(det) < 0.001) continue
+                  for (const sign of [+1, -1]) {
+                    const sA = sign * hA, sB = sign * hB
+                    const cA = sA + w.x1 * nxA + w.z1 * nzA
+                    const cB = sB + wB.x1 * nxB + wB.z1 * nzB
+                    const px = (cA * nzB - cB * nzA) / det
+                    const pz = (nxA * cB - nxB * cA) / det
+                    jointAlong.push((px - w.x1) * ux + (pz - w.z1) * uz)
+                  }
+                }
+                const JOINT_SNAP = 10
+                let bestSnapDist = JOINT_SNAP
+                let bestSnap: number | null = null
+                for (const jAlong of jointAlong) {
+                  const nearEndCenter = jAlong + halfSnap
+                  const farEndCenter  = jAlong - halfSnap
+                  const dn = Math.abs(snappedAlong - nearEndCenter)
+                  const df = Math.abs(snappedAlong - farEndCenter)
+                  if (dn < bestSnapDist) { bestSnapDist = dn; bestSnap = nearEndCenter }
+                  if (df < bestSnapDist) { bestSnapDist = df; bestSnap = farEndCenter }
+                }
+                if (bestSnap !== null) snappedAlong = bestSnap
                 if (!snappingDisabledRef.current) {
                   const s = snapSpanToOpeningEdges(
                     snappedAlong - halfSnap, snappedAlong + halfSnap, w.openings,
@@ -5773,8 +6119,11 @@ export default function GarageShell() {
                     }
                   }
                 }
-                // HARD CLAMP: piece cannot extend past interior corners.
-                snappedAlong = Math.max(startTarget, Math.min(endTarget, snappedAlong))
+                // Soft clamp: allow reach out to visible joint corners (which
+                // can sit past the wall's centerline endpoint at obtuse corners).
+                const loEnd = jointAlong.length ? Math.min(0, ...jointAlong) : 0
+                const hiEnd = jointAlong.length ? Math.max(wlen, ...jointAlong) : wlen
+                snappedAlong = Math.max(loEnd + halfSnap, Math.min(hiEnd - halfSnap, snappedAlong))
                 newX = w.x1 + snappedAlong * ux + nx * targetPerp
                 newZ = w.z1 + snappedAlong * uz + nz * targetPerp
                 snappedRotY = -Math.atan2(uz, ux)
@@ -5805,58 +6154,76 @@ export default function GarageShell() {
           const dir = Math.sign(alongFromFixed) || 1
           // Quarter-inch base snap.
           let snapLen = Math.round(newLen * 4) / 4
-          // Corner snap: moving end lands at INTERIOR CORNER (each wall
-          // endpoint's interior corner is offset inward along the wall by
-          // the adjacent wall's half-thickness).
+          // Corner snap: moving end lands at the wall's centerline endpoint
+          // so the piece visibly touches the perpendicular wall's face at a
+          // mitered corner (no gap).
           const CORNER_SNAP = 8
           let bestDist = CORNER_SNAP
-          const adjHT = (w: GarageWall, ep: [number, number]): number => {
-            let best = 0
-            for (const o of wallsRef.current) {
-              if (o.id === w.id) continue
-              if (Math.hypot(o.x1 - ep[0], o.z1 - ep[1]) < 6 ||
-                  Math.hypot(o.x2 - ep[0], o.z2 - ep[1]) < 6) {
-                best = Math.max(best, o.thickness / 2)
-              }
-            }
-            return best
-          }
-          // HARD CAP: moving end cannot extend past any interior corner of
-          // the wall the baseboard is currently along. Compute the max
-          // allowable length from the fixed end along the baseboard's axis.
+          // HARD CAP and joint-corner snap: the moving end snaps to visible
+          // wall-joint corners (face-face intersections) on the wall this
+          // piece sits along — same math as step-up's corner snap.
           let maxAllowedLen = Infinity
           for (const w of wallsRef.current) {
             const wdx = w.x2 - w.x1, wdz = w.z2 - w.z1
             const wlen = Math.hypot(wdx, wdz)
             if (wlen < 1) continue
             const wux = wdx / wlen, wuz = wdz / wlen
-            // Only consider walls parallel to baseboard axis (so the "along"
-            // direction matches). Use dot product check.
             const parallel = Math.abs(wux * ux + wuz * uz) > 0.95
             if (!parallel) continue
-            // And the baseboard must be close to this wall perpendicularly.
             const wnx = -wuz, wnz = wux
             const perpDist = Math.abs((fx - w.x1) * wnx + (fz - w.z1) * wnz)
             if (perpDist > w.thickness / 2 + piece.thickness + 6) continue
-            const startIn = adjHT(w, [w.x1, w.z1])
-            const endIn   = adjHT(w, [w.x2, w.z2])
-            const interiorCorners: [number, number][] = [
-              [w.x1 + wux * startIn, w.z1 + wuz * startIn],
-              [w.x2 - wux * endIn,   w.z2 - wuz * endIn],
+            // Collect candidate along-distances from fixed end: wall centerline
+            // endpoints AND visible joint corners (face-face intersections).
+            // The largest of these establishes maxAllowedLen — whichever allows
+            // the piece to reach the farthest visible corner on this wall.
+            const candAlongs: number[] = []
+            const wallEndpoints: [number, number][] = [
+              [w.x1, w.z1],
+              [w.x2, w.z2],
             ]
-            for (const corner of interiorCorners) {
-              const candAlong = (corner[0] - fx) * ux + (corner[1] - fz) * uz
+            for (const endpt of wallEndpoints) {
+              const candAlong = (endpt[0] - fx) * ux + (endpt[1] - fz) * uz
               if (Math.sign(candAlong) !== dir && candAlong !== 0) continue
               const candLen = Math.abs(candAlong)
               if (candLen < 3) continue
-              maxAllowedLen = Math.min(maxAllowedLen, candLen)
-              const movingX = fx + ux * dir * candLen
-              const movingZ = fz + uz * dir * candLen
-              const distToCorner = Math.hypot(movingX - corner[0], movingZ - corner[1])
-              if (distToCorner < bestDist && Math.abs(candLen - newLen) < CORNER_SNAP) {
-                bestDist = distToCorner
-                snapLen = candLen
+              candAlongs.push(candLen)
+            }
+            const [nxA, nzA] = wallNormal(w)
+            const hA = w.thickness / 2
+            const TOL = 12
+            for (const wB of wallsRef.current) {
+              if (wB.id === w.id) continue
+              const [nxB, nzB] = wallNormal(wB)
+              const hB = wB.thickness / 2
+              const connected =
+                Math.hypot(w.x1 - wB.x1, w.z1 - wB.z1) < TOL ||
+                Math.hypot(w.x1 - wB.x2, w.z1 - wB.z2) < TOL ||
+                Math.hypot(w.x2 - wB.x1, w.z2 - wB.z1) < TOL ||
+                Math.hypot(w.x2 - wB.x2, w.z2 - wB.z2) < TOL
+              if (!connected) continue
+              const det = nxA * nzB - nzA * nxB
+              if (Math.abs(det) < 0.001) continue
+              for (const sign of [+1, -1]) {
+                const sA = sign * hA, sB = sign * hB
+                const cA = sA + w.x1 * nxA + w.z1 * nzA
+                const cB = sB + wB.x1 * nxB + wB.z1 * nzB
+                const px = (cA * nzB - cB * nzA) / det
+                const pz = (nxA * cB - nxB * cA) / det
+                const candAlong = (px - fx) * ux + (pz - fz) * uz
+                if (Math.sign(candAlong) !== dir && candAlong !== 0) continue
+                const candLen = Math.abs(candAlong)
+                if (candLen < 3) continue
+                candAlongs.push(candLen)
+                if (candLen - newLen < bestDist && Math.abs(candLen - newLen) < CORNER_SNAP) {
+                  bestDist = Math.abs(candLen - newLen)
+                  snapLen = candLen
+                }
               }
+            }
+            // Cap = the farthest visible corner/endpoint reachable on this wall.
+            if (candAlongs.length) {
+              maxAllowedLen = Math.min(maxAllowedLen, Math.max(...candAlongs))
             }
           }
           // Piece-end snap — lock moving end onto another baseboard/stem-wall's
@@ -6205,19 +6572,63 @@ export default function GarageShell() {
           const rawX = S(wd.initX1 + dx), rawZ = S(wd.initZ1 + dz)
           if (skipSnap) {
             updateWallRef.current(wd.wallId, { x1: rawX, z1: rawZ })
+            setWallSnapTarget(null)
           } else {
-            const [sx, sz, cornerSnap] = snapToTargets(rawX, rawZ, wallsRef.current, shapesRef.current, floorPtsRef.current, wd.wallId)
-            const [nx, nz] = cornerSnap ? [sx, sz] : snapAngle(wd.initX2, wd.initZ2, sx, sz)
-            updateWallRef.current(wd.wallId, { x1: nx, z1: nz })
+            const [sx, sz, cornerSnap, lockDir] = snapToTargets(rawX, rawZ, wallsRef.current, shapesRef.current, floorPtsRef.current, wd.wallId)
+            let nx: number, nz: number
+            if (cornerSnap && lockDir) {
+              [nx, nz] = [sx, sz]
+            } else if (cornerSnap && !lockDir) {
+              const [ax, az] = snapAngle(wd.initX2, wd.initZ2, rawX, rawZ)
+              const [fx, fz] = snapToTargets(ax, az, wallsRef.current, shapesRef.current, floorPtsRef.current, wd.wallId)
+              nx = fx; nz = fz
+            } else {
+              [nx, nz] = snapAngle(wd.initX2, wd.initZ2, sx, sz)
+            }
+            // After the dragged endpoint lands on its snap target, angle-snap
+            // the wall's direction by rotating the OTHER endpoint around the
+            // snapped point. Keeps the corner exactly 90°/45° instead of
+            // 91°/44° when the target's coords were slightly fractional.
+            let otherX = wd.initX2, otherZ = wd.initZ2
+            if (cornerSnap && lockDir) {
+              const [adjX, adjZ] = snapAngle(nx, nz, otherX, otherZ)
+              otherX = adjX; otherZ = adjZ
+            }
+            const changes: Partial<GarageWall> = { x1: nx, z1: nz }
+            if (otherX !== wd.initX2 || otherZ !== wd.initZ2) {
+              changes.x2 = otherX; changes.z2 = otherZ
+            }
+            updateWallRef.current(wd.wallId, changes)
+            setWallSnapTarget(cornerSnap ? [nx, nz] : null)
           }
         } else if (wd.endpoint === 'end') {
           const rawX = S(wd.initX2 + dx), rawZ = S(wd.initZ2 + dz)
           if (skipSnap) {
             updateWallRef.current(wd.wallId, { x2: rawX, z2: rawZ })
+            setWallSnapTarget(null)
           } else {
-            const [sx, sz, cornerSnap] = snapToTargets(rawX, rawZ, wallsRef.current, shapesRef.current, floorPtsRef.current, wd.wallId)
-            const [nx, nz] = cornerSnap ? [sx, sz] : snapAngle(wd.initX1, wd.initZ1, sx, sz)
-            updateWallRef.current(wd.wallId, { x2: nx, z2: nz })
+            const [sx, sz, cornerSnap, lockDir] = snapToTargets(rawX, rawZ, wallsRef.current, shapesRef.current, floorPtsRef.current, wd.wallId)
+            let nx: number, nz: number
+            if (cornerSnap && lockDir) {
+              [nx, nz] = [sx, sz]
+            } else if (cornerSnap && !lockDir) {
+              const [ax, az] = snapAngle(wd.initX1, wd.initZ1, rawX, rawZ)
+              const [fx, fz] = snapToTargets(ax, az, wallsRef.current, shapesRef.current, floorPtsRef.current, wd.wallId)
+              nx = fx; nz = fz
+            } else {
+              [nx, nz] = snapAngle(wd.initX1, wd.initZ1, sx, sz)
+            }
+            let otherX = wd.initX1, otherZ = wd.initZ1
+            if (cornerSnap && lockDir) {
+              const [adjX, adjZ] = snapAngle(nx, nz, otherX, otherZ)
+              otherX = adjX; otherZ = adjZ
+            }
+            const changes: Partial<GarageWall> = { x2: nx, z2: nz }
+            if (otherX !== wd.initX1 || otherZ !== wd.initZ1) {
+              changes.x1 = otherX; changes.z1 = otherZ
+            }
+            updateWallRef.current(wd.wallId, changes)
+            setWallSnapTarget(cornerSnap ? [nx, nz] : null)
           }
         } else {
           const rawX1 = S(wd.initX1 + dx), rawZ1 = S(wd.initZ1 + dz)
@@ -6565,30 +6976,71 @@ export default function GarageShell() {
           let hx = snapToGrid(hit.x * 12), hz = snapToGrid(hit.z * 12)
           const SNAP = 4
           let snapped = false
-          // 1. Snap to wall corner points (both X and Z together — highest
-          //    priority so the step corner locks onto the wall junction).
-          //    Also collect interior face corners (wall endpoint offset by
-          //    half-thickness along the interior normal).
+          // 1a. TOP-PRIORITY: true visible wall-joint corners (inside/outside
+          //     corner of the garage). Larger pull range (JOINT_SNAP) than
+          //     face lines so the cursor locks onto the corner instead of
+          //     flipping between the two walls' face-line snaps when it's
+          //     in the corner neighborhood.
+          if (!snapped) {
+            const JOINT_SNAP = 10
+            let bestDist = JOINT_SNAP, bestX = hx, bestZ = hz
+            const TOL = 6
+            const ws = wallsRef.current
+            for (let i = 0; i < ws.length; i++) {
+              const wA = ws[i]
+              const [uxA, uzA] = wallDir(wA)
+              const [nxA, nzA] = wallNormal(wA)
+              const hA = wA.thickness / 2
+              if (Math.hypot(uxA, uzA) < 0.01) continue
+              for (let j = i + 1; j < ws.length; j++) {
+                const wB = ws[j]
+                const [uxB, uzB] = wallDir(wB)
+                const [nxB, nzB] = wallNormal(wB)
+                const hB = wB.thickness / 2
+                const connected =
+                  Math.hypot(wA.x1 - wB.x1, wA.z1 - wB.z1) < TOL ||
+                  Math.hypot(wA.x1 - wB.x2, wA.z1 - wB.z2) < TOL ||
+                  Math.hypot(wA.x2 - wB.x1, wA.z2 - wB.z1) < TOL ||
+                  Math.hypot(wA.x2 - wB.x2, wA.z2 - wB.z2) < TOL
+                if (!connected) continue
+                const det = nxA * nzB - nzA * nxB
+                if (Math.abs(det) < 0.001) continue
+                for (const sign of [+1, -1]) {
+                  const sA = sign * hA, sB = sign * hB
+                  const cA = sA + wA.x1 * nxA + wA.z1 * nzA
+                  const cB = sB + wB.x1 * nxB + wB.z1 * nzB
+                  const px = (cA * nzB - cB * nzA) / det
+                  const pz = (nxA * cB - nxB * cA) / det
+                  const d = Math.hypot(hx - px, hz - pz)
+                  if (d < bestDist) { bestDist = d; bestX = px; bestZ = pz }
+                }
+              }
+            }
+            if (bestDist < JOINT_SNAP) { hx = bestX; hz = bestZ; snapped = true }
+          }
+          // 1b. Per-wall face corners at FREE (unconnected) endpoints.
           if (!snapped) {
             let bestDist = Infinity, bestX = hx, bestZ = hz
+            const TOL0 = 6
+            const isEpConnected = (wallId: string, ex: number, ez: number) =>
+              wallsRef.current.some(o => o.id !== wallId && (
+                Math.hypot(o.x1 - ex, o.z1 - ez) < TOL0 ||
+                Math.hypot(o.x2 - ex, o.z2 - ez) < TOL0
+              ))
             for (const wall of wallsRef.current) {
-              const pts = [
-                [wall.x1, wall.z1],
-                [wall.x2, wall.z2],
-              ]
-              // Interior face corners: offset each endpoint by ±halfThick
-              // along the wall normal (both sides, closest wins).
               const dx = wall.x2 - wall.x1, dz = wall.z2 - wall.z1
               const len = Math.hypot(dx, dz)
-              if (len > 0.1) {
-                const nx = -dz / len * wall.thickness / 2
-                const nz =  dx / len * wall.thickness / 2
-                pts.push(
-                  [wall.x1 + nx, wall.z1 + nz], [wall.x1 - nx, wall.z1 - nz],
-                  [wall.x2 + nx, wall.z2 + nz], [wall.x2 - nx, wall.z2 - nz],
-                )
+              if (len < 0.1) continue
+              const nx = -dz / len * wall.thickness / 2
+              const nz =  dx / len * wall.thickness / 2
+              const candidates: [number, number][] = []
+              if (!isEpConnected(wall.id, wall.x1, wall.z1)) {
+                candidates.push([wall.x1 + nx, wall.z1 + nz], [wall.x1 - nx, wall.z1 - nz])
               }
-              for (const [px, pz] of pts) {
+              if (!isEpConnected(wall.id, wall.x2, wall.z2)) {
+                candidates.push([wall.x2 + nx, wall.z2 + nz], [wall.x2 - nx, wall.z2 - nz])
+              }
+              for (const [px, pz] of candidates) {
                 const d = Math.hypot(hx - px, hz - pz)
                 if (d < SNAP && d < bestDist) { bestDist = d; bestX = px; bestZ = pz }
               }
@@ -6607,8 +7059,10 @@ export default function GarageShell() {
             }
             if (bestDist < SNAP) { hx = bestX; hz = bestZ; snapped = true }
           }
-          // 3. Snap to any point along a wall's interior face — projection
-          //    works for walls at any angle, not just axis-aligned ones.
+          // 3. Snap to any point along a wall's face — projection works for
+          //    walls at any angle. Clamp `along` to [0, L] so when the
+          //    cursor overshoots the wall end, the snap anchors on the face
+          //    corner instead of the infinite-line extension.
           if (!snapped) {
             let bestDist = SNAP, bestX = hx, bestZ = hz
             for (const wall of wallsRef.current) {
@@ -6621,20 +7075,46 @@ export default function GarageShell() {
               const relX = hx - wall.x1, relZ = hz - wall.z1
               const along = relX * ux + relZ * uz
               if (along < -SNAP || along > L + SNAP) continue
+              const alongClamped = Math.max(0, Math.min(L, along))
               const perp = relX * nx + relZ * nz
               for (const side of [halfT, -halfT]) {
-                const d = Math.abs(perp - side)
+                // Use segment distance (not infinite-line) so face-corners
+                // attract when the cursor is past the wall end.
+                const snapX = wall.x1 + alongClamped * ux + side * nx
+                const snapZ = wall.z1 + alongClamped * uz + side * nz
+                const d = Math.hypot(hx - snapX, hz - snapZ)
                 if (d < bestDist) {
                   bestDist = d
-                  bestX = wall.x1 + along * ux + side * nx
-                  bestZ = wall.z1 + along * uz + side * nz
+                  bestX = snapX
+                  bestZ = snapZ
                 }
               }
             }
-            if (bestDist < SNAP) { hx = bestX; hz = bestZ }
+            if (bestDist < SNAP) { hx = bestX; hz = bestZ; snapped = true }
           }
           const step = floorStepsRef.current.find(s => s.id === fscd.stepId)
           if (step) {
+            // 90° edge snap — when no wall / step-corner snap fired, lock
+            // the dragged corner to make its adjacent edges horizontal or
+            // vertical against the neighboring corners.
+            if (!snapped) {
+              const n = step.corners.length
+              const prev = step.corners[(fscd.cornerIdx - 1 + n) % n]
+              const next = step.corners[(fscd.cornerIdx + 1) % n]
+              const ANGLE_TOL_DEG = 6
+              const snapEdge = (ax: number, az: number) => {
+                const dx = hx - ax, dz = hz - az
+                if (Math.hypot(dx, dz) < 1) return
+                const ang = Math.atan2(dz, dx) * 180 / Math.PI
+                const nearest = Math.round(ang / 90) * 90
+                if (Math.abs(ang - nearest) >= ANGLE_TOL_DEG) return
+                const norm = ((nearest % 360) + 360) % 360
+                if (norm === 0 || norm === 180) hz = az
+                else hx = ax
+              }
+              snapEdge(prev[0], prev[1])
+              snapEdge(next[0], next[1])
+            }
             const newCorners = step.corners.map((c, i) =>
               i === fscd.cornerIdx ? [hx, hz] as [number, number] : [...c] as [number, number]
             )
@@ -6678,32 +7158,73 @@ export default function GarageShell() {
               const relX = cx - wall.x1, relZ = cz - wall.z1
               const along = relX * ux + relZ * uz
               const perp = relX * nx + relZ * nz
-              // (a) perpendicular snap to face line (anywhere along segment)
+              // (a) face-segment snap — clamp `along` to [0, L] so when the
+              //     step corner overshoots the wall end the snap bottoms out
+              //     at the face corner instead of the infinite-line extension.
               if (along >= -SNAP && along <= L + SNAP) {
+                const alongClamped = Math.max(0, Math.min(L, along))
                 for (const side of [halfT, -halfT]) {
-                  const d = Math.abs(perp - side)
+                  const snapX = wall.x1 + alongClamped * ux + side * nx
+                  const snapZ = wall.z1 + alongClamped * uz + side * nz
+                  const d = Math.hypot(cx - snapX, cz - snapZ)
                   if (d < bestWallDist) {
                     bestWallDist = d
-                    const delta = side - perp
-                    snapDx = delta * nx
-                    snapDz = delta * nz
+                    snapDx = snapX - cx
+                    snapDz = snapZ - cz
                   }
                 }
               }
-              // (b) wall endpoint (corner) snap — both axes together
+              // (b) per-wall face-corner snap — each wall endpoint offset by
+              //     ±halfT along the normal. Skipped at endpoints that are
+              //     connected to another wall (joint corner below handles
+              //     those; otherwise the face corner wins over the joint
+              //     corner by a tiny margin and the inside corner feels
+              //     "sticky" in the wrong spot).
+              const TOL_BB = 6
+              const epConnected = (ex: number, ez: number) =>
+                wallsRef.current.some(o => o.id !== wall.id && (
+                  Math.hypot(o.x1 - ex, o.z1 - ez) < TOL_BB ||
+                  Math.hypot(o.x2 - ex, o.z2 - ez) < TOL_BB
+                ))
               for (const [wx, wz] of [[wall.x1, wall.z1], [wall.x2, wall.z2]]) {
-                const d = Math.hypot(cx - wx, cz - wz)
-                if (d < bestWallDist) {
-                  bestWallDist = d
-                  snapDx = wx - cx
-                  snapDz = wz - cz
-                }
-              }
-              // (c) interior-face corner snap — endpoint offset by ±halfT along normal
-              for (const [wx, wz] of [[wall.x1, wall.z1], [wall.x2, wall.z2]]) {
+                if (epConnected(wx, wz)) continue
                 for (const side of [halfT, -halfT]) {
                   const px = wx + side * nx
                   const pz = wz + side * nz
+                  const d = Math.hypot(cx - px, cz - pz)
+                  if (d < bestWallDist) {
+                    bestWallDist = d
+                    snapDx = px - cx
+                    snapDz = pz - cz
+                  }
+                }
+              }
+              // (c) true visible joint corners — face-face intersection
+              //     between this wall and any other connected wall, keeping
+              //     only interior-interior and exterior-exterior corners.
+              const [uxA, uzA] = [ux, uz]
+              const [nxA, nzA] = wallNormal(wall)
+              for (const wB of wallsRef.current) {
+                if (wB.id === wall.id) continue
+                const TOL = 6
+                const connected =
+                  Math.hypot(wall.x1 - wB.x1, wall.z1 - wB.z1) < TOL ||
+                  Math.hypot(wall.x1 - wB.x2, wall.z1 - wB.z2) < TOL ||
+                  Math.hypot(wall.x2 - wB.x1, wall.z2 - wB.z1) < TOL ||
+                  Math.hypot(wall.x2 - wB.x2, wall.z2 - wB.z2) < TOL
+                if (!connected) continue
+                const [uxB, uzB] = wallDir(wB)
+                if (Math.abs(uxA * uzB - uzA * uxB) < 0.01) continue
+                const [nxB, nzB] = wallNormal(wB)
+                const hB = wB.thickness / 2
+                const det = nxA * nzB - nzA * nxB
+                if (Math.abs(det) < 0.001) continue
+                for (const sign of [+1, -1]) {
+                  const sA = sign * halfT, sB = sign * hB
+                  const cA = sA + wall.x1 * nxA + wall.z1 * nzA
+                  const cB = sB + wB.x1 * nxB + wB.z1 * nzB
+                  const px = (cA * nzB - cB * nzA) / det
+                  const pz = (nxA * cB - nxB * cA) / det
                   const d = Math.hypot(cx - px, cz - pz)
                   if (d < bestWallDist) {
                     bestWallDist = d
@@ -6775,6 +7296,7 @@ export default function GarageShell() {
       floorStepDragRef.current = null
       floorStepCornerDragRef.current = null
       if (wasDragging) { endDrag(); suppressNextClick.current = true; setSnapLines([]) }
+      setWallSnapTarget(null)
     }
 
     canvas.addEventListener('pointermove', onMove)
@@ -7838,6 +8360,20 @@ export default function GarageShell() {
 
     {/* Plan-view dimension lines */}
     {showDims && <DimensionLines walls={walls} cabinets={cabinets} />}
+
+    {/* Wall-snap target ring — bright torus at the discrete snap point so
+        it's unmistakably visible during a wall-endpoint drag. */}
+    {wallSnapTarget && (
+      <mesh
+        position={[FT(wallSnapTarget[0]), 0.1, FT(wallSnapTarget[1])]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        renderOrder={200}
+        frustumCulled={false}
+      >
+        <torusGeometry args={[0.35, 0.06, 12, 24]} />
+        <meshBasicMaterial color={'#22c55e'} depthTest={false} />
+      </mesh>
+    )}
 
     {/* Snap indicator lines — visual feedback during drag */}
     {snapLines.map((line, i) => (

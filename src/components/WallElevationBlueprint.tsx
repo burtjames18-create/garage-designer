@@ -4,7 +4,7 @@ import { slatwallColors } from '../data/slatwallColors'
 import { inchesToDisplay } from '../utils/measurements'
 import {
   wallLen, wallDir,
-  isCabinetOnWall,
+  projectCabinet, isCabinetOnWall,
   projectCountertop, isCountertopOnWall,
   getStepWallProjection,
 } from '../utils/wallGeometry'
@@ -106,7 +106,7 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
   })
   const doorRanges: Range[] = []
   wall.openings.filter(op => op.type === 'door').forEach(op => {
-    const ext = op.modelId === 'custom-plain' ? 2.5 : 0
+    const ext = (op.modelId === 'custom-plain' || op.modelId === 'custom-double') ? 2.5 : 0
     const s = Math.max(leftEdge, op.xOffset - ext)
     const e = Math.min(rightEdge, op.xOffset + op.width + ext)
     if (e - s > 0.5) {
@@ -342,7 +342,7 @@ export default function WallElevationBlueprint({ wall, slatwallPanels, stainless
 
       {/* Openings */}
       {wall.openings.map(op => {
-        if (op.type === 'door' && op.modelId === 'custom-plain') {
+        if (op.type === 'door' && (op.modelId === 'custom-plain' || op.modelId === 'custom-double')) {
           // Frame extends 2.5" past the opening on sides + top (no bottom casing).
           const casW = 2.5
           const jambT = 0.75, gap = 0.125, bottomGap = 0.75

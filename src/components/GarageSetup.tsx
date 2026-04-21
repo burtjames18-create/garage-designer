@@ -1,10 +1,30 @@
 import { useState, useRef, useEffect } from 'react'
 import { useGarageStore } from '../store/garageStore'
 import { PATCH_NOTES } from '../data/patchNotes'
+import { showToast } from './Toast'
 import './GarageSetup.css'
 
 export default function GarageSetup() {
-  const { setCustomerInfo, initializeGarage, completeSetup } = useGarageStore()
+  const { setCustomerInfo, initializeGarage, completeSetup, loadProject } = useGarageStore()
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const handleOpenProject = () => fileInputRef.current?.click()
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target?.result as string)
+        loadProject(data, file.name)
+        showToast('Project loaded', 'success')
+      } catch {
+        showToast('Could not read project file. Make sure it is a valid .garage file.', 'error')
+      }
+    }
+    reader.readAsText(file)
+    e.target.value = ''
+  }
 
   const [customerName, setCustomerName] = useState('')
   const [siteAddress, setSiteAddress]   = useState('')
@@ -176,6 +196,19 @@ export default function GarageSetup() {
         <p className="setup-hint">All walls and dimensions are fully editable after setup.</p>
 
         <button className="setup-btn" onClick={handleStart}>Start Design →</button>
+        <button
+          type="button"
+          className="setup-btn-secondary"
+          onClick={handleOpenProject}
+          style={{ marginTop: 10 }}
+        >Open Existing Project…</button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".garage,application/json"
+          style={{ display: 'none' }}
+          onChange={handleFileChange}
+        />
 
         {/* Show uninstall link only in Electron */}
         {(window as any).launcher && (

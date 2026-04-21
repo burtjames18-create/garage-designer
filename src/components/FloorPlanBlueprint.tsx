@@ -34,6 +34,8 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
     selectCabinet, updateCabinet, selectedCabinetId, snappingEnabled,
     tracingImage, updateTracingImage,
     updateWall, selectedWallId, selectWall,
+    selectFloorStep, updateFloorStep, selectedFloorStepId,
+    updateOpening,
     wallAngleSnapEnabled, cornerAngleLabelsVisible } = useGarageStore()
   const svgRef = useRef<SVGSVGElement>(null)
   const rackDragRef = useRef<{ rackId: string; startX: number; startZ: number; startMouseX: number; startMouseZ: number } | null>(null)
@@ -75,6 +77,37 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
     initX: number; initZ: number
     initW: number; initH: number
   } | null>(null)
+
+  // Step-up drag refs — body translates all corners; corner drag updates
+  // a single corner. Snap logic below mirrors the 3D view's snap math so
+  // behavior is identical across views.
+  const stepBodyDragRef = useRef<{
+    stepId: string
+    startMouseX: number; startMouseZ: number
+    initCorners: [number, number][]
+  } | null>(null)
+  const stepCornerDragRef = useRef<{
+    stepId: string
+    cornerIdx: number
+  } | null>(null)
+
+  // Opening (door/window/garage-door) drag — slide along the wall only.
+  // Captures the initial along-wall offset and the wall's along-axis so
+  // the opening follows the cursor's projection onto the wall direction.
+  const openingDragRef = useRef<{
+    wallId: string
+    openingId: string
+    ux: number; uz: number         // wall along-direction unit vector
+    wallX1: number; wallZ1: number // wall start in inches
+    wallLen: number
+    widthIn: number
+    startAlongHit: number          // cursor's along-wall position at drag start
+    startXOffset: number
+  } | null>(null)
+
+  // Which drag handle is currently being grabbed. Used to hide the handle's
+  // own circle during a drag so it doesn't obscure the snap target.
+  const [activeHandleId, setActiveHandleId] = useState<string | null>(null)
 
   if (walls.length === 0) return null
 
@@ -308,6 +341,7 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
       initX: end === 'start' ? wall.x1 : wall.x2,
       initZ: end === 'start' ? wall.z1 : wall.z2,
     }
+    setActiveHandleId(`wall-${wall.id}-${end}`)
     // Freeze view bounds for the duration of the drag so the canvas doesn't
     // rescale/recenter as the endpoint moves around.
     const xs = walls.flatMap(w => [w.x1, w.x2])
@@ -327,7 +361,7 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
     let nx = snapToGrid(wd.initX + (pos.x - wd.startMouseX))
     let nz = snapToGrid(wd.initZ + (pos.z - wd.startMouseZ))
     if (snappingEnabled) {
-      const SNAP = 3
+      const SNAP = 6
       const wall = walls.find(w => w.id === wd.wallId)
       const fixedX = wall ? (wd.end === 'start' ? wall.x2 : wall.x1) : wd.initX
       const fixedZ = wall ? (wd.end === 'start' ? wall.z2 : wall.z1) : wd.initZ
@@ -356,28 +390,29 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
         }
       }
 
-      // Step 2: collect wall-snap targets (endpoints + edge projections of the
-      // CURRENT cursor position). When the angle is locked, project each target
-      // ONTO the locked ray and snap only if it's close to that ray (so the wall
-      // attaches end-to-end or end-to-edge without breaking the angle lock).
+      // Step 2: collect DISCRETE wall-snap targets only. Sliding face-line
+      // projections would produce fractional wall lengths — we want the
+      // drag handle to lock onto specific fixed points so corner joins
+      // result in clean dimensions. Per other wall:
+      //   (a) two centerline endpoints — end-to-end wall corner connection
+      //   (b) four face corners — T-junction at the other wall's end
       const targets: [number, number][] = []
-      for (const w of walls) {
-        for (const [px, pz, isSelf] of [
-          [w.x1, w.z1, w.id === wd.wallId && wd.end === 'start'],
-          [w.x2, w.z2, w.id === wd.wallId && wd.end === 'end'],
-        ] as [number, number, boolean][]) {
-          if (!isSelf) targets.push([px, pz])
-        }
-      }
-      // Edge projections are evaluated relative to the current nx/nz (which
-      // is already on the locked ray if angleLocked).
       for (const w of walls) {
         if (w.id === wd.wallId) continue
         const wdx = w.x2 - w.x1, wdz = w.z2 - w.z1
-        const wl2 = wdx * wdx + wdz * wdz
-        if (wl2 < 0.01) continue
-        const t = Math.max(0, Math.min(1, ((nx - w.x1) * wdx + (nz - w.z1) * wdz) / wl2))
-        targets.push([w.x1 + t * wdx, w.z1 + t * wdz])
+        const wl = Math.hypot(wdx, wdz)
+        if (wl < 0.1) continue
+        const ux = wdx / wl, uz = wdz / wl
+        const nxN = -uz, nzN = ux
+        const halfT = w.thickness / 2
+        // (a) centerline endpoints
+        targets.push([w.x1, w.z1])
+        targets.push([w.x2, w.z2])
+        // (b) four face corners
+        targets.push([w.x1 + nxN * halfT, w.z1 + nzN * halfT])
+        targets.push([w.x1 - nxN * halfT, w.z1 - nzN * halfT])
+        targets.push([w.x2 + nxN * halfT, w.z2 + nzN * halfT])
+        targets.push([w.x2 - nxN * halfT, w.z2 - nzN * halfT])
       }
 
       let bestDist = SNAP, bx = nx, bz = nz
@@ -418,6 +453,7 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
   const onWallEndPointerUp = useCallback((e?: React.PointerEvent) => {
     wallEndDragRef.current = null
     frozenBoundsRef.current = null
+    setActiveHandleId(null)
     if (e) {
       try { (e.currentTarget as Element).releasePointerCapture(e.pointerId) } catch (_) {}
     }
@@ -506,10 +542,268 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
     }
   }, [])
 
+  // ─── Step-up snap helpers ────────────────────────────────────────────────
+  // Snap a candidate point to (1) wall face corners, (2) other step
+  // corners, (3) any point along a wall face line. Mirrors the 3D view's
+  // snap math so dragging a step in either view locks onto the same
+  // targets. Returns the snapped position or null if no target within SNAP.
+  const snapStepPoint = useCallback((hx: number, hz: number, selfStepId: string): { x: number; z: number } | null => {
+    const SNAP = 4
+    const JOINT_SNAP = 10
+    let bestX = hx, bestZ = hz
+    // (1a) TOP-PRIORITY: true visible wall-joint corners. Wider pull range
+    //      so the cursor snaps to the inside/outside corner instead of
+    //      flipping between the two wall face lines near the corner.
+    {
+      let bestDist = JOINT_SNAP
+      const TOL = 6
+      for (let i = 0; i < walls.length; i++) {
+        const wA = walls[i]
+        const [uxA, uzA] = wallDir(wA)
+        const [nxA, nzA] = wallNormal(wA)
+        const hA = wA.thickness / 2
+        for (let j = i + 1; j < walls.length; j++) {
+          const wB = walls[j]
+          const connected =
+            Math.hypot(wA.x1 - wB.x1, wA.z1 - wB.z1) < TOL ||
+            Math.hypot(wA.x1 - wB.x2, wA.z1 - wB.z2) < TOL ||
+            Math.hypot(wA.x2 - wB.x1, wA.z2 - wB.z1) < TOL ||
+            Math.hypot(wA.x2 - wB.x2, wA.z2 - wB.z2) < TOL
+          if (!connected) continue
+          const [uxB, uzB] = wallDir(wB)
+          if (Math.abs(uxA * uzB - uzA * uxB) < 0.01) continue
+          const [nxB, nzB] = wallNormal(wB)
+          const hB = wB.thickness / 2
+          const det = nxA * nzB - nzA * nxB
+          if (Math.abs(det) < 0.001) continue
+          for (const sign of [+1, -1]) {
+            const sA = sign * hA, sB = sign * hB
+            const cA = sA + wA.x1 * nxA + wA.z1 * nzA
+            const cB = sB + wB.x1 * nxB + wB.z1 * nzB
+            const px = (cA * nzB - cB * nzA) / det
+            const pz = (nxA * cB - nxB * cA) / det
+            const d = Math.hypot(hx - px, hz - pz)
+            if (d < bestDist) { bestDist = d; bestX = px; bestZ = pz }
+          }
+        }
+      }
+      if (bestDist < JOINT_SNAP) return { x: bestX, z: bestZ }
+    }
+    // (1b) Per-wall face corners at unconnected wall ends.
+    let bestDist = SNAP
+    const TOL0 = 6
+    const isEpConnected = (wallId: string, ex: number, ez: number) =>
+      walls.some(o => o.id !== wallId && (
+        Math.hypot(o.x1 - ex, o.z1 - ez) < TOL0 ||
+        Math.hypot(o.x2 - ex, o.z2 - ez) < TOL0
+      ))
+    for (const wall of walls) {
+      const wdx = wall.x2 - wall.x1, wdz = wall.z2 - wall.z1
+      const L = Math.hypot(wdx, wdz)
+      if (L < 0.1) continue
+      const ux = wdx / L, uz = wdz / L
+      const nx = -uz, nz = ux
+      const halfT = wall.thickness / 2
+      const pts: [number, number][] = []
+      if (!isEpConnected(wall.id, wall.x1, wall.z1)) {
+        pts.push([wall.x1 + nx * halfT, wall.z1 + nz * halfT])
+        pts.push([wall.x1 - nx * halfT, wall.z1 - nz * halfT])
+      }
+      if (!isEpConnected(wall.id, wall.x2, wall.z2)) {
+        pts.push([wall.x2 + nx * halfT, wall.z2 + nz * halfT])
+        pts.push([wall.x2 - nx * halfT, wall.z2 - nz * halfT])
+      }
+      for (const [px, pz] of pts) {
+        const d = Math.hypot(hx - px, hz - pz)
+        if (d < bestDist) { bestDist = d; bestX = px; bestZ = pz }
+      }
+    }
+    // (2) other step-up corners
+    for (const other of floorSteps) {
+      if (other.id === selfStepId) continue
+      for (const [ox, oz] of other.corners) {
+        const d = Math.hypot(hx - ox, hz - oz)
+        if (d < bestDist) { bestDist = d; bestX = ox; bestZ = oz }
+      }
+    }
+    // (3) face-segment snap (clamped along)
+    for (const wall of walls) {
+      const wdx = wall.x2 - wall.x1, wdz = wall.z2 - wall.z1
+      const L = Math.hypot(wdx, wdz)
+      if (L < 0.1) continue
+      const ux = wdx / L, uz = wdz / L
+      const nx = -uz, nz = ux
+      const halfT = wall.thickness / 2
+      const relX = hx - wall.x1, relZ = hz - wall.z1
+      const along = relX * ux + relZ * uz
+      if (along < -SNAP || along > L + SNAP) continue
+      const alongClamped = Math.max(0, Math.min(L, along))
+      for (const side of [halfT, -halfT]) {
+        const snapX = wall.x1 + alongClamped * ux + side * nx
+        const snapZ = wall.z1 + alongClamped * uz + side * nz
+        const d = Math.hypot(hx - snapX, hz - snapZ)
+        if (d < bestDist) { bestDist = d; bestX = snapX; bestZ = snapZ }
+      }
+    }
+    return bestDist < SNAP ? { x: bestX, z: bestZ } : null
+  }, [walls, floorSteps])
+
+  // ─── Step-up body drag (translate all corners) ───────────────────────────
+  const onStepBodyDown = useCallback((e: React.PointerEvent, step: FloorStep) => {
+    if (step.locked) return
+    e.stopPropagation()
+    e.preventDefault()
+    selectFloorStep(step.id)
+    const pos = mouseToSvg(e)
+    if (!pos) return
+    stepBodyDragRef.current = {
+      stepId: step.id,
+      startMouseX: pos.x, startMouseZ: pos.z,
+      initCorners: step.corners.map(c => [...c] as [number, number]),
+    }
+    setActiveHandleId(`step-body-${step.id}`)
+    ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
+  }, [mouseToSvg, selectFloorStep])
+
+  const onStepBodyMove = useCallback((e: React.PointerEvent) => {
+    const sd = stepBodyDragRef.current
+    if (!sd) return
+    const pos = mouseToSvg(e)
+    if (!pos) return
+    const dx = pos.x - sd.startMouseX
+    const dz = pos.z - sd.startMouseZ
+    const moved: [number, number][] = sd.initCorners.map(([cx, cz]) => [cx + dx, cz + dz] as [number, number])
+    // Pick the best snap across all corners: translate by whichever corner's
+    // snap has the smallest magnitude offset.
+    let snapDx = 0, snapDz = 0
+    let bestMag = Infinity
+    if (snappingEnabled) {
+      for (const [cx, cz] of moved) {
+        const s = snapStepPoint(cx, cz, sd.stepId)
+        if (s) {
+          const mag = Math.hypot(s.x - cx, s.z - cz)
+          if (mag < bestMag) { bestMag = mag; snapDx = s.x - cx; snapDz = s.z - cz }
+        }
+      }
+    }
+    for (const c of moved) { c[0] += snapDx; c[1] += snapDz }
+    updateFloorStep(sd.stepId, { corners: moved })
+  }, [mouseToSvg, snapStepPoint, updateFloorStep, snappingEnabled])
+
+  const onStepBodyUp = useCallback((e?: React.PointerEvent) => {
+    stepBodyDragRef.current = null
+    setActiveHandleId(null)
+    if (e) { try { (e.currentTarget as Element).releasePointerCapture(e.pointerId) } catch (_) {} }
+  }, [])
+
+  // ─── Step-up corner drag (reshape single corner) ─────────────────────────
+  const onStepCornerDown = useCallback((e: React.PointerEvent, step: FloorStep, cornerIdx: number) => {
+    if (step.locked) return
+    e.stopPropagation()
+    e.preventDefault()
+    selectFloorStep(step.id)
+    stepCornerDragRef.current = { stepId: step.id, cornerIdx }
+    setActiveHandleId(`step-corner-${step.id}-${cornerIdx}`)
+    ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
+  }, [selectFloorStep])
+
+  const onStepCornerMove = useCallback((e: React.PointerEvent) => {
+    const cd = stepCornerDragRef.current
+    if (!cd) return
+    const pos = mouseToSvg(e)
+    if (!pos) return
+    let hx = pos.x, hz = pos.z
+    const step = floorSteps.find(s => s.id === cd.stepId)
+    if (!step) return
+    if (snappingEnabled) {
+      const s = snapStepPoint(hx, hz, cd.stepId)
+      if (s) {
+        hx = s.x; hz = s.z
+      } else {
+        // 90° edge snap — when near axis-aligned from either neighbor corner,
+        // lock the relevant coordinate so the adjacent edge is horizontal
+        // or vertical. Only fires when no wall snap was active.
+        const n = step.corners.length
+        const prev = step.corners[(cd.cornerIdx - 1 + n) % n]
+        const next = step.corners[(cd.cornerIdx + 1) % n]
+        const ANGLE_TOL_DEG = 6
+        const snapEdge = (ax: number, az: number) => {
+          const dx = hx - ax, dz = hz - az
+          const L = Math.hypot(dx, dz)
+          if (L < 1) return
+          const ang = Math.atan2(dz, dx) * 180 / Math.PI
+          const nearest = Math.round(ang / 90) * 90
+          if (Math.abs(ang - nearest) >= ANGLE_TOL_DEG) return
+          const norm = ((nearest % 360) + 360) % 360
+          if (norm === 0 || norm === 180) hz = az   // horizontal edge
+          else hx = ax                                // vertical edge
+        }
+        snapEdge(prev[0], prev[1])
+        snapEdge(next[0], next[1])
+      }
+    }
+    const newCorners = step.corners.map((c, i) =>
+      i === cd.cornerIdx ? [hx, hz] as [number, number] : [...c] as [number, number],
+    )
+    updateFloorStep(cd.stepId, { corners: newCorners })
+  }, [mouseToSvg, snapStepPoint, floorSteps, updateFloorStep, snappingEnabled])
+
+  const onStepCornerUp = useCallback((e?: React.PointerEvent) => {
+    stepCornerDragRef.current = null
+    setActiveHandleId(null)
+    if (e) { try { (e.currentTarget as Element).releasePointerCapture(e.pointerId) } catch (_) {} }
+  }, [])
+
+  // ─── Opening (door/window/garage-door) drag — slide along wall ───────────
+  const onOpeningDown = useCallback((e: React.PointerEvent, wall: GarageWall, op: { id: string; xOffset: number; width: number }) => {
+    if (wall.locked) return
+    e.stopPropagation()
+    e.preventDefault()
+    selectWall(wall.id)
+    const pos = mouseToSvg(e)
+    if (!pos) return
+    const wdx = wall.x2 - wall.x1, wdz = wall.z2 - wall.z1
+    const len = Math.hypot(wdx, wdz)
+    if (len < 0.1) return
+    const ux = wdx / len, uz = wdz / len
+    // Project the cursor onto the wall's along-axis (wall.x1 origin).
+    const startAlong = (pos.x - wall.x1) * ux + (pos.z - wall.z1) * uz
+    openingDragRef.current = {
+      wallId: wall.id,
+      openingId: op.id,
+      ux, uz,
+      wallX1: wall.x1, wallZ1: wall.z1,
+      wallLen: len,
+      widthIn: op.width,
+      startAlongHit: startAlong,
+      startXOffset: op.xOffset,
+    }
+    ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
+  }, [mouseToSvg, selectWall])
+
+  const onOpeningMove = useCallback((e: React.PointerEvent) => {
+    const od = openingDragRef.current
+    if (!od) return
+    const pos = mouseToSvg(e)
+    if (!pos) return
+    const curAlong = (pos.x - od.wallX1) * od.ux + (pos.z - od.wallZ1) * od.uz
+    const dAlong = curAlong - od.startAlongHit
+    let newX = od.startXOffset + dAlong
+    // Clamp so the opening stays inside the wall.
+    newX = Math.max(0, Math.min(od.wallLen - od.widthIn, Math.round(newX * 4) / 4))
+    updateOpening(od.wallId, od.openingId, { xOffset: newX })
+  }, [mouseToSvg, updateOpening])
+
+  const onOpeningUp = useCallback((e?: React.PointerEvent) => {
+    openingDragRef.current = null
+    if (e) { try { (e.currentTarget as Element).releasePointerCapture(e.pointerId) } catch (_) {} }
+  }, [])
+
   const dimColor = '#555'
   const dimColorLight = '#888'
   const textColor = '#333'
-  const fs = 7
+  // Reduced 30% (was 7) so the general dim-tier text stays proportional with fsDim / fsSeg.
+  const fs = 4.9
   const tk = 3
 
   // Garage center fallback (used when floor polygon unavailable)
@@ -784,17 +1078,46 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
         )
       })()}
 
-      {/* Floor steps */}
-      {floorSteps.map(step => (
-        <polygon
-          key={step.id}
-          points={step.corners.map(([cx, cz]) => `${sx(cx)},${sz(cz)}`).join(' ')}
-          fill="#e0ddd8"
-          stroke="#999"
-          strokeWidth={0.6}
-          strokeDasharray="3,1.5"
-        />
-      ))}
+      {/* Floor steps — draggable bodies + per-corner resize handles. */}
+      {floorSteps.map(step => {
+        const isSel = selectedFloorStepId === step.id
+        const locked = !!step.locked
+        return (
+          <g key={step.id}>
+            <polygon
+              points={step.corners.map(([cx, cz]) => `${sx(cx)},${sz(cz)}`).join(' ')}
+              fill={isSel ? 'rgba(180, 160, 110, 0.28)' : '#e0ddd8'}
+              stroke={isSel ? '#b48a3a' : '#999'}
+              strokeWidth={isSel ? 1.1 : 0.6}
+              strokeDasharray="3,1.5"
+              style={{ cursor: locked ? 'default' : 'move' }}
+              onPointerDown={e => onStepBodyDown(e, step)}
+              onPointerMove={onStepBodyMove}
+              onPointerUp={onStepBodyUp}
+              onPointerCancel={onStepBodyUp}
+            />
+            {isSel && !locked && step.corners.map(([cx, cz], i) => {
+              const handleId = `step-corner-${step.id}-${i}`
+              const hidden = activeHandleId === handleId
+              // Keep the circle mounted so pointer-capture survives; just hide
+              // it visually during the drag so it doesn't cover the snap target.
+              return (
+                <circle
+                  key={`sc-${step.id}-${i}`}
+                  cx={sx(cx)} cy={sz(cz)} r={6}
+                  fill="none" stroke="#44aaff" strokeWidth={1.5}
+                  pointerEvents="all"
+                  style={{ cursor: 'grab', opacity: hidden ? 0 : 1 }}
+                  onPointerDown={e => onStepCornerDown(e, step, i)}
+                  onPointerMove={onStepCornerMove}
+                  onPointerUp={onStepCornerUp}
+                  onPointerCancel={onStepCornerUp}
+                />
+              )
+            })}
+          </g>
+        )
+      })}
 
       {/* Grid — every 12" */}
       {(() => {
@@ -1018,32 +1341,30 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
             )
           }
 
-          // Width label — positioned on the exterior side of the wall, aligned
-          // with wall direction so it reads left-to-right.
-          const centerX = (pA0.x + pA1.x + nA0.x + nA1.x) / 4
-          const centerZ = (pA0.z + pA1.z + nA0.z + nA1.z) / 4
-          const labelOffset = halfT + 7   // inches outside the exterior face
-          const labelX = centerX - nxIn * labelOffset
-          const labelZ = centerZ - nzIn * labelOffset
-          const wallDeg = Math.atan2(dz, dx) * 180 / Math.PI
-          const readableDeg = (wallDeg > 90 || wallDeg < -90) ? wallDeg + 180 : wallDeg
-          const prefix = op.type === 'garage-door' ? 'GD ' : op.type === 'window' ? 'W ' : ''
+          // Width is dimensioned in the outside dim tier below — no inline
+          // label here (avoids the stacked/overlapping labels when the tier
+          // label lands right next to the opening).
 
           return (
-            <g key={`op-${op.id}`} pointerEvents="none">
-              <polygon points={coverPts} fill="#ffffff" stroke="none" />
+            <g key={`op-${op.id}`}>
+              <polygon points={coverPts} fill="#ffffff" stroke="none" pointerEvents="none" />
               {/* Jambs at each edge */}
               <line x1={sx(pA0.x)} y1={sz(pA0.z)} x2={sx(nA0.x)} y2={sz(nA0.z)}
-                stroke="#222" strokeWidth={0.8} />
+                stroke="#222" strokeWidth={0.8} pointerEvents="none" />
               <line x1={sx(pA1.x)} y1={sz(pA1.z)} x2={sx(nA1.x)} y2={sz(nA1.z)}
-                stroke="#222" strokeWidth={0.8} />
-              {symbol}
-              <text x={sx(labelX)} y={sz(labelZ)}
-                textAnchor="middle" dominantBaseline="central"
-                fontSize={4.5} fontWeight={600} fill="#444"
-                transform={`rotate(${readableDeg} ${sx(labelX)} ${sz(labelZ)})`}>
-                {prefix}{inchesToDisplay(op.width)}
-              </text>
+                stroke="#222" strokeWidth={0.8} pointerEvents="none" />
+              <g pointerEvents="none">{symbol}</g>
+              {/* Transparent hit rect over the opening — sliding a door
+                  along its wall (xOffset). Skips the rest of the visual
+                  so it doesn't block clicks on other entities. */}
+              <polygon points={coverPts}
+                fill="transparent"
+                style={{ cursor: w.locked ? 'default' : 'move' }}
+                onPointerDown={e => onOpeningDown(e, w, op)}
+                onPointerMove={onOpeningMove}
+                onPointerUp={onOpeningUp}
+                onPointerCancel={onOpeningUp}
+              />
             </g>
           )
         })
@@ -1190,8 +1511,9 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
         const TIER_STEP = 8
         const TIER_BASE = 6
         // Unified dim font — matches wall elevation view.
-        const fsDim = 5
-        const fsSeg = 5
+        // Reduced 30% (was 5) so the dim-tier labels sit tighter against the walls.
+        const fsDim = 3.5
+        const fsSeg = 3.5
 
         // Pack strips onto as few tiers as possible using greedy interval
         // scheduling. Each tier is a list of non-overlapping [start,end] strips.
@@ -1299,7 +1621,7 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
               'garage-door': { prefix: 'GD ',     color: '#742' },
             }
             const items = wOpenings.map(op => {
-              const ext = op.modelId === 'custom-plain' ? 2.5 : 0
+              const ext = (op.modelId === 'custom-plain' || op.modelId === 'custom-double') ? 2.5 : 0
               const meta = OP_PREFIX[op.type] ?? { prefix: '', color: '#333' }
               return {
                 start: Math.max(iStart, op.xOffset - ext),
@@ -1446,7 +1768,7 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
               y={sz(rack.z)}
               textAnchor="middle"
               dominantBaseline="middle"
-              fontSize={5}
+              fontSize={3.5}
               fontWeight={600}
               fill="#2a2a66"
               transform={`rotate(${(rack.rotY * 180) / Math.PI} ${sx(rack.x)} ${sz(rack.z)})`}
@@ -1564,7 +1886,7 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
                 <rect x={tx - 12} y={ty - 5.5} width={24} height={11} rx={2}
                   fill="#ffffffcc" stroke="#888" strokeWidth={0.3} />
                 <text x={tx} y={ty} textAnchor="middle" dominantBaseline="central"
-                  fontSize={6.5} fontWeight={600} fill="#333">
+                  fontSize={4.55} fontWeight={600} fill="#333">
                   {angleDeg.toFixed(0)}°
                 </text>
               </g>
@@ -1574,31 +1896,38 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
         return labels
       })()}
 
-      {/* Wall endpoint drag handles — only shown on the selected wall */}
-      {walls.filter(w => w.id === selectedWallId).map(w => (
-        <g key={`wh-${w.id}`}>
-          <circle
-            cx={sx(w.x1)} cy={sz(w.z1)} r={6}
-            fill="none" stroke="#44aaff" strokeWidth={1.5}
-            pointerEvents="all"
-            style={{ cursor: 'grab' }}
-            onPointerDown={e => onWallEndPointerDown(e, w, 'start')}
-            onPointerMove={onWallEndPointerMove}
-            onPointerUp={onWallEndPointerUp}
-            onPointerCancel={onWallEndPointerUp}
-          />
-          <circle
-            cx={sx(w.x2)} cy={sz(w.z2)} r={6}
-            fill="none" stroke="#44aaff" strokeWidth={1.5}
-            pointerEvents="all"
-            style={{ cursor: 'grab' }}
-            onPointerDown={e => onWallEndPointerDown(e, w, 'end')}
-            onPointerMove={onWallEndPointerMove}
-            onPointerUp={onWallEndPointerUp}
-            onPointerCancel={onWallEndPointerUp}
-          />
-        </g>
-      ))}
+      {/* Wall endpoint drag handles — only shown on the selected wall. The
+          active handle is made invisible during its drag (via opacity, not
+          unmount) so the circle stops obscuring the snap target without
+          losing the pointer-capture that dispatches the release event. */}
+      {walls.filter(w => w.id === selectedWallId).map(w => {
+        const startHidden = activeHandleId === `wall-${w.id}-start`
+        const endHidden = activeHandleId === `wall-${w.id}-end`
+        return (
+          <g key={`wh-${w.id}`}>
+            <circle
+              cx={sx(w.x1)} cy={sz(w.z1)} r={6}
+              fill="none" stroke="#44aaff" strokeWidth={1.5}
+              pointerEvents="all"
+              style={{ cursor: 'grab', opacity: startHidden ? 0 : 1 }}
+              onPointerDown={e => onWallEndPointerDown(e, w, 'start')}
+              onPointerMove={onWallEndPointerMove}
+              onPointerUp={onWallEndPointerUp}
+              onPointerCancel={onWallEndPointerUp}
+            />
+            <circle
+              cx={sx(w.x2)} cy={sz(w.z2)} r={6}
+              fill="none" stroke="#44aaff" strokeWidth={1.5}
+              pointerEvents="all"
+              style={{ cursor: 'grab', opacity: endHidden ? 0 : 1 }}
+              onPointerDown={e => onWallEndPointerDown(e, w, 'end')}
+              onPointerMove={onWallEndPointerMove}
+              onPointerUp={onWallEndPointerUp}
+              onPointerCancel={onWallEndPointerUp}
+            />
+          </g>
+        )
+      })}
     </svg>
   )
 }
