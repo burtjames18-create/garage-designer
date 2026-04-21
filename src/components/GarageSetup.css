@@ -8,6 +8,11 @@
   z-index: 100;
   /* Subtle radial gradient behind the modal */
   background: radial-gradient(ellipse at 50% 40%, rgba(30, 90, 160, 0.12) 0%, #0a0c10 70%);
+  /* Allow the whole setup to scroll on short laptop screens where the
+     modal + side panels are taller than the viewport. The flex-center
+     is preserved when content fits; when it overflows, scrolling kicks in. */
+  overflow-y: auto;
+  padding: 20px 0;
 }
 
 .setup-modal {
@@ -17,6 +22,10 @@
   padding: 40px 48px;
   width: 500px;
   max-width: 96vw;
+  /* Internal scroll on short screens so the form doesn't overflow the
+     overlay. The overlay itself also scrolls as a second-line fallback. */
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
   box-shadow: var(--shadow-lg), 0 0 80px rgba(30, 90, 160, 0.08);
   animation: scaleIn 0.35s cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -163,7 +172,11 @@
   box-shadow: var(--shadow-lg), 0 0 80px rgba(30, 90, 160, 0.08);
   width: 340px;
   max-width: 40vw;
-  max-height: 300px;
+  /* Scales with viewport — caps at 300px on big screens, shrinks to at
+     least 160px on small laptops so the panel stays visible and scrolls
+     internally. */
+  max-height: min(300px, 42vh);
+  min-height: 160px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -218,7 +231,9 @@
 }
 .feedback-textarea {
   width: 100%;
-  height: 100px;
+  /* Scales with viewport so the textarea stays proportionate on short
+     laptop screens without forcing the panel off-screen. */
+  height: clamp(60px, 14vh, 100px);
   background: var(--surface2);
   border: 1px solid var(--border);
   border-radius: 8px;

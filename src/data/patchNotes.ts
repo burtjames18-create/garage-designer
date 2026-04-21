@@ -9,6 +9,14 @@ export interface PatchNote {
 
 export const PATCH_NOTES: PatchNote[] = [
   {
+    version: '1.2.11',
+    date: '2026-04-21',
+    items: [
+      'Scale + rotation sliders for any placed item (imported models and catalog models) — select an item in the Vehicles tab and drag to resize or spin in place',
+      'Setup screen + launcher panels now scale with the window — patch notes and feedback panels no longer get cut off on small laptop screens',
+    ],
+  },
+  {
     version: '1.2.10',
     date: '2026-04-21',
     items: [

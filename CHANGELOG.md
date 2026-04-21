@@ -14,6 +14,29 @@ _(No changes yet.)_
 
 ---
 
+## [1.2.11] — 2026-04-21
+
+### Features
+
+- **Placed-item transform sliders.** Selecting any item in the Vehicles tab
+  (imported GLB models or catalog models) shows a Transform panel with
+  uniform scale (0.10×–5×) and Y-axis rotation (0–360°) sliders plus
+  Reset buttons. Updates live in the 3D view.
+
+### Bug fixes
+
+- **Launcher / setup screen panels no longer get cut off on small laptop
+  screens.** `.setup-overlay` scrolls, `.setup-modal` caps at
+  `100vh - 40px` with internal scroll, `.setup-patchnotes` caps at
+  `min(300px, 42vh)` with a 160px minimum, and the feedback textarea
+  uses `clamp(60px, 14vh, 100px)` so the whole setup layout adapts down
+  to roughly 800×500 viewports.
+- **Scale slider now actually resizes the model.** `ItemMesh` was
+  applying position and Y-rotation but ignoring `item.scale` —
+  the `<group>` now passes `scale` through to Three.js.
+
+---
+
 ## [1.2.10] — 2026-04-21
 
 ### Features

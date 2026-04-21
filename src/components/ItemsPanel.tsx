@@ -106,7 +106,7 @@ function PlacedItemRow({ item, selected, onSelect, onRemove }: {
 }
 
 export default function ItemsPanel() {
-  const { items, addItem, removeItem, selectItem, selectedItemId } = useGarageStore()
+  const { items, addItem, removeItem, updateItem, selectItem, selectedItemId } = useGarageStore()
   const [activeCategory, setActiveCategory] = useState<ModelCategory | 'all'>('car')
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   const [libRefresh, setLibRefresh] = useState(0)
@@ -231,6 +231,50 @@ export default function ItemsPanel() {
           <p className="field-hint" style={{ marginTop: 6 }}>
             GLB files go in <code>public/assets/models/</code> — shows a placeholder box until downloaded.
           </p>
+          {/* Scale + rotation sliders for the currently selected item. Drives
+              PlacedItem.scale (uniform) and PlacedItem.rotation[1] (Y-axis spin). */}
+          {(() => {
+            const sel = items.find(i => i.id === selectedItemId)
+            if (!sel) return null
+            const scale = sel.scale[0] ?? 1
+            const yRotDeg = ((sel.rotation[1] ?? 0) * 180 / Math.PI + 360) % 360
+            return (
+              <div style={{ marginTop: 10, padding: '10px 12px', background: 'rgba(0,0,0,0.12)', border: '1px solid var(--border)', borderRadius: 6, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600, letterSpacing: '0.4px', textTransform: 'uppercase' }}>
+                  Transform — {sel.label}
+                </div>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  <span>Scale <span style={{ color: 'var(--text)', fontWeight: 600, marginLeft: 4 }}>{scale.toFixed(2)}×</span></span>
+                  <input type="range" min={0.1} max={5} step={0.05} value={scale}
+                    onChange={e => {
+                      const v = parseFloat(e.target.value)
+                      updateItem(sel.id, { scale: [v, v, v] })
+                    }}
+                    style={{ width: '100%' }} />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  <span>Rotation <span style={{ color: 'var(--text)', fontWeight: 600, marginLeft: 4 }}>{Math.round(yRotDeg)}°</span></span>
+                  <input type="range" min={0} max={360} step={1} value={yRotDeg}
+                    onChange={e => {
+                      const deg = parseFloat(e.target.value)
+                      const rad = deg * Math.PI / 180
+                      updateItem(sel.id, { rotation: [sel.rotation[0], rad, sel.rotation[2]] })
+                    }}
+                    style={{ width: '100%' }} />
+                </label>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    onClick={() => updateItem(sel.id, { scale: [1, 1, 1] })}
+                    style={{ flex: 1, background: 'var(--surface2)', color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 4, padding: '4px', fontSize: 10, cursor: 'pointer' }}
+                  >Reset scale</button>
+                  <button
+                    onClick={() => updateItem(sel.id, { rotation: [sel.rotation[0], 0, sel.rotation[2]] })}
+                    style={{ flex: 1, background: 'var(--surface2)', color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 4, padding: '4px', fontSize: 10, cursor: 'pointer' }}
+                  >Reset rotation</button>
+                </div>
+              </div>
+            )
+          })()}
         </>
       )}
 

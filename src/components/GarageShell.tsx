@@ -4398,10 +4398,12 @@ const ItemMesh = memo(function ItemMesh({ item, selected, wireframe, onClick, on
 
   const isLift = def?.category === 'car-lift'
 
+  const [sx, sy, sz] = item.scale
   return (
     <group
       position={[px, 0, pz]}
       rotation={[0, rotY, 0]}
+      scale={[sx, sy, sz]}
       onClick={(e) => { e.stopPropagation(); onClick() }}
       onPointerDown={onPointerDown}
     >
