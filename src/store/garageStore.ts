@@ -214,6 +214,10 @@ export interface WallOpening {
   // Procedural door colors (used when modelId points to a procedural entry like 'custom-plain').
   doorColor?: string   // hex — slab color
   frameColor?: string  // hex — jamb + casing color
+  // Which side of the wall the door swings onto. Only meaningful for `door`
+  // type; drives the swing-arc rendering in the 2D floor plan. Defaults to
+  // 'interior' when unset.
+  swingSide?: 'interior' | 'exterior'
 }
 
 export interface GarageWall {

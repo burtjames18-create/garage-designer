@@ -959,13 +959,18 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
           // Blueprint symbol per opening type.
           let symbol: JSX.Element | null = null
           if (op.type === 'door') {
-            // Door leaf perpendicular into the interior, swing arc back to
-            // the far jamb. Standard "90° open" plan convention.
-            const hinge = intStart
-            const tipX = hinge.x + nxIn * op.width
-            const tipZ = hinge.z + nzIn * op.width
-            const startAng = Math.atan2(nzIn, nxIn)
-            const endAng = Math.atan2(intEnd.z - hinge.z, intEnd.x - hinge.x)
+            // Door leaf perpendicular to the wall, swing arc back to the far
+            // jamb on the same side. `swingSide` chooses interior (default)
+            // or exterior of the wall.
+            const side = op.swingSide ?? 'interior'
+            const hinge = side === 'exterior' ? extStart : intStart
+            const far   = side === 'exterior' ? extEnd   : intEnd
+            const nxS = side === 'exterior' ? -nxIn : nxIn
+            const nzS = side === 'exterior' ? -nzIn : nzIn
+            const tipX = hinge.x + nxS * op.width
+            const tipZ = hinge.z + nzS * op.width
+            const startAng = Math.atan2(nzS, nxS)
+            const endAng = Math.atan2(far.z - hinge.z, far.x - hinge.x)
             let delta = endAng - startAng
             while (delta > Math.PI) delta -= 2 * Math.PI
             while (delta < -Math.PI) delta += 2 * Math.PI

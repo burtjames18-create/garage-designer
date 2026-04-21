@@ -14,6 +14,23 @@ _(No changes yet.)_
 
 ---
 
+## [1.2.10] — 2026-04-21
+
+### Features
+
+- **Door swing side** — new **Interior / Exterior** toggle in the door
+  settings controls which side of the wall the swing arc is drawn on in the
+  2D floor plan. Persists per door. Defaults to Interior.
+
+### Bug fixes
+
+- **Garage door Left/Right Wall inputs** no longer resize the wall. They
+  now resize the door opening itself, pinning the opposite side in place
+  (wall length stays unchanged, opposite wall-side dimension stays
+  unchanged). 12" minimum opening width enforced.
+
+---
+
 ## [1.2.9] — 2026-04-21
 
 Patch release — no user-visible code changes. Adds a `1.2.8` entry to the

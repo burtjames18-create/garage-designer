@@ -9,6 +9,14 @@ export interface PatchNote {
 
 export const PATCH_NOTES: PatchNote[] = [
   {
+    version: '1.2.10',
+    date: '2026-04-21',
+    items: [
+      'Door swing side — new Interior / Exterior toggle in the door settings controls which side of the wall the swing arc shows on the 2D floor plan',
+      'Garage door Left Wall and Right Wall inputs now resize the door opening (opposite side stays put, wall length never changes)',
+    ],
+  },
+  {
     version: '1.2.8',
     date: '2026-04-21',
     items: [

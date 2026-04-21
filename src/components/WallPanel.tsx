@@ -404,7 +404,22 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
 
             {wall.openings.map(op => {
               const rightWall = Math.max(0, len - op.xOffset - op.width)
-              const handleRightWall = (v: number) => handleLengthChange(op.xOffset + op.width + v)
+              // Editing Left Wall or Right Wall resizes the opening; the
+              // opposite side stays put and the total wall length is
+              // unchanged. (Use the Length field on the wall itself to
+              // resize the wall.) Enforce a 12" minimum opening width.
+              const MIN_OP = 12
+              const rightEdge = op.xOffset + op.width
+              const handleLeftWall = (v: number) => {
+                const newLeft = Math.max(0, Math.min(rightEdge - MIN_OP, v))
+                const newWidth = rightEdge - newLeft
+                updateOpening(wall.id, op.id, { xOffset: newLeft, width: newWidth })
+              }
+              const handleRightWall = (v: number) => {
+                const newRightWall = Math.max(0, Math.min(len - op.xOffset - MIN_OP, v))
+                const newWidth = len - op.xOffset - newRightWall
+                updateOpening(wall.id, op.id, { width: newWidth })
+              }
               return (
                 <div key={op.id} className="opening-item">
                   <div className="opening-item-header">
@@ -417,12 +432,27 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
                     <MeasureInput label="Width"  inches={op.width}   onChange={v => updateOpening(wall.id, op.id, { width: v })}   min={12} />
                     <MeasureInput label="Height" inches={op.height}  onChange={v => updateOpening(wall.id, op.id, { height: v })}  min={12} />
                     {op.type === 'garage-door' ? (<>
-                      <MeasureInput label="Left Wall"  inches={op.xOffset} onChange={v => updateOpening(wall.id, op.id, { xOffset: Math.max(0, v) })} min={0} />
+                      <MeasureInput label="Left Wall"  inches={op.xOffset} onChange={handleLeftWall}  min={0} />
                       <MeasureInput label="Right Wall" inches={rightWall}  onChange={handleRightWall} min={0} />
                     </>) : (
                       <MeasureInput label="Offset" inches={op.xOffset} onChange={v => updateOpening(wall.id, op.id, { xOffset: v })} min={0} />
                     )}
                   </div>
+                  {op.type === 'door' && (
+                    <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span className="coord-label" style={{ flex: 1 }}>Swing side</span>
+                      <button
+                        type="button"
+                        className={`stem-wall-tex-btn${(op.swingSide ?? 'interior') === 'interior' ? ' active' : ''}`}
+                        onClick={() => updateOpening(wall.id, op.id, { swingSide: 'interior' })}
+                      >Interior</button>
+                      <button
+                        type="button"
+                        className={`stem-wall-tex-btn${op.swingSide === 'exterior' ? ' active' : ''}`}
+                        onClick={() => updateOpening(wall.id, op.id, { swingSide: 'exterior' })}
+                      >Exterior</button>
+                    </div>
+                  )}
                   {/* Garage-door texture picker (regular doors use slab/frame colors instead) */}
                   {op.type === 'garage-door' && (
                     <div style={{ marginTop: 6 }}>
