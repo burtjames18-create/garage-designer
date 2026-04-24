@@ -830,11 +830,6 @@ interface GarageStore {
   /** Absolute path to the file the project was opened from (Electron only).
    *  When set, subsequent saves overwrite this file directly — no dialog. */
   projectFilePath: string | null
-  /** Autosave UI state — not serialized, used by the corner status indicator.
-   *  'idle' = nothing to show; 'saving' = write in progress; 'saved' = write
-   *  just finished (shown briefly, then reverts to 'idle'). */
-  autosaveStatus: 'idle' | 'saving' | 'saved'
-  setAutosaveStatus: (s: 'idle' | 'saving' | 'saved') => void
   setProjectName: (v: string | null) => void
   saveProject: (overrideName?: string) => Promise<void>
   loadProject: (data: unknown, filename?: string, filePath?: string) => void
@@ -1707,8 +1702,6 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
 
   projectName: null,
   projectFilePath: null,
-  autosaveStatus: 'idle',
-  setAutosaveStatus: (s) => set({ autosaveStatus: s }),
   setProjectName: (v) => set({ projectName: v }),
   newProject: () => {
     // Return to the setup screen with a clean slate. Clears the project name

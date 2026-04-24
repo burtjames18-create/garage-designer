@@ -14,6 +14,27 @@ _(No changes yet.)_
 
 ---
 
+## [1.2.16] — 2026-04-21
+
+### Features
+
+- **Save-before-close.** When the user clicks the window X, the main
+  process pauses the close, asks the renderer to flush a final autosave,
+  then actually closes the window. A 4-second watchdog prevents a
+  frozen renderer from blocking quit.
+
+### Bug fixes
+
+- **Autosave "Saved" pill no longer appears every 3 seconds.** The
+  autosave status was living in the Zustand store, so writing
+  `autosaveStatus: 'saved'` re-triggered the store subscribe listener
+  that schedules the next save — creating an infinite save/indicator
+  loop. Status moved out to a standalone event emitter consumed via
+  `useSyncExternalStore`, so it no longer feeds back into the autosave
+  timer.
+
+---
+
 ## [1.2.15] — 2026-04-21
 
 ### Features

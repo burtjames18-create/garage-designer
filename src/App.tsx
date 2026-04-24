@@ -8,6 +8,7 @@ import WallElevationView from './components/WallElevationView'
 import { ToastContainer } from './components/Toast'
 import KeyboardHelp from './components/KeyboardHelp'
 import AutosaveIndicator from './components/AutosaveIndicator'
+import { setAutosaveStatus } from './utils/autosaveStatus'
 import './App.css'
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -69,19 +70,19 @@ export default function App() {
         const state = useGarageStore.getState()
         if (!state.projectFilePath || !state.setupDone || inFlight) return
         inFlight = true
-        state.setAutosaveStatus('saving')
+        setAutosaveStatus('saving')
         try {
           const { buildProjectJson } = await import('./store/garageStore')
           const json = await buildProjectJson(useGarageStore.getState)
           await launcher.saveProject!(state.projectFilePath, json)
-          useGarageStore.getState().setAutosaveStatus('saved')
+          setAutosaveStatus('saved')
           // Keep "Saved" on screen briefly, then fade back to idle.
           if (savedTimer) clearTimeout(savedTimer)
           savedTimer = setTimeout(() => {
-            useGarageStore.getState().setAutosaveStatus('idle')
+            setAutosaveStatus('idle')
           }, 1800)
         } catch {
-          useGarageStore.getState().setAutosaveStatus('idle')
+          setAutosaveStatus('idle')
         } finally {
           inFlight = false
         }
@@ -93,6 +94,34 @@ export default function App() {
       if (timer) clearTimeout(timer)
       if (savedTimer) clearTimeout(savedTimer)
     }
+  }, [])
+
+  // Save-before-close: when the user clicks the window X, the main process
+  // fires 'app-save-before-close' and waits for confirmClose(). We flush a
+  // final write of the current project (if any), then confirm.
+  useEffect(() => {
+    const launcher = (window as unknown as { launcher?: {
+      saveProject?: (path: string, content: string) => Promise<boolean>
+      onSaveBeforeClose?: (cb: () => void) => (() => void)
+      confirmClose?: () => void
+    } }).launcher
+    if (!launcher?.onSaveBeforeClose || !launcher.confirmClose) return
+    const unsubscribe = launcher.onSaveBeforeClose(async () => {
+      try {
+        const state = useGarageStore.getState()
+        if (state.projectFilePath && state.setupDone && launcher.saveProject) {
+          setAutosaveStatus('saving')
+          const { buildProjectJson } = await import('./store/garageStore')
+          const json = await buildProjectJson(useGarageStore.getState)
+          await launcher.saveProject(state.projectFilePath, json)
+        }
+      } catch {
+        // If the save fails, still let the app close — don't trap the user.
+      } finally {
+        launcher.confirmClose!()
+      }
+    })
+    return unsubscribe
   }, [])
 
   // Global "?" shortcut to toggle keyboard help

@@ -9,6 +9,14 @@ export interface PatchNote {
 
 export const PATCH_NOTES: PatchNote[] = [
   {
+    version: '1.2.16',
+    date: '2026-04-21',
+    items: [
+      'Autosave now runs one final save when you close the app via the X button',
+      'Fixed autosave "Saved" pill appearing every 3 seconds even when no edits were made',
+    ],
+  },
+  {
     version: '1.2.15',
     date: '2026-04-21',
     items: [

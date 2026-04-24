@@ -1,7 +1,11 @@
-import { useGarageStore } from '../store/garageStore'
+import { useSyncExternalStore } from 'react'
+import {
+  subscribeAutosaveStatus,
+  getAutosaveStatus,
+} from '../utils/autosaveStatus'
 
 export default function AutosaveIndicator() {
-  const status = useGarageStore(s => s.autosaveStatus)
+  const status = useSyncExternalStore(subscribeAutosaveStatus, getAutosaveStatus, getAutosaveStatus)
   if (status === 'idle') return null
   const saving = status === 'saving'
   return (

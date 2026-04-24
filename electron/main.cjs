@@ -113,6 +113,34 @@ function createMainWindow() {
       launcherWindow = null
     }
   })
+
+  // Save-before-close: when the user clicks the X, pause the close, ask the
+  // renderer to do a final autosave, then actually close once the renderer
+  // reports back (or after a short timeout so a crashed renderer can't
+  // block quit forever).
+  let allowClose = false
+  let closeTimeout = null
+  mainWindow.on('close', (event) => {
+    if (allowClose) return
+    event.preventDefault()
+    try {
+      mainWindow.webContents.send('app-save-before-close')
+    } catch {
+      allowClose = true
+      mainWindow.close()
+      return
+    }
+    if (closeTimeout) clearTimeout(closeTimeout)
+    closeTimeout = setTimeout(() => {
+      allowClose = true
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close()
+    }, 4000)
+  })
+  ipcMain.on('app-close-confirmed', () => {
+    if (closeTimeout) { clearTimeout(closeTimeout); closeTimeout = null }
+    allowClose = true
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close()
+  })
 }
 
 // ---------------------------------------------------------------------------

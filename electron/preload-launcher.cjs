@@ -23,4 +23,14 @@ contextBridge.exposeInMainWorld('launcher', {
   getProjectsDir: () => ipcRenderer.invoke('projects-dir'),
   createProjectFolder: (suggestedName, content) =>
     ipcRenderer.invoke('project-create-folder', suggestedName, content),
+
+  // Save-before-close hooks: the main process fires 'app-save-before-close'
+  // after the user clicks X; the renderer is expected to flush a final save
+  // and call confirmClose() so the window can actually close.
+  onSaveBeforeClose: (callback) => {
+    const listener = () => callback()
+    ipcRenderer.on('app-save-before-close', listener)
+    return () => ipcRenderer.off('app-save-before-close', listener)
+  },
+  confirmClose: () => ipcRenderer.send('app-close-confirmed'),
 })
