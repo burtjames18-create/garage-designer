@@ -684,7 +684,7 @@ interface GarageStore {
   // Actions
   setCustomerInfo: (name: string, address: string, consultant: string) => void
   initializeGarage: (widthFt: number, depthFt: number, heightFt: number) => void
-  completeSetup: () => void
+  completeSetup: () => Promise<void>
 
   addWall: (wall?: Partial<GarageWall>) => void
   updateWall: (id: string, changes: Partial<GarageWall>) => void
@@ -830,6 +830,11 @@ interface GarageStore {
   /** Absolute path to the file the project was opened from (Electron only).
    *  When set, subsequent saves overwrite this file directly — no dialog. */
   projectFilePath: string | null
+  /** Autosave UI state — not serialized, used by the corner status indicator.
+   *  'idle' = nothing to show; 'saving' = write in progress; 'saved' = write
+   *  just finished (shown briefly, then reverts to 'idle'). */
+  autosaveStatus: 'idle' | 'saving' | 'saved'
+  setAutosaveStatus: (s: 'idle' | 'saving' | 'saved') => void
   setProjectName: (v: string | null) => void
   saveProject: (overrideName?: string) => Promise<void>
   loadProject: (data: unknown, filename?: string, filePath?: string) => void
@@ -865,6 +870,61 @@ function buildPuckGrid(wFt: number, dFt: number): CeilingLight[] {
     }
   }
   return lights
+}
+
+/** Build the serialized project JSON from current store state. Used by both
+ *  `saveProject` (manual save) and `completeSetup` (seeds the autosave file
+ *  when a new project folder is created). 3D model buffers are encoded to
+ *  base64 asynchronously because they can be large. */
+export async function buildProjectJson(getFn: () => GarageStore): Promise<string> {
+  const s = getFn()
+  const encodedAssets = await Promise.all(
+    s.importedAssets.map(async (a) => {
+      if (a.assetType === '3d-model') {
+        const base64 = await getCachedModelBase64Async(a.id)
+        return { ...a, data: base64 ?? '' }
+      }
+      return a
+    })
+  )
+  const data = {
+    _version: CURRENT_VERSION,
+    customerName: s.customerName,
+    siteAddress: s.siteAddress,
+    consultantName: s.consultantName,
+    setupDone: s.setupDone,
+    garageWidth: s.garageWidth,
+    garageDepth: s.garageDepth,
+    ceilingHeight: s.ceilingHeight,
+    floorPoints: s.floorPoints,
+    walls: s.walls,
+    slatwallPanels: s.slatwallPanels,
+    stainlessBacksplashPanels: s.stainlessBacksplashPanels,
+    floorSteps: s.floorSteps,
+    shapes: s.shapes,
+    cabinets: s.cabinets,
+    countertops: s.countertops,
+    baseboards: s.baseboards,
+    stemWalls: s.stemWalls,
+    items: s.items,
+    overheadRacks: s.overheadRacks,
+    importedAssets: encodedAssets,
+    slatwallAccessories: s.slatwallAccessories,
+    flooringColor: s.flooringColor,
+    floorTextureScale: s.floorTextureScale,
+    ceilingLights: s.ceilingLights,
+    ambientIntensity: s.ambientIntensity,
+    bounceIntensity: s.bounceIntensity,
+    bounceDistance: s.bounceDistance,
+    floorReflection: s.floorReflection,
+    envReflection: s.envReflection,
+    lightMultiplier: s.lightMultiplier,
+    exposure: s.exposure,
+    sceneLights: s.sceneLights,
+    exportShots: s.exportShots,
+    tracingImage: s.tracingImage,
+  }
+  return JSON.stringify(data, null, 2)
 }
 
 export const useGarageStore = create<GarageStore>((set, get) => ({
@@ -998,7 +1058,37 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       }
     }),
 
-  completeSetup: () => set({ setupDone: true }),
+  completeSetup: async () => {
+    set({ setupDone: true })
+    // In Electron, auto-create a project folder under
+    // ~/Documents/Garage Living Projects/ using the customer name so
+    // autosave has a place to write. Non-Electron (browser): skip.
+    const s = get()
+    if (s.projectFilePath) return
+    const launcher = (globalThis as unknown as { launcher?: {
+      createProjectFolder?: (suggestedName: string, content: string) =>
+        Promise<{ folder: string; filePath: string } | { error: string } | null>
+    } }).launcher
+    if (!launcher?.createProjectFolder) return
+    // Folder name convention: "<Customer Name> design" (e.g. "Smith design").
+    // Falls back to a dated "Untitled design" if no customer name is set.
+    const nameBase = (s.customerName || '').trim() || `Untitled_${new Date().toISOString().slice(0, 10)}`
+    const suggested = `${nameBase} design`
+    // Seed the file with an initial snapshot so autosave writes are diff-only.
+    const json = await buildProjectJson(get)
+    try {
+      const result = await launcher.createProjectFolder(suggested, json)
+      if (result && 'filePath' in result) {
+        const fileName = result.filePath.split(/[\\/]/).pop() ?? 'project.garage'
+        set({
+          projectFilePath: result.filePath,
+          projectName: fileName.replace(/\.garage$/i, ''),
+        })
+      }
+    } catch {
+      // Silent — autosave will fall back to Save As on first save attempt.
+    }
+  },
 
   addWall: (overrides = {}) => {
     const ch = get().ceilingHeight
@@ -1617,6 +1707,8 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
 
   projectName: null,
   projectFilePath: null,
+  autosaveStatus: 'idle',
+  setAutosaveStatus: (s) => set({ autosaveStatus: s }),
   setProjectName: (v) => set({ projectName: v }),
   newProject: () => {
     // Return to the setup screen with a clean slate. Clears the project name
@@ -1632,56 +1724,7 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
   },
   saveProject: async (overrideName?: string) => {
     const s = get()
-
-    // Encode 3D model buffers to base64 asynchronously (handles large files)
-    const encodedAssets = await Promise.all(
-      s.importedAssets.map(async (a) => {
-        if (a.assetType === '3d-model') {
-          const base64 = await getCachedModelBase64Async(a.id)
-          return { ...a, data: base64 ?? '' }
-        }
-        return a
-      })
-    )
-
-    const data = {
-      _version: CURRENT_VERSION,
-      customerName: s.customerName,
-      siteAddress: s.siteAddress,
-      consultantName: s.consultantName,
-      setupDone: s.setupDone,
-      garageWidth: s.garageWidth,
-      garageDepth: s.garageDepth,
-      ceilingHeight: s.ceilingHeight,
-      floorPoints: s.floorPoints,
-      walls: s.walls,
-      slatwallPanels: s.slatwallPanels,
-      stainlessBacksplashPanels: s.stainlessBacksplashPanels,
-      floorSteps: s.floorSteps,
-      shapes: s.shapes,
-      cabinets: s.cabinets,
-      countertops: s.countertops,
-      baseboards: s.baseboards,
-      stemWalls: s.stemWalls,
-      items: s.items,
-      overheadRacks: s.overheadRacks,
-      importedAssets: encodedAssets,
-      slatwallAccessories: s.slatwallAccessories,
-      flooringColor: s.flooringColor,
-      floorTextureScale: s.floorTextureScale,
-      ceilingLights: s.ceilingLights,
-      ambientIntensity: s.ambientIntensity,
-      bounceIntensity: s.bounceIntensity,
-      bounceDistance: s.bounceDistance,
-      floorReflection: s.floorReflection,
-      envReflection: s.envReflection,
-      lightMultiplier: s.lightMultiplier,
-      exposure: s.exposure,
-      sceneLights: s.sceneLights,
-      exportShots: s.exportShots,
-      tracingImage: s.tracingImage,
-    }
-    const json = JSON.stringify(data, null, 2)
+    const json = await buildProjectJson(get)
     // Priority: explicit override → existing projectName → customerName → default.
     const baseName = overrideName
       ?? s.projectName

@@ -20,4 +20,7 @@ contextBridge.exposeInMainWorld('launcher', {
     ipcRenderer.invoke('project-save-as', suggestedName, content),
   saveProject: (filePath, content) =>
     ipcRenderer.invoke('project-save', filePath, content),
+  getProjectsDir: () => ipcRenderer.invoke('projects-dir'),
+  createProjectFolder: (suggestedName, content) =>
+    ipcRenderer.invoke('project-create-folder', suggestedName, content),
 })

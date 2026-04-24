@@ -9,6 +9,16 @@ export interface PatchNote {
 
 export const PATCH_NOTES: PatchNote[] = [
   {
+    version: '1.2.15',
+    date: '2026-04-21',
+    items: [
+      'Built-in projects folder at Documents\\Garage Living Projects — new projects auto-create a "<Customer Name> design" subfolder and seed it with the initial save',
+      'Autosave — every edit silently overwrites the project file 3 seconds after the last change (no download, no dialog)',
+      'Autosave indicator in the bottom-right corner shows "Saving…" / "Saved" status',
+      'Open Project dialog now defaults to the projects folder',
+    ],
+  },
+  {
     version: '1.2.14',
     date: '2026-04-21',
     items: [

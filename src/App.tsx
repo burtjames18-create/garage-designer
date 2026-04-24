@@ -7,6 +7,7 @@ import Viewer3D from './components/Viewer3D'
 import WallElevationView from './components/WallElevationView'
 import { ToastContainer } from './components/Toast'
 import KeyboardHelp from './components/KeyboardHelp'
+import AutosaveIndicator from './components/AutosaveIndicator'
 import './App.css'
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -50,6 +51,50 @@ export default function App() {
     return () => { cancelled = true }
   }, [])
 
+  // Autosave — in Electron, silently overwrite the project's .garage file
+  // a few seconds after the last edit. Only fires when a projectFilePath
+  // has been set (via Open, explicit Save As, or auto-created folder on
+  // setup completion). Browser sessions skip — window.launcher is absent.
+  useEffect(() => {
+    const launcher = (window as unknown as { launcher?: {
+      saveProject?: (path: string, content: string) => Promise<boolean>
+    } }).launcher
+    if (!launcher?.saveProject) return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let savedTimer: ReturnType<typeof setTimeout> | null = null
+    let inFlight = false
+    const schedule = () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(async () => {
+        const state = useGarageStore.getState()
+        if (!state.projectFilePath || !state.setupDone || inFlight) return
+        inFlight = true
+        state.setAutosaveStatus('saving')
+        try {
+          const { buildProjectJson } = await import('./store/garageStore')
+          const json = await buildProjectJson(useGarageStore.getState)
+          await launcher.saveProject!(state.projectFilePath, json)
+          useGarageStore.getState().setAutosaveStatus('saved')
+          // Keep "Saved" on screen briefly, then fade back to idle.
+          if (savedTimer) clearTimeout(savedTimer)
+          savedTimer = setTimeout(() => {
+            useGarageStore.getState().setAutosaveStatus('idle')
+          }, 1800)
+        } catch {
+          useGarageStore.getState().setAutosaveStatus('idle')
+        } finally {
+          inFlight = false
+        }
+      }, 3000)
+    }
+    const unsubscribe = useGarageStore.subscribe(schedule)
+    return () => {
+      unsubscribe()
+      if (timer) clearTimeout(timer)
+      if (savedTimer) clearTimeout(savedTimer)
+    }
+  }, [])
+
   // Global "?" shortcut to toggle keyboard help
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -80,6 +125,7 @@ export default function App() {
         </div>
       </div>
       <ToastContainer />
+      <AutosaveIndicator />
       {showKeyboard && <KeyboardHelp onClose={() => setShowKeyboard(false)} />}
     </ErrorBoundary>
   )

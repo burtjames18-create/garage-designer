@@ -14,6 +14,23 @@ _(No changes yet.)_
 
 ---
 
+## [1.2.15] — 2026-04-21
+
+### Features
+
+- **Built-in projects folder + autosave.** On first use, the app creates
+  `Documents\Garage Living Projects\`. When a new project is started the
+  app auto-creates a subfolder named `"<Customer Name> design"` and seeds
+  it with `project.garage`. Every edit triggers a silent overwrite
+  3 seconds later — no download, no dialog.
+- **Autosave indicator.** A small pill in the bottom-right corner shows
+  "Saving…" (pulsing blue dot) while the write is in flight and "Saved"
+  (green dot) for ~2 seconds after completion, then fades out.
+- **Open Project dialog lands in the projects folder** by default, so
+  users see their auto-saved projects immediately.
+
+---
+
 ## [1.2.14] — 2026-04-21
 
 ### Features

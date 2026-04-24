@@ -150,10 +150,61 @@ ipcMain.handle('get-saved-credentials', () => loadCredentials())
 
 // ---------------------------------------------------------------------------
 // Project file handling — open / save-as / save (silent overwrite).
+// All projects live in a dedicated folder under the user's Documents dir so
+// they're easy to find, survive app uninstalls, and can be backed up.
 // ---------------------------------------------------------------------------
+const PROJECTS_ROOT = path.join(app.getPath('documents'), 'Garage Living Projects')
+
+function ensureProjectsRoot() {
+  try { fs.mkdirSync(PROJECTS_ROOT, { recursive: true }) } catch {}
+  return PROJECTS_ROOT
+}
+
+/** Turn a free-form string into a safe Windows/cross-platform folder name. */
+function sanitizeFolderName(name) {
+  const cleaned = String(name || '')
+    .replace(/[<>:"/\\|?*]/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^\.+/, '')
+    .trim()
+    .slice(0, 80)
+  return cleaned || 'Untitled'
+}
+
+/** Returns a unique folder path inside PROJECTS_ROOT for the given base name.
+ *  If a folder with that name already exists, appends -2, -3, etc. */
+function uniqueProjectFolder(baseName) {
+  ensureProjectsRoot()
+  const safe = sanitizeFolderName(baseName)
+  let candidate = path.join(PROJECTS_ROOT, safe)
+  let n = 2
+  while (fs.existsSync(candidate)) {
+    candidate = path.join(PROJECTS_ROOT, `${safe}-${n}`)
+    n++
+  }
+  fs.mkdirSync(candidate, { recursive: true })
+  return candidate
+}
+
+ipcMain.handle('projects-dir', () => ensureProjectsRoot())
+
+ipcMain.handle('project-create-folder', (_event, suggestedName, content) => {
+  try {
+    const folder = uniqueProjectFolder(suggestedName)
+    const filePath = path.join(folder, 'project.garage')
+    if (content != null) fs.writeFileSync(filePath, content, 'utf8')
+    return { folder, filePath }
+  } catch (err) {
+    return { error: String(err) }
+  }
+})
+
 ipcMain.handle('project-open', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     title: 'Open Garage Project',
+    // Default the Open dialog to the projects folder so users land where
+    // their auto-saved projects live.
+    defaultPath: ensureProjectsRoot(),
     filters: [
       { name: 'Garage Project', extensions: ['garage', 'json'] },
       { name: 'All Files', extensions: ['*'] },
@@ -171,9 +222,10 @@ ipcMain.handle('project-open', async () => {
 })
 
 ipcMain.handle('project-save-as', async (_event, suggestedName, content) => {
+  const root = ensureProjectsRoot()
   const result = await dialog.showSaveDialog(mainWindow, {
     title: 'Save Garage Project',
-    defaultPath: (suggestedName || 'garage-design') + '.garage',
+    defaultPath: path.join(root, (suggestedName || 'garage-design') + '.garage'),
     filters: [{ name: 'Garage Project', extensions: ['garage'] }],
   })
   if (result.canceled || !result.filePath) return null
