@@ -14,6 +14,22 @@ _(No changes yet.)_
 
 ---
 
+## [1.2.17] — 2026-04-21
+
+### Features
+
+- **Selected wall opens in wall edit mode.** When you click a wall in 3D
+  view and then switch to wall-edit (elevation) mode, that wall is now
+  the one displayed instead of whatever wall was last viewed.
+
+### Updates
+
+- **Signature upper cabinet heights.** All four Signature uppers (36"
+  2-Door, 28" 2-Door, 20" 1-Door, and 24" Corner) now ship at **28"H**
+  instead of 30.5"H, matching the spec.
+
+---
+
 ## [1.2.16] — 2026-04-21
 
 ### Features

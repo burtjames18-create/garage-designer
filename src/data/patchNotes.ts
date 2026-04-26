@@ -9,6 +9,14 @@ export interface PatchNote {
 
 export const PATCH_NOTES: PatchNote[] = [
   {
+    version: '1.2.17',
+    date: '2026-04-21',
+    items: [
+      'Selecting a wall in 3D and switching to wall-edit mode now opens that wall',
+      'Signature upper cabinet heights changed to 28" (was 30.5")',
+    ],
+  },
+  {
     version: '1.2.16',
     date: '2026-04-21',
     items: [

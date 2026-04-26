@@ -95,10 +95,10 @@ export const CABINET_PRESETS: CabinetPreset[] = [
   { key: 's-locker-36-2',   label: '36" 2-Door Locker',         line: 'signature', style: 'locker', doors: 2, w: 36, d: 24, h: 80, sku: 'GL-SIG-TALL-36', price: 799 },
   { key: 's-locker-28-2',   label: '28" 2-Door Locker',         line: 'signature', style: 'locker', doors: 2, w: 28, d: 24, h: 80, sku: 'GL-SIG-TALL-28', price: 749 },
   { key: 's-locker-20-1',   label: '20" 1-Door Locker',         line: 'signature', style: 'locker', doors: 1, w: 20, d: 24, h: 80, sku: 'GL-SIG-TALL-20', price: 699 },
-  { key: 's-upper-36-2',    label: '36" 2-Door Upper',          line: 'signature', style: 'upper',  doors: 2, w: 36, d: 14, h: 30.5, sku: 'GL-SIG-WALL-36', price: 359 },
-  { key: 's-upper-28-2',    label: '28" 2-Door Upper',          line: 'signature', style: 'upper',  doors: 2, w: 28, d: 14, h: 30.5, sku: 'GL-SIG-WALL-28', price: 319 },
-  { key: 's-upper-20-1',    label: '20" 1-Door Upper',          line: 'signature', style: 'upper',  doors: 1, w: 20, d: 14, h: 30.5, sku: 'GL-SIG-WALL-20', price: 279 },
-  { key: 's-corner-upper',  label: '24" Upper Corner',          line: 'signature', style: 'corner-upper', doors: 1, w: 24, d: 24, h: 30.5, sku: 'GL-SIG-WALL-CNR', price: 349 },
+  { key: 's-upper-36-2',    label: '36" 2-Door Upper',          line: 'signature', style: 'upper',  doors: 2, w: 36, d: 14, h: 28, sku: 'GL-SIG-WALL-36', price: 359 },
+  { key: 's-upper-28-2',    label: '28" 2-Door Upper',          line: 'signature', style: 'upper',  doors: 2, w: 28, d: 14, h: 28, sku: 'GL-SIG-WALL-28', price: 319 },
+  { key: 's-upper-20-1',    label: '20" 1-Door Upper',          line: 'signature', style: 'upper',  doors: 1, w: 20, d: 14, h: 28, sku: 'GL-SIG-WALL-20', price: 279 },
+  { key: 's-corner-upper',  label: '24" Upper Corner',          line: 'signature', style: 'corner-upper', doors: 1, w: 24, d: 24, h: 28, sku: 'GL-SIG-WALL-CNR', price: 349 },
   // ── Signature Shallow — 18" deep lowers/lockers (uppers shared above) ─
   { key: 'ss-lower-20-1',    label: '20" 1-Door Lower',          line: 'signature', style: 'lower',  doors: 1, w: 20, d: 18, h: 30.5, shallow: true, sku: 'GL-SIG-BASE-20-S',      price: 279 },
   { key: 'ss-lower-28-2',    label: '28" 2-Door Lower',          line: 'signature', style: 'lower',  doors: 2, w: 28, d: 18, h: 30.5, shallow: true, sku: 'GL-SIG-BASE-28-S',      price: 359 },
@@ -1302,11 +1302,20 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
   setFloorTextureScale: (scale) => set({ floorTextureScale: scale }),
 
   setFloorSelected: (v) => set(v ? { floorSelected: true, activeTab: 'flooring' as SidebarTab } : { floorSelected: false }),
-  setViewMode: (mode) => set(
-    mode === 'elevation' ? { viewMode: mode, activeTab: 'cabinets' as SidebarTab } :
-    mode === 'top'       ? { viewMode: mode, activeTab: 'overhead' as SidebarTab } :
-    { viewMode: mode }
-  ),
+  setViewMode: (mode) => set(s => {
+    if (mode === 'elevation') {
+      // If a wall is selected (e.g. clicked in 3D), jump straight to its
+      // elevation. Falls back to the existing elevationWallIndex when no
+      // wall is selected.
+      const selIdx = s.selectedWallId
+        ? s.walls.findIndex(w => w.id === s.selectedWallId)
+        : -1
+      const nextIdx = selIdx >= 0 ? selIdx : s.elevationWallIndex
+      return { viewMode: mode, activeTab: 'cabinets' as SidebarTab, elevationWallIndex: nextIdx }
+    }
+    if (mode === 'top') return { viewMode: mode, activeTab: 'overhead' as SidebarTab }
+    return { viewMode: mode }
+  }),
   setCameraAngle: (angle) => set({ cameraAngle: angle }),
   setElevationWallIndex: (i) => set({ elevationWallIndex: i }),
   setElevationSide: (side) => set({ elevationSide: side }),
