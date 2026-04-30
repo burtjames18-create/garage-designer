@@ -1275,22 +1275,56 @@ export default function WallElevationView() {
             )
           })}
 
-          {/* Opening resize handles — top-left & top-right, only on selected door/window */}
+          {/* Opening resize handles — all four corners on the selected
+              opening. Bottom handles let users adjust the sill height
+              (especially useful for windows). Corner indices match the
+              drag handler: 0=top-left, 1=top-right, 2=bottom-right,
+              3=bottom-left. Also draws an elevation dim line from the
+              floor up to the opening's bottom so you can read its sill
+              height at a glance. */}
           {wall.openings
             .filter(op => (op.type === 'door' || op.type === 'window' || op.type === 'garage-door') && op.id === selectedOpeningId)
             .map(op => {
               const left  = toX(op.xOffset)
               const right = toX(op.xOffset + op.width)
               const top   = toY(op.yOffset + op.height)
-              const corners: [0 | 1, number, number][] = [
-                [0, left, top], [1, right, top],
+              const bot   = toY(op.yOffset)
+              const corners: [0 | 1 | 2 | 3, number, number][] = [
+                [0, left, top],
+                [1, right, top],
+                [2, right, bot],
+                [3, left, bot],
               ]
+              const cursorFor = (c: 0 | 1 | 2 | 3) =>
+                c === 0 || c === 2 ? 'nwse-resize' : 'nesw-resize'
+              // Elevation dim — vertical line from floor to opening bottom
+              // sitting just left of the window, with the height labelled.
+              // Skip when yOffset is 0 (no elevation to label).
+              const dimX = left - 6
+              const floorY = toY(0)
+              const elevLabelY = (floorY + bot) / 2
               return (
                 <g key={`dh-${op.id}`}>
+                  {op.yOffset > 0.1 && (
+                    <g pointerEvents="none">
+                      <line x1={dimX} y1={floorY} x2={dimX} y2={bot}
+                        stroke="#44aaff" strokeWidth={0.5} />
+                      <line x1={dimX - 1.4} y1={floorY} x2={dimX + 1.4} y2={floorY}
+                        stroke="#44aaff" strokeWidth={0.5} />
+                      <line x1={dimX - 1.4} y1={bot} x2={dimX + 1.4} y2={bot}
+                        stroke="#44aaff" strokeWidth={0.5} />
+                      <text x={dimX - 1.5} y={elevLabelY}
+                        textAnchor="end" dominantBaseline="middle"
+                        fontSize={3.5} fontWeight={600}
+                        fill="#1a6db0">
+                        {inchesToDisplay(op.yOffset)}
+                      </text>
+                    </g>
+                  )}
                   {corners.map(([c, cx, cy]) => (
                     <circle key={c} cx={cx} cy={cy} r={2.4}
                       fill="#fff" stroke="#44aaff" strokeWidth={0.8}
-                      style={{ cursor: c === 0 ? 'nwse-resize' : 'nesw-resize' }}
+                      style={{ cursor: cursorFor(c) }}
                       onMouseDown={e => onOpeningCornerDown(e, op, c)}
                       onClick={e => e.stopPropagation()}
                     />

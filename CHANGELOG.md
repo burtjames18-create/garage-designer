@@ -14,6 +14,35 @@ _(No changes yet.)_
 
 ---
 
+## [1.2.18] — 2026-04-21
+
+### Features
+
+- **All four opening corners draggable in 3D.** Selecting a window or
+  door now shows handles at all four corners — bottom-left and
+  bottom-right let you drag the sill height up and down, top corners
+  still adjust the head. The opposite corner stays anchored throughout
+  the drag.
+- **Floor Offset measurement for doors and windows.** New "Floor
+  Offset" input in the opening details edits `yOffset` directly so you
+  can dial in the sill height by typing inches. Skipped for garage
+  doors (they always sit on the floor).
+- **Elevation dim line in wall edit mode.** When an opening is selected,
+  a vertical dim line draws to the left of the window from floor to
+  sill, labelled with the elevation in inches.
+- **Per-opening Suspense for GLB models** so swapping window styles
+  loads the new model without unmounting the rest of the scene. Adds
+  `key={op.modelId}` to remount the GLB component cleanly on style
+  change.
+
+### Updates
+
+- **Window / Door / GD section header.** The "Openings (n)" section in
+  the wall details panel now reads "Window / Door / GD (n)" to call out
+  the three opening types you can add.
+
+---
+
 ## [1.2.17] — 2026-04-21
 
 ### Features

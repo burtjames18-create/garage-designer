@@ -423,8 +423,9 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
           </Section>
 
 
-          {/* Openings */}
-          <Section title={`Openings (${wall.openings.length})`}>
+          {/* Openings — renamed in the UI to call out the three opening types
+              the user can add (Window / Door / GD = garage door). */}
+          <Section title={`Window / Door / GD (${wall.openings.length})`}>
             <div className="openings-header">
               <div className="opening-add-row">
                 <button className="opening-add-btn" onClick={() => addOpening(wall.id, 'garage-door')}>+ Garage Door</button>
@@ -467,6 +468,17 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
                       <MeasureInput label="Right Wall" inches={rightWall}  onChange={handleRightWall} min={0} />
                     </>) : (
                       <MeasureInput label="Offset" inches={op.xOffset} onChange={v => updateOpening(wall.id, op.id, { xOffset: v })} min={0} />
+                    )}
+                    {/* Sill height — distance from floor to bottom of opening.
+                        Most relevant for windows; doors usually sit on floor
+                        but we expose it for all opening types. */}
+                    {op.type !== 'garage-door' && (
+                      <MeasureInput
+                        label="Floor Offset"
+                        inches={op.yOffset}
+                        onChange={v => updateOpening(wall.id, op.id, { yOffset: Math.max(0, v) })}
+                        min={0}
+                      />
                     )}
                   </div>
                   {op.type === 'door' && (

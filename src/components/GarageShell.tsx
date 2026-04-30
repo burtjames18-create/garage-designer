@@ -3238,7 +3238,23 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
       if (entry) {
         return (
           <group key={op.id || i} position={[FT(along), FT(y), 0]} onPointerDown={onOpDown}>
-            <OpeningGLBModel modelId={op.modelId} widthIn={op.width} heightIn={op.height} />
+            {/* Per-opening Suspense so loading a new GLB only blanks out
+                this single window, not the entire scene. Without this, any
+                model swap triggered by changing op.modelId would suspend
+                the parent <Suspense> and unmount the whole GarageShell —
+                which made it look like the other window styles weren't
+                rendering when they were just churning the scene tree. */}
+            <Suspense fallback={null}>
+              {/* keyed on modelId so the GLB component fully remounts when
+                  the user picks a different window; useGLTF caches by URL
+                  so the swap is instant after first load. */}
+              <OpeningGLBModel
+                key={op.modelId}
+                modelId={op.modelId}
+                widthIn={op.width}
+                heightIn={op.height}
+              />
+            </Suspense>
           </group>
         )
       }
@@ -4429,13 +4445,13 @@ interface FloorStepCornerDragState {
 interface OpeningCornerDragState {
   wallId: string
   openingId: string
-  corner: 'tl' | 'tr'
+  corner: 'tl' | 'tr' | 'bl' | 'br'
   plane: THREE.Plane
   wallMidX: number; wallMidZ: number
   wallUx: number; wallUz: number
   wallLenIn: number
   fixedSideIn: number    // along-wall position of the corner OPPOSITE the drag
-  bottomIn: number       // yOffset (bottom stays anchored)
+  fixedYIn: number       // y of the OPPOSITE edge (top for bl/br, bottom for tl/tr)
 }
 
 /** Dragging a wall opening (door/window) along the wall to reposition xOffset. */
@@ -5136,9 +5152,11 @@ export default function GarageShell() {
     beginDrag()
   }, [selectWall, beginDrag])
 
-  // ── Start opening corner drag (resize) — top-left or top-right handle ────
+  // ── Start opening corner drag (resize) — any of four corners. The
+  //     opposite corner stays anchored; the dragged corner controls both
+  //     x-edge (left/right) and y-edge (top/bottom) of the opening.
   const startOpeningCornerDrag = useCallback((
-    wallId: string, openingId: string, corner: 'tl' | 'tr',
+    wallId: string, openingId: string, corner: 'tl' | 'tr' | 'bl' | 'br',
     e: ThreeEvent<PointerEvent>,
   ) => {
     if (e.nativeEvent.button !== 0) return
@@ -5163,14 +5181,23 @@ export default function GarageShell() {
       new THREE.Vector3(midXFt, 0, midZFt),
     )
 
+    // For tl/bl the LEFT edge moves → right edge anchored; for tr/br the
+    // right edge anchored. For tl/tr the TOP moves → bottom anchored;
+    // for bl/br the top is anchored.
+    const fixedSideIn = (corner === 'tl' || corner === 'bl')
+      ? op.xOffset + op.width
+      : op.xOffset
+    const fixedYIn = (corner === 'tl' || corner === 'tr')
+      ? op.yOffset
+      : op.yOffset + op.height
+
     openingCornerDragRef.current = {
       wallId, openingId, corner, plane,
       wallMidX: midXFt, wallMidZ: midZFt,
       wallUx: ux, wallUz: uz,
       wallLenIn: len,
-      // The OPPOSITE side stays anchored during the drag.
-      fixedSideIn: corner === 'tl' ? op.xOffset + op.width : op.xOffset,
-      bottomIn: op.yOffset,
+      fixedSideIn,
+      fixedYIn,
     }
     beginDrag()
   }, [selectWall, beginDrag])
@@ -5415,23 +5442,31 @@ export default function GarageShell() {
           const curY = hitPt.y * 12
           const MIN = 12
           const wall = wallsRef.current.find(w => w.id === oc.wallId)
-          const wallTopIn = wall ? wall.yOffset + wall.height : oc.wallLenIn
+          const wallTopIn = wall ? wall.height : oc.wallLenIn
+          // X edge: tl/bl move the left edge, tr/br move the right.
           let newLeft: number, newRight: number
-          if (oc.corner === 'tl') {
+          if (oc.corner === 'tl' || oc.corner === 'bl') {
             newLeft  = snapToGrid(Math.max(0, Math.min(oc.fixedSideIn - MIN, curAlong)))
             newRight = oc.fixedSideIn
           } else {
             newLeft  = oc.fixedSideIn
             newRight = snapToGrid(Math.min(oc.wallLenIn, Math.max(oc.fixedSideIn + MIN, curAlong)))
           }
-          const newTop = snapToGrid(
-            Math.max(oc.bottomIn + MIN, Math.min(wallTopIn, curY)),
-          )
-          const newXOffset = newLeft
-          const newWidth = newRight - newLeft
-          const newHeight = newTop - oc.bottomIn
+          // Y edge: tl/tr move the top, bl/br move the bottom. The opposite
+          // edge (fixedYIn) stays anchored.
+          let newBottom: number, newTop: number
+          if (oc.corner === 'tl' || oc.corner === 'tr') {
+            newBottom = oc.fixedYIn
+            newTop    = snapToGrid(Math.max(newBottom + MIN, Math.min(wallTopIn, curY)))
+          } else {
+            newTop    = oc.fixedYIn
+            newBottom = snapToGrid(Math.max(0, Math.min(newTop - MIN, curY)))
+          }
           updateOpeningRef.current(oc.wallId, oc.openingId, {
-            xOffset: newXOffset, width: newWidth, height: newHeight,
+            xOffset: newLeft,
+            width: newRight - newLeft,
+            yOffset: newBottom,
+            height: newTop - newBottom,
           })
         }
         return
@@ -7745,9 +7780,9 @@ export default function GarageShell() {
         )
       })}
 
-      {/* Opening (door/window) top-corner resize handles — only for the
-          currently-selected opening, so picking a door shows its handles
-          without also showing every other door's on the same wall. */}
+      {/* Opening (door/window) corner resize handles — all four corners
+          on the selected opening, so windows can have their sill height
+          adjusted from the bottom corners as well as the top. */}
       {!blueprint && selectedOpeningId && walls.filter(w => w.id === selectedWallId).flatMap(wall => {
         const wdx = wall.x2 - wall.x1, wdz = wall.z2 - wall.z1
         const wLen = Math.hypot(wdx, wdz)
@@ -7755,12 +7790,11 @@ export default function GarageShell() {
         const rotY = -Math.atan2(wdz, wdx)
         const midX = FT((wall.x1 + wall.x2) / 2)
         const midZ = FT((wall.z1 + wall.z2) / 2)
-        // Push handles just past the wall face on each side so they're clickable
-        // from both interior and exterior views.
         return wall.openings
           .filter(op => op.id === selectedOpeningId && (op.type === 'door' || op.type === 'window' || op.type === 'garage-door'))
           .map(op => {
             const topY = FT(op.yOffset + op.height)
+            const botY = FT(op.yOffset)
             const leftX  = FT(-wLen / 2 + op.xOffset)
             const rightX = FT(-wLen / 2 + op.xOffset + op.width)
             return (
@@ -7776,6 +7810,18 @@ export default function GarageShell() {
                   color="#44ccff"
                   size={0.16}
                   onPointerDown={(e) => startOpeningCornerDrag(wall.id, op.id, 'tr', e)}
+                />
+                <DragHandle
+                  position={[leftX, botY, 0]}
+                  color="#44ccff"
+                  size={0.16}
+                  onPointerDown={(e) => startOpeningCornerDrag(wall.id, op.id, 'bl', e)}
+                />
+                <DragHandle
+                  position={[rightX, botY, 0]}
+                  color="#44ccff"
+                  size={0.16}
+                  onPointerDown={(e) => startOpeningCornerDrag(wall.id, op.id, 'br', e)}
                 />
               </group>
             )

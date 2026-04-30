@@ -9,6 +9,17 @@ export interface PatchNote {
 
 export const PATCH_NOTES: PatchNote[] = [
   {
+    version: '1.2.18',
+    date: '2026-04-21',
+    items: [
+      'Bottom drag handles on windows and doors in 3D — adjust the sill height by dragging the bottom corners',
+      'Floor Offset measurement in opening details — type the sill height directly in inches',
+      'Elevation dim line in wall edit mode shows how high a window sits off the floor',
+      'Switching window 3D styles now loads the new model without blanking the scene',
+      'Section renamed from "Openings" to "Window / Door / GD"',
+    ],
+  },
+  {
     version: '1.2.17',
     date: '2026-04-21',
     items: [
