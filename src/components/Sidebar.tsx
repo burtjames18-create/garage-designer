@@ -350,9 +350,35 @@ export default function Sidebar() {
               {selectedFloorStepId && (() => {
                 const step = floorSteps.find(s => s.id === selectedFloorStepId)
                 if (!step) return null
+                // Bounding box of the step's corners — width along X, depth
+                // along Z. Editing either field rescales every corner around
+                // the bbox center; non-rectangular shapes keep their form.
+                let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity
+                for (const [cx, cz] of step.corners) {
+                  if (cx < minX) minX = cx; if (cx > maxX) maxX = cx
+                  if (cz < minZ) minZ = cz; if (cz > maxZ) maxZ = cz
+                }
+                const curW = Math.max(0.5, maxX - minX)
+                const curD = Math.max(0.5, maxZ - minZ)
+                const cx0 = (minX + maxX) / 2
+                const cz0 = (minZ + maxZ) / 2
+                const resizeAxis = (newSize: number, axis: 'w' | 'd') => {
+                  const cur = axis === 'w' ? curW : curD
+                  if (cur < 0.01) return
+                  const factor = Math.max(0.5, newSize) / cur
+                  const center = axis === 'w' ? cx0 : cz0
+                  const newCorners: [number, number][] = step.corners.map(([cx, cz]) =>
+                    axis === 'w'
+                      ? [center + (cx - center) * factor, cz]
+                      : [cx, center + (cz - center) * factor]
+                  )
+                  updateFloorStep(step.id, { corners: newCorners })
+                }
                 return (
                   <div className="field-group" style={{ marginTop: 8 }}>
-                    <MeasureInput label="Height" inches={step.height} onChange={v => updateFloorStep(step.id, { height: Math.max(0.5, v) })} min={0.5} max={48} disabled={step.locked} />
+                    <MeasureInput label="Width"  inches={curW}        onChange={v => resizeAxis(v, 'w')}                                          min={0.5} max={9999} disabled={step.locked} />
+                    <MeasureInput label="Depth"  inches={curD}        onChange={v => resizeAxis(v, 'd')}                                          min={0.5} max={9999} disabled={step.locked} />
+                    <MeasureInput label="Height" inches={step.height} onChange={v => updateFloorStep(step.id, { height: Math.max(0.5, v) })} min={0.5} max={48}   disabled={step.locked} />
                     <p className="field-hint">Drag corners in the 3D view to reshape</p>
                   </div>
                 )

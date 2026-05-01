@@ -244,23 +244,42 @@
 
 .slat-color-row {
   display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
+  flex-direction: column;
+  gap: 4px;
   padding: 6px 0 2px;
 }
 
 .slat-color-swatch {
-  width: 22px;
-  height: 22px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.08);
   border-radius: 5px;
-  border: 2px solid rgba(255,255,255,0.12);
   cursor: pointer;
-  transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+  color: inherit;
+  font-size: 11px;
+  text-align: left;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
 }
-.slat-color-swatch:hover { transform: scale(1.15); border-color: rgba(255,255,255,0.4); }
+.slat-color-swatch::before {
+  content: '';
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: var(--swatch);
+  border: 1px solid rgba(255,255,255,0.18);
+  flex-shrink: 0;
+}
+.slat-color-swatch:hover {
+  border-color: rgba(255,255,255,0.28);
+  background: rgba(255,255,255,0.04);
+}
 .slat-color-swatch.active {
-  border-color: #fff;
-  transform: scale(1.15);
+  border-color: var(--accent-hover);
+  background: rgba(255,255,255,0.06);
   box-shadow: 0 0 0 1px var(--accent-hover), 0 0 8px var(--accent-glow);
 }
 

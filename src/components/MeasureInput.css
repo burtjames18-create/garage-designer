@@ -39,6 +39,15 @@
   box-shadow: 0 0 0 3px var(--accent-dim);
 }
 
+/* Hide browser-native number spinners — they cover the rightmost digits at
+   our compact widths. Users edit by typing, not clicking the arrows. */
+.measure-in[type='number']::-webkit-outer-spin-button,
+.measure-in[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.measure-in[type='number'] { -moz-appearance: textfield; appearance: textfield; }
+
 .measure-unit {
   font-size: 11px;
   color: var(--text-muted);

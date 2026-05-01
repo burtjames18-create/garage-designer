@@ -110,27 +110,6 @@ export default function OverheadRacksPanel() {
           <p className="field-hint">Distance from ceiling to top of rack (1"–48")</p>
           <MeasureInput label="Position X" inches={sel.x} onChange={v => updateRack(sel.id, { x: v })} min={-600} max={600} disabled={sel.locked} />
           <MeasureInput label="Position Z" inches={sel.z} onChange={v => updateRack(sel.id, { z: v })} min={-600} max={600} disabled={sel.locked} />
-
-          <div className="section-label" style={{ marginTop: 10 }}>Rack Color</div>
-          <div className="color-grid" role="radiogroup" aria-label="Rack color">
-            {[
-              { id: '#333333', name: 'Black' },
-              { id: '#e0e0e0', name: 'White' },
-              { id: '#808080', name: 'Grey' },
-            ].map(c => (
-              <button
-                key={c.id}
-                role="radio"
-                aria-checked={sel.color === c.id}
-                className={`color-swatch ${sel.color === c.id ? 'selected' : ''}`}
-                onClick={() => updateRack(sel.id, { color: c.id })}
-                aria-label={c.name}
-              >
-                <div className="swatch-color" style={{ background: c.id }} />
-                <span className="swatch-name">{c.name}</span>
-              </button>
-            ))}
-          </div>
         </div>
       )}
     </div>

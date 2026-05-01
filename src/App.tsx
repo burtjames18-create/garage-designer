@@ -9,6 +9,7 @@ import { ToastContainer } from './components/Toast'
 import KeyboardHelp from './components/KeyboardHelp'
 import AutosaveIndicator from './components/AutosaveIndicator'
 import { setAutosaveStatus } from './utils/autosaveStatus'
+import { initUndoHistory, undo as undoOnce, redo as redoOnce } from './utils/undoHistory'
 import './App.css'
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -31,6 +32,26 @@ export default function App() {
   const setupDone = useGarageStore(s => s.setupDone)
   const viewMode = useGarageStore(s => s.viewMode)
   const [showKeyboard, setShowKeyboard] = useState(false)
+
+  // Wire up the undo history watcher once. Snapshots after a debounced quiet
+  // window so each drag becomes a single undoable step. Ctrl+Z undoes,
+  // Ctrl+Shift+Z (or Ctrl+Y) redoes.
+  useEffect(() => {
+    initUndoHistory()
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault()
+        if (e.shiftKey) redoOnce(); else undoOnce()
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault()
+        redoOnce()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   // Rehydrate imported textures from IndexedDB on boot — they persist across
   // app sessions regardless of whether a project has been saved.

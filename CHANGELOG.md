@@ -14,6 +14,61 @@ _(No changes yet.)_
 
 ---
 
+## [1.2.19] — 2026-05-01
+
+### Floor plan rebuild
+- **Walls render as solid mitered rectangles** with end caps so unconnected ends close cleanly. L-corners use a local-bisector classification (interior↔interior, exterior↔exterior matching) that no longer depends on garage-center direction, so corners between free-standing walls render correctly anywhere in the scene. Acute / obtuse / mirrored corners all produce mirrored-symmetric results.
+- **T-junctions** detected when an endpoint lands on another wall's centerline mid-span. The wall visually terminates at the connected wall's near face on the body side.
+- **Wall snap simplified to centerline endpoints only** when dragging a wall endpoint or body — every wall-to-wall corner snaps to the same canonical point. Endpoint drag also slides onto another wall's face line when no centerline endpoint is in range.
+- **Wall length input pulls connected walls** so welded corners stay welded when you type a new length.
+- **Walls are click-to-select only in 3D** — endpoint drag handles and wall-body drag were removed. Wall geometry edits live in floor plan + wall edit views, 3D is for placing 3D objects.
+- **Dimensions measure inside-face length**, anchored at the interior mitered corners. Witness lines cross the wall body to a dim tier offset by `thickness + base + step × tier`.
+- **Measurement tool** toggle on the floor-plan toolbar — draggable tape line with crosshair endpoint handles, distance label centered on the line. Endpoints stay transparent so the underlying scene is visible at the precise endpoint location.
+
+### Step-ups
+- **Spawn as a 48"×48" square at garage center** (was a wall-wide strip near the back wall).
+- **Wall-face clamp** prevents corners from extending past any wall's interior face. Multi-pass iteration handles dragging into a corner. Drag handles render on top of everything else in the floor plan and snap to wall faces (5") plus 90° edges (3°).
+- **Step settings** now show Width and Depth alongside Height; editing either rescales corners around the bbox center.
+- Floor plan shows step bounding-box width along the top edge and depth along the left edge.
+
+### 3D items in the floor plan
+- **Top-down silhouette** for cars and other 3D models — convex hull plus sharp feature edges (≥30° creases) projected to XZ, rasterized once to a 1024² PNG and cached. Drawn as a single `<image>` per item.
+- **Footprint matches the 3D view exactly**: imported assets auto-scale to `CATEGORY_TARGET_FT[category]` × 12 inches longest dim (15 ft cars, 7 ft motorcycles, 4 ft equipment, 5 ft furniture); catalog models scale by `max(w, h, d) / max(modelW, modelH, modelD)`. Per-catalog `modelRotY` is applied to floor-plan rotation.
+- **Click-and-drag** items in the floor plan; updates `item.position` (in feet). Selection highlight = dashed blue rectangle matching the actual footprint.
+
+### Wireframe / wire mesh mode
+- **Wall faces now show cross wires** (triangulation) instead of just outline edges.
+- **GLB items are decimated to ~40% triangle count** in wireframe mode so the wires are readable instead of a solid blue blob. Cached per source `BufferGeometry`. Non-wireframe rendering is unchanged.
+
+### Wall edit panel
+- **Walls tab opens the editor for whichever wall you are currently editing** — in elevation mode that's the elevation wall; otherwise the scene-selected wall.
+- **Slatwall colors render vertically** with the swatch + name labels.
+- **New slatwall panels avoid occupied spans** (openings, cabinets in the panel's vertical band, existing same-side panels) and place themselves in the first 12"-wide gap.
+- **Adding a baseboard or stem wall spans the wall's full interior length** corner-to-corner trimmed by adjacent wall thickness/2, centered.
+- **Number-input spinner arrows hidden** so they don't cover the rightmost digits.
+
+### Other updates
+- **Garage doors are empty holes** — no door panel, no door texture picker. Only the floor-textured threshold is drawn.
+- **Overhead racks render in dark brushed-stainless only** — the per-rack color picker was removed.
+
+### Undo / redo
+- **Left/right arrow buttons** in the top-left of every viewer step through edit history. Ctrl+Z and Ctrl+Shift+Z (Cmd+Y) work as keyboard shortcuts. Snapshots are debounced 250 ms so each drag becomes a single undoable step.
+
+### Selected color check marks
+- **Wall color** swatches show a circular check mark badge on the active swatch.
+- **Baseboard / stem-wall flake** picker shows a check mark on the selected color.
+
+### Window trim
+- **Visible white casing** around windows — 3″ trim on both interior and exterior wall faces in 3D, matching the wall-edit elevation. Cabinets butt up flush against the casing in either view; window dimension tier and snap targets all align at the outer trim edge.
+- **Window 3D-style picker removed** — windows always render as the procedural flat panel (with white trim).
+- **Window dimensions** appear in their own dedicated horizontal tier in wall-edit, between the cabinet/door tier and the slatwall tier.
+
+### Misc
+- **Step bounding-box dimensions on floor plan** show width along the top edge and depth along the left edge of each step.
+- **Wall edit panel** "3D Style" picker for windows removed (only the flat-panel option remains, with white trim).
+
+---
+
 ## [1.2.18] — 2026-04-21
 
 ### Features

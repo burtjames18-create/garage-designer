@@ -14,9 +14,53 @@ import type { ExportShot, QualityPreset } from '../store/garageStore'
 import GarageShell from './GarageShell'
 import FloorPlanBlueprint from './FloorPlanBlueprint'
 import { exportCaptureRef } from '../utils/exportCapture'
+import { undo, redo, canUndo, canRedo, subscribeUndoHistory } from '../utils/undoHistory'
 import './Viewer3D.css'
 
 const FT = (inches: number) => inches / 12
+
+/** Small overlay in the top-left of each viewer with undo / redo arrows.
+ *  Subscribes to the history stack so the buttons grey out when there's
+ *  nothing left to step through. */
+function UndoRedoOverlay() {
+  const [, force] = useState(0)
+  useEffect(() => subscribeUndoHistory(() => force(n => n + 1)), [])
+  const back = canUndo()
+  const fwd = canRedo()
+  const baseStyle: React.CSSProperties = {
+    width: 32, height: 32, borderRadius: 6,
+    border: '1px solid rgba(255,255,255,0.18)',
+    background: 'rgba(28,28,30,0.78)', color: '#fff',
+    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    backdropFilter: 'blur(6px)',
+  }
+  return (
+    <div style={{ position: 'absolute', top: 12, left: 12, display: 'flex', gap: 6, zIndex: 50 }}>
+      <button
+        onClick={() => undo()}
+        disabled={!back}
+        title="Undo (Ctrl+Z)"
+        aria-label="Undo"
+        style={{ ...baseStyle, opacity: back ? 1 : 0.35, cursor: back ? 'pointer' : 'default' }}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M15 18l-6-6 6-6" />
+        </svg>
+      </button>
+      <button
+        onClick={() => redo()}
+        disabled={!fwd}
+        title="Redo (Ctrl+Shift+Z)"
+        aria-label="Redo"
+        style={{ ...baseStyle, opacity: fwd ? 1 : 0.35, cursor: fwd ? 'pointer' : 'default' }}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M9 18l6-6-6-6" />
+        </svg>
+      </button>
+    </div>
+  )
+}
 
 
 // Interior viewpoints — camera stands in each corner of the garage looking toward center
@@ -432,9 +476,13 @@ export default function Viewer3D() {
     selectBaseboard, selectStemWall,
     exportShots, addExportShot, updateExportShot, deleteExportShot, reorderExportShots,
     walls, cabinets, countertops, floorPoints, floorSteps, slatwallPanels, overheadRacks, baseboards, stemWalls,
+    items, importedAssets,
     qualityPreset, snappingEnabled, setSnappingEnabled,
     wallAngleSnapEnabled, setWallAngleSnapEnabled,
     cornerAngleLabelsVisible, setCornerAngleLabelsVisible } = useGarageStore()
+  // Floor-plan measurement tool — when ON, shows a draggable tape-measure
+  // line on the floor plan with two endpoint handles.
+  const [measureToolEnabled, setMeasureToolEnabled] = useState(false)
   const isWireframe  = viewMode === 'wireframe'
   const isPerspective = viewMode === 'perspective' || viewMode === 'wireframe'
   const orbitRef     = useRef<any>(null)
@@ -510,7 +558,8 @@ export default function Viewer3D() {
     }
 
     return (
-      <div className="viewer-wrap" style={{ background: '#fff' }}>
+      <div className="viewer-wrap" style={{ background: '#fff', position: 'relative' }}>
+        <UndoRedoOverlay />
         <div
           className="floor-plan-svg-viewport"
           onWheel={handleWheel}
@@ -537,6 +586,9 @@ export default function Viewer3D() {
               overheadRacks={overheadRacks}
               baseboards={baseboards}
               stemWalls={stemWalls}
+              items={items}
+              importedAssets={importedAssets}
+              showMeasureTool={measureToolEnabled}
             />
           </div>
         </div>
@@ -576,6 +628,17 @@ export default function Viewer3D() {
               </svg>
               Angle Labels: {cornerAngleLabelsVisible ? 'On' : 'Off'}
             </button>
+            <button
+              className={`shot-save-btn snap-toggle-btn${measureToolEnabled ? '' : ' off'}`}
+              onClick={() => setMeasureToolEnabled(!measureToolEnabled)}
+              title={measureToolEnabled ? 'Measure tool ON — click to hide' : 'Measure tool OFF — click to show'}
+              aria-pressed={!measureToolEnabled}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 14 L14 3 L21 10 L10 21 Z M6 13 L8 11 M9 16 L11 14 M12 19 L14 17" />
+              </svg>
+              Measure: {measureToolEnabled ? 'On' : 'Off'}
+            </button>
           </div>
         </div>
         {/* View mode label */}
@@ -585,7 +648,8 @@ export default function Viewer3D() {
   }
 
   return (
-    <div className="viewer-wrap">
+    <div className="viewer-wrap" style={{ position: 'relative' }}>
+      <UndoRedoOverlay />
       <Canvas
         shadows={qualityPreset === 'low' ? false : qualityPreset === 'high' ? 'variance' : 'soft'}
         dpr={[1, 2]}

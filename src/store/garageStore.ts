@@ -1161,19 +1161,76 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
     })),
 
   addSlatwallPanel: (wallId, side = 'interior') => {
-    const wall = get().walls.find(w => w.id === wallId)
+    const state = get()
+    const wall = state.walls.find(w => w.id === wallId)
     if (!wall) return
     const lenIn = Math.hypot(wall.x2 - wall.x1, wall.z2 - wall.z1)
     // Trim corners by half-thickness so panel doesn't clip into perpendicular walls
     const trim = wall.thickness / 2
+    const PANEL_W = 12
     const yBottom = 0
+    const yTop = yBottom + 12
+
+    // Build a list of along-wall spans that are already OCCUPIED on this side
+    // by openings, cabinets (within yTop), and existing slatwall panels that
+    // overlap our vertical band. The new panel goes into the first open gap
+    // that fits PANEL_W; if none fits, fall back to the start corner.
+    const occupied: { start: number; end: number }[] = []
+    for (const op of wall.openings) {
+      occupied.push({ start: op.xOffset, end: op.xOffset + op.width })
+    }
+    const wdx = wall.x2 - wall.x1, wdz = wall.z2 - wall.z1
+    const wlen = Math.hypot(wdx, wdz) || 1
+    const ux = wdx / wlen, uz = wdz / wlen
+    const nx = -uz, nz = ux
+    for (const cab of state.cabinets) {
+      // Project cabinet onto wall axis; only include cabinets sitting on this
+      // wall's chosen side and whose vertical span intersects [yBottom, yTop].
+      const relX = cab.x - wall.x1, relZ = cab.z - wall.z1
+      const along = relX * ux + relZ * uz
+      const perp  = relX * nx + relZ * nz
+      const halfT = wall.thickness / 2
+      const sideSign = side === 'interior'
+        ? (perp > 0 ? 1 : -1)  // matches wallNormal-style; cabinet on interior if perp on inward side
+        : (perp > 0 ? -1 : 1)
+      void sideSign
+      // Just require the cabinet's perpendicular distance to the wall face is
+      // within ~ cabinet depth — covers cabinets pushed flush to either side.
+      if (Math.abs(perp) > halfT + cab.d + 4) continue
+      if (along + cab.w / 2 < 0 || along - cab.w / 2 > wlen) continue
+      const cabBottom = cab.y - cab.h / 2
+      const cabTop    = cab.y + cab.h / 2
+      if (cabTop <= yBottom || cabBottom >= yTop) continue
+      occupied.push({ start: along - cab.w / 2, end: along + cab.w / 2 })
+    }
+    for (const p of state.slatwallPanels) {
+      if (p.wallId !== wallId || p.side !== side) continue
+      if (p.yTop <= yBottom || p.yBottom >= yTop) continue
+      occupied.push({ start: p.alongStart, end: p.alongEnd })
+    }
+
+    // Sort and find the first gap of width >= PANEL_W within [trim, lenIn-trim].
+    occupied.sort((a, b) => a.start - b.start)
+    let cursor = trim
+    let placeStart = trim
+    for (const range of occupied) {
+      if (range.end <= cursor) continue
+      if (range.start - cursor >= PANEL_W) { placeStart = cursor; break }
+      cursor = Math.max(cursor, range.end)
+    }
+    if (placeStart === trim && (cursor !== trim || occupied.length > 0)) {
+      // No gap found earlier; try after the last occupied range.
+      if (cursor + PANEL_W <= lenIn - trim) placeStart = cursor
+      else placeStart = trim  // fall back — overlap is unavoidable
+    }
+
     const panel: SlatwallPanel = {
       id: uid(), wallId,
       side,
-      alongStart: trim,
-      alongEnd: trim + 12,                          // 1ft wide
+      alongStart: placeStart,
+      alongEnd: placeStart + PANEL_W,
       yBottom,
-      yTop: yBottom + 12,                           // 1ft tall
+      yTop,
       color: 'grey',
     }
     set(s => ({ slatwallPanels: [...s.slatwallPanels, panel], selectedSlatwallPanelId: panel.id }))
@@ -1240,13 +1297,14 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
   }),
 
   addFloorStep: () => {
-    const { garageWidth, garageDepth } = get()
-    const hw = garageWidth / 2, hd = 24
-    const cz = -(garageDepth / 2 - 24) // near back wall
+    // Spawn a 48"×48" square centered in the garage. Users can grab any
+    // corner to reshape it; the dead-center placement makes the new piece
+    // easy to find regardless of garage size.
+    const half = 24
     const step: FloorStep = {
       id: uid(),
       label: `Step ${get().floorSteps.length + 1}`,
-      corners: [[-hw, cz - hd], [hw, cz - hd], [hw, cz + hd], [-hw, cz + hd]],
+      corners: [[-half, -half], [half, -half], [half, half], [-half, half]],
       height: 4,
       locked: false,
     }

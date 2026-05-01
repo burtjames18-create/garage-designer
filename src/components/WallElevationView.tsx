@@ -276,7 +276,11 @@ export default function WallElevationView() {
       if (op.type !== 'door' && op.type !== 'window' && op.type !== 'garage-door') continue
       if (op.id === selfId) continue
       const entry = op.modelId ? getOpeningModelById(op.modelId) : undefined
-      const ext = entry?.kind === 'procedural' ? 2.5 : 0  // PDOOR.CASING_W
+      // Windows render with a 3" casing in the elevation view (matching 3D);
+      // cabinets butting up against a window land at the outer trim edge.
+      // Procedural doors use their own 2.5" casing.
+      const ext = op.type === 'window' ? 3
+        : entry?.kind === 'procedural' ? 2.5 : 0
       const leftSide  = op.xOffset - ext
       const rightSide = op.xOffset + op.width + ext
       snaps.push({ target: rightSide + halfW, forEdge: 'left' })   // left edge → opening right
@@ -1261,6 +1265,38 @@ export default function WallElevationView() {
                 </g>
               )
             }
+            // Windows render with a visible casing trim around the rough
+            // opening (~2.5" outer casing, 1" sash frame, glass interior with
+            // a single horizontal muntin). Doors and garage-doors keep the
+            // plain rect render below.
+            if (op.type === 'window') {
+              const x0 = toX(op.xOffset), y0 = toY(op.yOffset + op.height)
+              const w = op.width, h = op.height
+              const casW = 3       // outer casing trim — matches 3D casing & snap target
+              const sash = 0.5     // inner sash frame
+              const innerX = x0 + casW
+              const innerY = y0 + casW
+              const innerW = Math.max(0, w - 2 * casW)
+              const innerH = Math.max(0, h - 2 * casW)
+              return (
+                <g key={op.id}
+                  style={draggable ? { cursor: 'move' } : undefined}
+                  onMouseDown={draggable ? (e => onOpeningDown(e, op)) : undefined}
+                  onClick={draggable ? (e => e.stopPropagation()) : undefined}>
+                  {/* Outer casing — wider rect surrounding the opening */}
+                  <rect x={x0 - casW} y={y0 - casW}
+                    width={w + 2 * casW} height={h + 2 * casW}
+                    fill="#ffffff" stroke="#888" strokeWidth={0.5} />
+                  {/* Glass pane */}
+                  <rect x={innerX} y={innerY} width={innerW} height={innerH}
+                    fill="#cfe6f0" stroke="#888" strokeWidth={0.4} />
+                  {/* Sash frame (inner border around glass) */}
+                  <rect x={innerX + sash} y={innerY + sash}
+                    width={Math.max(0, innerW - 2 * sash)} height={Math.max(0, innerH - 2 * sash)}
+                    fill="none" stroke="#aaa" strokeWidth={0.3} />
+                </g>
+              )
+            }
             return (
               <g key={op.id}>
                 <rect
@@ -1692,7 +1728,10 @@ export default function WallElevationView() {
             // Use interior face edges so corner stubs don't create phantom gaps
             const { leftEdge, rightEdge } = getWallEdges()
             const wallDoors = wall.openings.filter(op => op.type === 'door')
-            const hasItems = wallCabinets.length > 0 || wallPanels.length > 0 || wallDoors.length > 0
+            const wallWindows = wall.openings.filter(op => op.type === 'window')
+            const wallGDs = wall.openings.filter(op => op.type === 'garage-door')
+            const hasItems = wallCabinets.length > 0 || wallPanels.length > 0
+              || wallDoors.length > 0 || wallWindows.length > 0 || wallGDs.length > 0
             const hBreaks = new Set<number>()
             // Only use interior face edges when there are items to dimension
             hBreaks.add(hasItems ? leftEdge : 0)
@@ -1723,7 +1762,42 @@ export default function WallElevationView() {
             const classifySeg = (start: number, end: number): 'cab' | 'door' | 'gap' => {
               const mid = (start + end) / 2
               for (const r of doorRanges) if (mid >= r.start - 0.1 && mid <= r.end + 0.1) return 'door'
-              for (const r of cabRanges) if (mid >= r.start - 0.1 && mid <= r.end + 0.1) return 'cab'
+              for (const r of cabRanges)  if (mid >= r.start - 0.1 && mid <= r.end + 0.1) return 'cab'
+              return 'gap'
+            }
+
+            // ── Window / garage-door tier (separate horizontal tier) ─────────
+            // Windows and garage-doors get their own dim row so they don't
+            // compete for space with the cabinet/door tier.
+            const hWinBreaks = new Set<number>()
+            hWinBreaks.add(leftEdge); hWinBreaks.add(rightEdge)
+            const windowRanges: Range[] = []
+            // Windows render with a 3" casing trim, so the dim segment
+            // covers the full visible footprint (rough opening + casing).
+            const WIN_CASING = 3
+            wallWindows.forEach(op => {
+              const s = Math.max(leftEdge, op.xOffset - WIN_CASING)
+              const e = Math.min(rightEdge, op.xOffset + op.width + WIN_CASING)
+              if (e - s > 0.5) {
+                hWinBreaks.add(s); hWinBreaks.add(e)
+                windowRanges.push({ start: s, end: e })
+              }
+            })
+            const gdRanges: Range[] = []
+            wallGDs.forEach(op => {
+              const s = Math.max(leftEdge, op.xOffset)
+              const e = Math.min(rightEdge, op.xOffset + op.width)
+              if (e - s > 0.5) {
+                hWinBreaks.add(s); hWinBreaks.add(e)
+                gdRanges.push({ start: s, end: e })
+              }
+            })
+            const hWinSorted = [...hWinBreaks].sort((a, b) => a - b)
+            const hasWinTier = windowRanges.length > 0 || gdRanges.length > 0
+            const classifyWinSeg = (start: number, end: number): 'window' | 'gd' | 'gap' => {
+              const mid = (start + end) / 2
+              for (const r of windowRanges) if (mid >= r.start - 0.1 && mid <= r.end + 0.1) return 'window'
+              for (const r of gdRanges)     if (mid >= r.start - 0.1 && mid <= r.end + 0.1) return 'gd'
               return 'gap'
             }
 
@@ -1749,6 +1823,8 @@ export default function WallElevationView() {
               overall: '#333',
               cab:     '#333',
               door:    '#b22',
+              window:  '#1a6db0',
+              gd:      '#742',
               slat:    '#1d6f3d',
               ct:      '#8a6a3a',
               bb:      '#555',
@@ -1782,12 +1858,15 @@ export default function WallElevationView() {
             }
 
             // Horizontal dimension tiers (inside → outside):
-            //   dimY1     = cabinet/gap strip
-            //   dimYSlat  = slatwall/gap strip (with 8' breaks for long panels)
-            //   dimYTotal = full wall width (outermost, bold)
+            //   dimY1      = cabinet/door/gap strip
+            //   dimYWin    = window/garage-door/gap strip
+            //   dimYSlat   = slatwall/gap strip (with 8' breaks for long panels)
+            //   dimYTotal  = full wall width (outermost, bold)
             let nextDimY = toY(0) + 4
             const dimY1 = nextDimY
             if (hasHSegs) nextDimY += 6
+            const dimYWin = nextDimY
+            if (hasWinTier) nextDimY += 6
             const dimYSlat = nextDimY
             if (hasSlatTier) nextDimY += 6
             const dimYTotal = nextDimY
@@ -1819,17 +1898,45 @@ export default function WallElevationView() {
             wallBbRanges.forEach(r => { vBreaks.add(Math.max(0, r.bottom)); vBreaks.add(Math.min(wH, r.top)) })
             wallSwRanges.forEach(r => { vBreaks.add(Math.max(0, r.bottom)); vBreaks.add(Math.min(wH, r.top)) })
             wallStepRanges.forEach(r => { vBreaks.add(Math.max(0, r.bottom)); vBreaks.add(Math.min(wH, r.top)) })
+            // Opening vertical ranges — windows, doors, and garage doors all
+            // contribute their height to the vertical dim tier so the user
+            // can read each opening's height inline alongside cabinets.
+            const windowVRanges: Array<{ bottom: number; top: number }> = []
+            wallWindows.forEach(op => {
+              const b = Math.max(0, op.yOffset)
+              const t = Math.min(wH, op.yOffset + op.height)
+              if (t - b < 0.1) return
+              vBreaks.add(b); vBreaks.add(t)
+              windowVRanges.push({ bottom: b, top: t })
+            })
+            const doorVRanges: Array<{ bottom: number; top: number }> = []
+            wallDoors.forEach(op => {
+              const b = Math.max(0, op.yOffset)
+              const t = Math.min(wH, op.yOffset + op.height)
+              if (t - b < 0.1) return
+              vBreaks.add(b); vBreaks.add(t)
+              doorVRanges.push({ bottom: b, top: t })
+            })
+            const gdVRanges: Array<{ bottom: number; top: number }> = []
+            wallGDs.forEach(op => {
+              const b = Math.max(0, op.yOffset)
+              const t = Math.min(wH, op.yOffset + op.height)
+              if (t - b < 0.1) return
+              vBreaks.add(b); vBreaks.add(t)
+              gdVRanges.push({ bottom: b, top: t })
+            })
             const vSorted = [...vBreaks].sort((a, b) => a - b)
             const hasVSegs = vSorted.length > 2
-            // Classify in priority: cab > ct > step > bb > sw > gap. Step ranks
-            // above bb/sw so if they share a height band the label still reads
-            // as the underlying step-up (which is what matters structurally).
-            const classifyVSeg = (bot: number, top: number): 'cab' | 'ct' | 'step' | 'bb' | 'sw' | 'gap' => {
+            // Classify in priority: cab > ct > step > window > door > gd > bb > sw > gap.
+            const classifyVSeg = (bot: number, top: number): 'cab' | 'ct' | 'step' | 'window' | 'door' | 'gd' | 'bb' | 'sw' | 'gap' => {
               const match = (r: { bottom: number; top: number }) =>
                 Math.abs(bot - r.bottom) < 0.1 && Math.abs(top - r.top) < 0.1
               for (const r of cabVRanges)  if (match(r)) return 'cab'
               for (const r of ctVRanges)   if (match(r)) return 'ct'
               for (const r of wallStepRanges) if (match(r)) return 'step'
+              for (const r of windowVRanges) if (match(r)) return 'window'
+              for (const r of doorVRanges)   if (match(r)) return 'door'
+              for (const r of gdVRanges)     if (match(r)) return 'gd'
               for (const r of wallBbRanges) if (match(r)) return 'bb'
               for (const r of wallSwRanges) if (match(r)) return 'sw'
               return 'gap'
@@ -1884,7 +1991,15 @@ export default function WallElevationView() {
                 const segPx = y2 - y1
                 const kind = classifyVSeg(bot, top)
                 const color = TIER_COLOR[kind]
-                const prefix = kind === 'cab' ? 'CAB ' : kind === 'door' ? 'DOOR ' : kind === 'ct' ? 'CT ' : kind === 'bb' ? 'BB ' : kind === 'sw' ? 'SW ' : kind === 'step' ? 'STEP ' : ''
+                const prefix = kind === 'cab' ? 'CAB '
+                  : kind === 'door' ? 'DOOR '
+                  : kind === 'window' ? 'WINDOW '
+                  : kind === 'gd' ? 'GD '
+                  : kind === 'ct' ? 'CT '
+                  : kind === 'bb' ? 'BB '
+                  : kind === 'sw' ? 'SW '
+                  : kind === 'step' ? 'STEP '
+                  : ''
                 const labelText = `${prefix}${inchesToDisplay(top - bot)}`
                 // Show labels on all vertical segments including gaps, so empty
                 // space above/below/between cabinets is clearly dimensioned.
@@ -1981,7 +2096,9 @@ export default function WallElevationView() {
                 const fitSize = Math.max(2, Math.min(fontSize, segPx * 0.55))
                 const kind = classifySeg(start, end)
                 const color = TIER_COLOR[kind]
-                const prefix = kind === 'cab' ? 'CAB ' : kind === 'door' ? 'DOOR ' : ''
+                const prefix = kind === 'cab' ? 'CAB '
+                  : kind === 'door' ? 'DOOR '
+                  : ''
                 const showLabel = true
                 return (
                   <g key={`hs${i}`}>
@@ -1994,6 +2111,36 @@ export default function WallElevationView() {
                         {prefix}{inchesToDisplay(end - start)}
                       </text>
                     )}
+                  </g>
+                )
+              })}
+
+              {/* Window / garage-door tier — own row so windows don't share a
+                 tier with the cabinets/doors above. Witness lines drop from
+                 each opening edge down to the tick marks. */}
+              {hasWinTier && hWinSorted.slice(1, -1).map((bp, i) => (
+                <line key={`hww${i}`} x1={toX(bp)} y1={toY(0)} x2={toX(bp)} y2={dimYWin + tickSz}
+                  stroke={dimColor} strokeWidth={0.35} strokeDasharray="3 2" />
+              ))}
+              {hasWinTier && hWinSorted.slice(0, -1).map((start, i) => {
+                const end = hWinSorted[i + 1]
+                const x1 = toX(start), x2 = toX(end)
+                const mid = (x1 + x2) / 2
+                const segPx = x2 - x1
+                const fitSize = Math.max(2, Math.min(fontSize, segPx * 0.55))
+                const kind = classifyWinSeg(start, end)
+                if (kind === 'gap') return null
+                const color = TIER_COLOR[kind]
+                const prefix = kind === 'window' ? 'WINDOW ' : 'GD '
+                return (
+                  <g key={`hsw${i}`}>
+                    <line x1={x1} y1={dimYWin} x2={x2} y2={dimYWin} stroke={color} strokeWidth={0.5} />
+                    <line x1={x1} y1={dimYWin - tickSz} x2={x1} y2={dimYWin + tickSz} stroke={color} strokeWidth={0.5} />
+                    <line x1={x2} y1={dimYWin - tickSz} x2={x2} y2={dimYWin + tickSz} stroke={color} strokeWidth={0.5} />
+                    <text x={mid} y={dimYWin - 0.5} textAnchor="middle" dominantBaseline="text-after-edge"
+                      fill={color} fontSize={fitSize}>
+                      {prefix}{inchesToDisplay(end - start)}
+                    </text>
                   </g>
                 )
               })}
@@ -2042,6 +2189,7 @@ export default function WallElevationView() {
                   </g>
                 )
               })()}
+
             </>
           })()}
         </svg>

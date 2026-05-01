@@ -1,8 +1,11 @@
-import { useRef, useCallback, useState } from 'react'
-import type { GarageWall, PlacedCabinet, Countertop, FloorPoint, FloorStep, SlatwallPanel, StainlessBacksplashPanel, OverheadRack, Baseboard, StemWall } from '../store/garageStore'
+import { useRef, useCallback, useState, useEffect } from 'react'
+import type { GarageWall, PlacedCabinet, Countertop, FloorPoint, FloorStep, SlatwallPanel, StainlessBacksplashPanel, OverheadRack, Baseboard, StemWall, PlacedItem, ImportedAsset } from '../store/garageStore'
 import { COUNTERTOP_DEPTH, useGarageStore } from '../store/garageStore'
 import { inchesToDisplay, snapToGrid, snapRackToWalls, type RackSnapResult } from '../utils/measurements'
 import { wallLen, wallDir, wallNormal } from '../utils/wallGeometry'
+import { MODEL_CATALOG, CATEGORY_COLORS } from '../data/modelCatalog'
+import { getCachedHull, loadHull, subscribeHullCache } from '../utils/modelHullCache'
+import { getCachedModelUrl, restoreModelFromDB } from '../utils/importedModelCache'
 
 /** Normalize rotation so text is never upside-down (keeps it between -90° and +90°) */
 function readableAngle(deg: number) {
@@ -22,24 +25,32 @@ interface Props {
   overheadRacks?: OverheadRack[]
   baseboards?: Baseboard[]
   stemWalls?: StemWall[]
+  items?: PlacedItem[]
+  importedAssets?: ImportedAsset[]
   /** When false, the tracing reference image is omitted (used by PDF export). */
   showTracing?: boolean
+  /** When true, the floor-plan measurement tool (draggable tape line) is shown. */
+  showMeasureTool?: boolean
 }
 
 const PAD = 40  // compact padding to keep dim tiers close to wall edges
 const SLATWALL_DEPTH = 3  // visual depth of slatwall on floor plan (inches)
 
-export default function FloorPlanBlueprint({ walls, cabinets, countertops, floorPoints, floorSteps = [], slatwallPanels = [], stainlessBacksplashPanels = [], overheadRacks = [], baseboards = [], stemWalls = [], showTracing = true }: Props) {
+export default function FloorPlanBlueprint({ walls, cabinets, countertops, floorPoints, floorSteps = [], slatwallPanels = [], stainlessBacksplashPanels = [], overheadRacks = [], baseboards = [], stemWalls = [], items = [], importedAssets = [], showTracing = true, showMeasureTool = false }: Props) {
   const { selectRack, updateRack, selectedRackId,
     selectCabinet, updateCabinet, selectedCabinetId, snappingEnabled,
     tracingImage, updateTracingImage,
     updateWall, selectedWallId, selectWall,
     selectFloorStep, updateFloorStep, selectedFloorStepId,
     updateOpening,
+    selectItem, updateItem, selectedItemId,
     wallAngleSnapEnabled, cornerAngleLabelsVisible } = useGarageStore()
   const svgRef = useRef<SVGSVGElement>(null)
   const rackDragRef = useRef<{ rackId: string; startX: number; startZ: number; startMouseX: number; startMouseZ: number } | null>(null)
   const [rackSnap, setRackSnap] = useState<RackSnapResult | null>(null)
+  // Placed-item drag (cars / equipment / etc.) — translate the item along
+  // the floor plane via its `position` field (stored in feet).
+  const itemDragRef = useRef<{ itemId: string; startMouseX: number; startMouseZ: number; initFx: number; initFz: number } | null>(null)
 
   // Cabinet drag — slide along the wall the cabinet is attached to.
   // Locks the perpendicular component; only the along-wall position changes.
@@ -109,6 +120,17 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
   // own circle during a drag so it doesn't obscure the snap target.
   const [activeHandleId, setActiveHandleId] = useState<string | null>(null)
 
+  // Force re-render when async model-hull loads finish (so item silhouettes
+  // appear without needing a reselect or pan).
+  const [, setHullTick] = useState(0)
+  useEffect(() => subscribeHullCache(() => setHullTick(t => t + 1)), [])
+
+  // Floor-plan measurement line — two draggable endpoints in inches. Starts
+  // null until the wall bounds are known, then initialized to a horizontal
+  // line spanning ~half the garage width near the top of the bbox.
+  const [measureLine, setMeasureLine] = useState<{ ax: number; az: number; bx: number; bz: number } | null>(null)
+  const measureDragRef = useRef<{ end: 'a' | 'b'; startMouseX: number; startMouseZ: number; initX: number; initZ: number } | null>(null)
+
   if (walls.length === 0) return null
 
   // Bounding box of all wall endpoints (or frozen bounds during drag). If a
@@ -145,6 +167,17 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
 
   const sx = (x: number) => offX + (x - minX) * scale
   const sz = (z: number) => offZ + (z - minZ) * scale
+
+  // Initialize the measurement line on first render once we know the bounds.
+  // Spans half the garage width, sitting just inside the top edge.
+  useEffect(() => {
+    if (measureLine) return
+    const cxIn = (minX + maxX) / 2
+    const lenIn = (maxX - minX) * 0.4
+    const zIn = minZ + (maxZ - minZ) * 0.5
+    setMeasureLine({ ax: cxIn - lenIn / 2, az: zIn, bx: cxIn + lenIn / 2, bz: zIn })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   // Inverse: SVG coords → garage inches
   const ix = (svgX: number) => (svgX - offX) / scale + minX
   const iz = (svgZ: number) => (svgZ - offZ) / scale + minZ
@@ -390,29 +423,19 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
         }
       }
 
-      // Step 2: collect DISCRETE wall-snap targets only. Sliding face-line
-      // projections would produce fractional wall lengths — we want the
-      // drag handle to lock onto specific fixed points so corner joins
-      // result in clean dimensions. Per other wall:
-      //   (a) two centerline endpoints — end-to-end wall corner connection
-      //   (b) four face corners — T-junction at the other wall's end
+      // Step 2: snap targets are the centerline endpoints of every other
+      // wall. This matches how the default project's walls connect — corners
+      // share centerline endpoints, with the outer mitered corner derived
+      // from the wall thickness. Keeping a single canonical snap target
+      // means every wall-to-wall corner snaps the same way.
       const targets: [number, number][] = []
       for (const w of walls) {
         if (w.id === wd.wallId) continue
         const wdx = w.x2 - w.x1, wdz = w.z2 - w.z1
         const wl = Math.hypot(wdx, wdz)
         if (wl < 0.1) continue
-        const ux = wdx / wl, uz = wdz / wl
-        const nxN = -uz, nzN = ux
-        const halfT = w.thickness / 2
-        // (a) centerline endpoints
         targets.push([w.x1, w.z1])
         targets.push([w.x2, w.z2])
-        // (b) four face corners
-        targets.push([w.x1 + nxN * halfT, w.z1 + nzN * halfT])
-        targets.push([w.x1 - nxN * halfT, w.z1 - nzN * halfT])
-        targets.push([w.x2 + nxN * halfT, w.z2 + nzN * halfT])
-        targets.push([w.x2 - nxN * halfT, w.z2 - nzN * halfT])
       }
 
       let bestDist = SNAP, bx = nx, bz = nz
@@ -438,10 +461,31 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
           }
         }
       } else {
-        // No angle lock — plain 2D closest-target snap.
+        // No angle lock — plain 2D closest-target snap to centerline endpoints.
         for (const [tx, tz] of targets) {
           const d = Math.hypot(nx - tx, nz - tz)
           if (d < bestDist) { bestDist = d; bx = tx; bz = tz }
+        }
+      }
+      // Face-line slide snap (T-junction): project the cursor onto each other
+      // wall's centerline (clamped to segment). If the perpendicular distance
+      // is within SNAP, the endpoint slides along that face. Centerline-endpoint
+      // matches above already won and short-circuit here, so this only fires
+      // when you're hitting the body of another wall, not its corners.
+      if (bestDist >= SNAP) {
+        for (const w of walls) {
+          if (w.id === wd.wallId) continue
+          const wdx = w.x2 - w.x1, wdz = w.z2 - w.z1
+          const wl = Math.hypot(wdx, wdz)
+          if (wl < 0.1) continue
+          const ux = wdx / wl, uz = wdz / wl
+          const relX = nx - w.x1, relZ = nz - w.z1
+          const along = relX * ux + relZ * uz
+          if (along < 0 || along > wl) continue
+          const fx = w.x1 + ux * along
+          const fz = w.z1 + uz * along
+          const d = Math.hypot(nx - fx, nz - fz)
+          if (d < bestDist) { bestDist = d; bx = fx; bz = fz }
         }
       }
       nx = bx; nz = bz
@@ -548,8 +592,8 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
   // snap math so dragging a step in either view locks onto the same
   // targets. Returns the snapped position or null if no target within SNAP.
   const snapStepPoint = useCallback((hx: number, hz: number, selfStepId: string): { x: number; z: number } | null => {
-    const SNAP = 4
-    const JOINT_SNAP = 10
+    const SNAP = 5
+    const JOINT_SNAP = 5
     let bestX = hx, bestZ = hz
     // (1a) TOP-PRIORITY: true visible wall-joint corners. Wider pull range
     //      so the cursor snaps to the inside/outside corner instead of
@@ -648,6 +692,40 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
     return bestDist < SNAP ? { x: bestX, z: bestZ } : null
   }, [walls, floorSteps])
 
+  // Clamp a candidate (x, z) so it stays on the garage-center side of every
+  // wall's interior face line. Iterates a few passes because clamping
+  // against one wall can push the point past another, and we want the
+  // result to satisfy ALL wall constraints simultaneously.
+  const clampToInteriorFaces = useCallback((px: number, pz: number): [number, number] => {
+    let hx = px, hz = pz
+    for (let pass = 0; pass < 4; pass++) {
+      let moved = false
+      for (const w of walls) {
+        const wdx = w.x2 - w.x1, wdz = w.z2 - w.z1
+        const L = Math.hypot(wdx, wdz)
+        if (L < 0.1) continue
+        const ux = wdx / L, uz = wdz / L
+        const [nxIn, nzIn] = wallNormal(w)
+        const halfT = w.thickness / 2
+        const ifx = w.x1 + nxIn * halfT
+        const ifz = w.z1 + nzIn * halfT
+        const rel = (hx - ifx) * nxIn + (hz - ifz) * nzIn
+        if (rel >= 0) continue
+        // Only clamp if the projection lies within the wall's segment span,
+        // so we don't fight against partition walls the step is past the
+        // end of. Allow a small overshoot at each end so corners flush to
+        // an end-of-wall still snap properly.
+        const along = (hx - w.x1) * ux + (hz - w.z1) * uz
+        if (along < -2 || along > L + 2) continue
+        hx -= rel * nxIn
+        hz -= rel * nzIn
+        moved = true
+      }
+      if (!moved) break
+    }
+    return [hx, hz]
+  }, [walls])
+
   // ─── Step-up body drag (translate all corners) ───────────────────────────
   const onStepBodyDown = useCallback((e: React.PointerEvent, step: FloorStep) => {
     if (step.locked) return
@@ -687,8 +765,21 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
       }
     }
     for (const c of moved) { c[0] += snapDx; c[1] += snapDz }
+    // Wall-clamp: for each corner that lands past a wall's interior face,
+    // compute how far we need to push back. Apply the LARGEST single-axis
+    // correction to the whole shape so the step stays a rigid translation.
+    let pushDx = 0, pushDz = 0
+    for (const [cx, cz] of moved) {
+      const [clampedX, clampedZ] = clampToInteriorFaces(cx, cz)
+      const ddx = clampedX - cx, ddz = clampedZ - cz
+      if (Math.abs(ddx) > Math.abs(pushDx)) pushDx = ddx
+      if (Math.abs(ddz) > Math.abs(pushDz)) pushDz = ddz
+    }
+    if (pushDx || pushDz) {
+      for (const c of moved) { c[0] += pushDx; c[1] += pushDz }
+    }
     updateFloorStep(sd.stepId, { corners: moved })
-  }, [mouseToSvg, snapStepPoint, updateFloorStep, snappingEnabled])
+  }, [mouseToSvg, snapStepPoint, updateFloorStep, snappingEnabled, clampToInteriorFaces])
 
   const onStepBodyUp = useCallback((e?: React.PointerEvent) => {
     stepBodyDragRef.current = null
@@ -716,37 +807,39 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
     const step = floorSteps.find(s => s.id === cd.stepId)
     if (!step) return
     if (snappingEnabled) {
-      const s = snapStepPoint(hx, hz, cd.stepId)
-      if (s) {
-        hx = s.x; hz = s.z
-      } else {
-        // 90° edge snap — when near axis-aligned from either neighbor corner,
-        // lock the relevant coordinate so the adjacent edge is horizontal
-        // or vertical. Only fires when no wall snap was active.
-        const n = step.corners.length
-        const prev = step.corners[(cd.cornerIdx - 1 + n) % n]
-        const next = step.corners[(cd.cornerIdx + 1) % n]
-        const ANGLE_TOL_DEG = 6
-        const snapEdge = (ax: number, az: number) => {
-          const dx = hx - ax, dz = hz - az
-          const L = Math.hypot(dx, dz)
-          if (L < 1) return
-          const ang = Math.atan2(dz, dx) * 180 / Math.PI
-          const nearest = Math.round(ang / 90) * 90
-          if (Math.abs(ang - nearest) >= ANGLE_TOL_DEG) return
-          const norm = ((nearest % 360) + 360) % 360
-          if (norm === 0 || norm === 180) hz = az   // horizontal edge
-          else hx = ax                                // vertical edge
-        }
-        snapEdge(prev[0], prev[1])
-        snapEdge(next[0], next[1])
+      // 90° edge lock — if the dragged corner sits near axis-aligned with a
+      // neighbor, lock the matching coordinate so the adjacent edge stays
+      // horizontal or vertical. Runs FIRST so wall-face snap below can still
+      // refine the other coordinate onto a wall face.
+      const n = step.corners.length
+      const prev = step.corners[(cd.cornerIdx - 1 + n) % n]
+      const next = step.corners[(cd.cornerIdx + 1) % n]
+      const ANGLE_TOL_DEG = 3
+      const snapEdge = (ax: number, az: number) => {
+        const dx = hx - ax, dz = hz - az
+        const L = Math.hypot(dx, dz)
+        if (L < 1) return
+        const ang = Math.atan2(dz, dx) * 180 / Math.PI
+        const nearest = Math.round(ang / 90) * 90
+        if (Math.abs(ang - nearest) >= ANGLE_TOL_DEG) return
+        const norm = ((nearest % 360) + 360) % 360
+        if (norm === 0 || norm === 180) hz = az   // horizontal edge
+        else hx = ax                                // vertical edge
       }
+      snapEdge(prev[0], prev[1])
+      snapEdge(next[0], next[1])
+      // Wall-face / corner snap — joint corners, face corners, and any point
+      // along a wall face. May override the 90° lock if a face is in range.
+      const s = snapStepPoint(hx, hz, cd.stepId)
+      if (s) { hx = s.x; hz = s.z }
     }
+    // Final clamp: keep the corner inside (or on) every wall's interior face.
+    [hx, hz] = clampToInteriorFaces(hx, hz)
     const newCorners = step.corners.map((c, i) =>
       i === cd.cornerIdx ? [hx, hz] as [number, number] : [...c] as [number, number],
     )
     updateFloorStep(cd.stepId, { corners: newCorners })
-  }, [mouseToSvg, snapStepPoint, floorSteps, updateFloorStep, snappingEnabled])
+  }, [mouseToSvg, snapStepPoint, floorSteps, updateFloorStep, snappingEnabled, clampToInteriorFaces])
 
   const onStepCornerUp = useCallback((e?: React.PointerEvent) => {
     stepCornerDragRef.current = null
@@ -825,12 +918,33 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
   }
 
   // ── Find which wall endpoints connect to other walls ──
+  // Returns `{ wall, kind: 'corner' | 'tjunction' }` if our endpoint sits at
+  // a connected wall's endpoint (L-corner) or on its centerline mid-span
+  // (T-junction). Mitering and dimension trimming both depend on the kind.
   const SNAP = 2
-  function endpointConnected(wx: number, wz: number, skipId: string): GarageWall | null {
+  type ConnInfo = { wall: GarageWall; kind: 'corner' | 'tjunction' }
+  function endpointConnected(wx: number, wz: number, skipId: string): ConnInfo | null {
+    // Pass 1: corner connection (endpoint-to-endpoint).
     for (const other of walls) {
       if (other.id === skipId) continue
-      if (Math.hypot(other.x1 - wx, other.z1 - wz) < SNAP) return other
-      if (Math.hypot(other.x2 - wx, other.z2 - wz) < SNAP) return other
+      if (Math.hypot(other.x1 - wx, other.z1 - wz) < SNAP) return { wall: other, kind: 'corner' }
+      if (Math.hypot(other.x2 - wx, other.z2 - wz) < SNAP) return { wall: other, kind: 'corner' }
+    }
+    // Pass 2: T-junction (endpoint lies on another wall's centerline body,
+    // not at its endpoints). Project (wx,wz) onto each wall's segment and
+    // accept if perpendicular distance is within SNAP and the foot is
+    // strictly between the endpoints.
+    for (const other of walls) {
+      if (other.id === skipId) continue
+      const dx = other.x2 - other.x1, dz = other.z2 - other.z1
+      const wl = Math.hypot(dx, dz)
+      if (wl < 0.1) continue
+      const ux = dx / wl, uz = dz / wl
+      const along = (wx - other.x1) * ux + (wz - other.z1) * uz
+      if (along <= SNAP || along >= wl - SNAP) continue
+      const fx = other.x1 + ux * along
+      const fz = other.z1 + uz * along
+      if (Math.hypot(wx - fx, wz - fz) < SNAP) return { wall: other, kind: 'tjunction' }
     }
     return null
   }
@@ -860,46 +974,190 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
     const conn1 = endpointConnected(w.x1, w.z1, w.id)
     const conn2 = endpointConnected(w.x2, w.z2, w.id)
 
-    if (conn1) {
-      const cLen = wallLen(conn1)
-      if (cLen > 0.5) {
-        const [cdx, cdz] = wallDir(conn1)
-        const cpx = -cdz, cpz = cdx
-        const cHT = conn1.thickness / 2
-        // Connected wall's interior face line (same interior side)
-        const cIfOx = conn1.x1 + cpx * cHT * inSign
-        const cIfOz = conn1.z1 + cpz * cHT * inSign
-        const det = dx * (-cdz) - dz * (-cdx)
-        if (Math.abs(det) > 1e-6) {
-          const t = ((cIfOx - ifOx) * (-cdz) - (cIfOz - ifOz) * (-cdx)) / det
-          if (t > 0 && t < len) trim1 = t
-        }
-        // Fallback for near-perpendicular
-        if (trim1 < 0.1) trim1 = conn1.thickness / 2
+    // Compute trim at each connected end. For an L-corner the interior face
+    // meets conn's interior face (the original logic). For a T-junction our
+    // body terminates at conn's NEAR face line — pick whichever of conn's
+    // two face lines gives the smaller positive trim (the one closer to our
+    // centerline endpoint, on our body side).
+    const trimAt = (conn: ConnInfo, isStart: boolean): number => {
+      const c = conn.wall
+      const cLen = wallLen(c)
+      if (cLen <= 0.5) return 0
+      const [cdx, cdz] = wallDir(c)
+      const cpx = -cdz, cpz = cdx
+      const cHT = c.thickness / 2
+      const det = dx * (-cdz) - dz * (-cdx)
+      if (Math.abs(det) < 1e-6) return 0
+      if (conn.kind === 'corner') {
+        // Interior↔interior face match (matches the L-corner outer-pivot rule
+        // used by the wall renderer). Use inSign so our interior side picks
+        // conn's interior side.
+        const cIfOx = c.x1 + cpx * cHT * inSign
+        const cIfOz = c.z1 + cpz * cHT * inSign
+        const t = ((cIfOx - ifOx) * (-cdz) - (cIfOz - ifOz) * (-cdx)) / det
+        if (t > 0 && t < len) return isStart ? t : len - t
+        return 0
       }
-    }
-
-    if (conn2) {
-      const cLen = wallLen(conn2)
-      if (cLen > 0.5) {
-        const [cdx, cdz] = wallDir(conn2)
-        const cpx = -cdz, cpz = cdx
-        const cHT = conn2.thickness / 2
-        const cIfOx = conn2.x1 + cpx * cHT * inSign
-        const cIfOz = conn2.z1 + cpz * cHT * inSign
-        const det = dx * (-cdz) - dz * (-cdx)
-        if (Math.abs(det) > 1e-6) {
-          const t = ((cIfOx - ifOx) * (-cdz) - (cIfOz - ifOz) * (-cdx)) / det
-          if (t > 0 && t < len) trim2 = len - t
-        }
-        if (trim2 < 0.1) trim2 = conn2.thickness / 2
+      // T-junction: try both faces, take smaller positive trim.
+      let bestTrim = Infinity
+      for (const cSide of [+1, -1] as const) {
+        const cIfOx = c.x1 + cpx * cHT * cSide
+        const cIfOz = c.z1 + cpz * cHT * cSide
+        const t = ((cIfOx - ifOx) * (-cdz) - (cIfOz - ifOz) * (-cdx)) / det
+        const trim = isStart ? t : len - t
+        if (trim > 0.1 && trim < bestTrim) bestTrim = trim
       }
+      return bestTrim === Infinity ? 0 : bestTrim
     }
+    if (conn1) trim1 = trimAt(conn1, true)
+    if (conn2) trim2 = trimAt(conn2, false)
+    if (conn1 && trim1 < 0.1) trim1 = conn1.wall.thickness / 2
+    if (conn2 && trim2 < 0.1) trim2 = conn2.wall.thickness / 2
 
     const interior = len - trim1 - trim2
     const ifx1 = w.x1 + dx * trim1, ifz1 = w.z1 + dz * trim1
     const ifx2 = w.x2 - dx * trim2, ifz2 = w.z2 - dz * trim2
     return { len, trim1, trim2, interior, ifx1, ifz1, ifx2, ifz2 }
+  }
+
+  // ── Mitered wall outlines (4 polygon corners per wall) ──
+  // Computed once and reused by the wall renderer AND the dimension witness
+  // anchors so dim lines align exactly with the visible polygon edges.
+  // Layout: { p0, p1 } = +side start/end (interior or exterior depending on
+  // pIsInterior), { n0, n1 } = -side start/end, plus pIsInterior flag.
+  type WallOutline = {
+    p0: { x: number; z: number }; p1: { x: number; z: number }
+    n0: { x: number; z: number }; n1: { x: number; z: number }
+    pIsInterior: boolean
+  }
+  const intersectT = (ax: number, az: number, adx: number, adz: number,
+                      bx: number, bz: number, bdx: number, bdz: number) => {
+    const det = adx * (-bdz) - adz * (-bdx)
+    if (Math.abs(det) < 1e-6) return NaN
+    return ((bx - ax) * (-bdz) - (bz - az) * (-bdx)) / det
+  }
+  const wallOutlines = new Map<string, WallOutline>()
+  for (const w of walls) {
+    const len = wallLen(w)
+    if (len < 0.5) continue
+    const [dx, dz] = wallDir(w)
+    const halfT = w.thickness / 2
+    const px = -dz, pz = dx
+    const conn1 = endpointConnected(w.x1, w.z1, w.id)
+    const conn2 = endpointConnected(w.x2, w.z2, w.id)
+    const [nxIn, nzIn] = wallNormal(w)
+    const pIsInterior = (px * nxIn + pz * nzIn) >= 0
+
+    let p0 = { x: w.x1 + px * halfT, z: w.z1 + pz * halfT }
+    let n0 = { x: w.x1 - px * halfT, z: w.z1 - pz * halfT }
+    let p1 = { x: w.x2 + px * halfT, z: w.z2 + pz * halfT }
+    let n1 = { x: w.x2 - px * halfT, z: w.z2 - pz * halfT }
+
+    // Cap miter extension so a near-zero corner angle doesn't shoot miter
+    // points off into infinity, but allow plenty of room for legitimate
+    // acute corners (e.g. 30° walls) where the miter naturally extends
+    // many wall-thicknesses past the centerline endpoint.
+    const maxExt = 30 * Math.max(halfT, conn1?.wall.thickness ?? 0, conn2?.wall.thickness ?? 0)
+    const inRangeOf = (mx: number, mz: number, ex: number, ez: number) =>
+      Math.hypot(mx - ex, mz - ez) < maxExt
+
+    // L-corner miter — fully derived from the local corner geometry, no
+    // global "interior" assumptions. Inputs:
+    //   • faceX/Z: this wall's face line origin (perpendicular face point)
+    //   • facePerpX/Z: the perpendicular offset direction for THIS face
+    //     (which side of our centerline the face sits on)
+    //   • endSign: +1 if mitering at our END, -1 if at START
+    // The "inside of the L" is the side where both walls' bodies lie. Our
+    // face is "inside" iff its perp offset has positive dot with the bisector
+    // of the two bodies; otherwise it's "outside". The matching cFace on
+    // the connected wall is on the same side (inside↔inside, outside↔outside).
+    const lcornerMiter = (
+      faceX: number, faceZ: number,
+      facePerpX: number, facePerpZ: number,
+      conn: GarageWall, epx: number, epz: number, endSign: number,
+    ) => {
+      const cLen = wallLen(conn)
+      if (cLen < 0.5) return null
+      const [cdx, cdz] = wallDir(conn)
+      const cpx = -cdz, cpz = cdx
+      const cHT = conn.thickness / 2
+      const ourBodyX = -endSign * dx, ourBodyZ = -endSign * dz
+      const connStartIsCorner = Math.hypot(conn.x1 - epx, conn.z1 - epz) < 2
+      const connSign = connStartIsCorner ? +1 : -1
+      const connBodyX = connSign * cdx, connBodyZ = connSign * cdz
+      // Inside-of-L bisector (averaged body directions). Falls back to
+      // perpendicular of our wall toward conn's body for near-straight runs.
+      let biX = ourBodyX + connBodyX, biZ = ourBodyZ + connBodyZ
+      const blen = Math.hypot(biX, biZ)
+      if (blen < 0.01) {
+        const px = -dz, pz = dx
+        const sgn = (px * connBodyX + pz * connBodyZ) >= 0 ? 1 : -1
+        biX = px * sgn; biZ = pz * sgn
+      } else {
+        biX /= blen; biZ /= blen
+      }
+      // Classify our face: positive dot with bisector → interior side of L.
+      const faceOnInside = (facePerpX * biX + facePerpZ * biZ) >= 0
+      const wantDirX = faceOnInside ? biX : -biX
+      const wantDirZ = faceOnInside ? biZ : -biZ
+      // Extension tiebreaker for perpendicular corners (sideScore ties at 0):
+      // interior retracts back along wallDir; exterior extends past endpoint.
+      const extSign = (faceOnInside ? -1 : +1) * endSign
+      let best: { x: number; z: number } | null = null
+      let bestScore = -Infinity
+      for (const cSide of [+1, -1] as const) {
+        const cFaceX = epx + cpx * cHT * cSide
+        const cFaceZ = epz + cpz * cHT * cSide
+        const t = intersectT(faceX, faceZ, dx, dz, cFaceX, cFaceZ, cdx, cdz)
+        if (isNaN(t)) continue
+        const ix = faceX + t * dx
+        const iz = faceZ + t * dz
+        const sideScore = (ix - epx) * wantDirX + (iz - epz) * wantDirZ
+        const extScore  = ((ix - epx) * dx + (iz - epz) * dz) * extSign
+        const score = sideScore + extScore
+        if (score > bestScore) { bestScore = score; best = { x: ix, z: iz } }
+      }
+      return best
+    }
+    const tjunctionMiter = (faceX: number, faceZ: number, conn: GarageWall, epx: number, epz: number, bodyDirX: number, bodyDirZ: number) => {
+      const [cdx, cdz] = wallDir(conn)
+      const cpx = -cdz, cpz = cdx
+      const cHT = conn.thickness / 2
+      const cSide = (cpx * bodyDirX + cpz * bodyDirZ) >= 0 ? +1 : -1
+      const fx = epx + cpx * cHT * cSide
+      const fz = epz + cpz * cHT * cSide
+      const t = intersectT(faceX, faceZ, dx, dz, fx, fz, cdx, cdz)
+      if (isNaN(t)) return null
+      return { x: faceX + t * dx, z: faceZ + t * dz }
+    }
+
+    if (conn1) {
+      if (conn1.kind === 'corner') {
+        const mP = lcornerMiter(p0.x, p0.z, +px, +pz, conn1.wall, w.x1, w.z1, -1)
+        const mN = lcornerMiter(n0.x, n0.z, -px, -pz, conn1.wall, w.x1, w.z1, -1)
+        if (mP && inRangeOf(mP.x, mP.z, w.x1, w.z1)) p0 = mP
+        if (mN && inRangeOf(mN.x, mN.z, w.x1, w.z1)) n0 = mN
+      } else {
+        const mP = tjunctionMiter(p0.x, p0.z, conn1.wall, w.x1, w.z1, dx, dz)
+        const mN = tjunctionMiter(n0.x, n0.z, conn1.wall, w.x1, w.z1, dx, dz)
+        if (mP && inRangeOf(mP.x, mP.z, w.x1, w.z1)) p0 = mP
+        if (mN && inRangeOf(mN.x, mN.z, w.x1, w.z1)) n0 = mN
+      }
+    }
+    if (conn2) {
+      if (conn2.kind === 'corner') {
+        const mP = lcornerMiter(p1.x, p1.z, +px, +pz, conn2.wall, w.x2, w.z2, +1)
+        const mN = lcornerMiter(n1.x, n1.z, -px, -pz, conn2.wall, w.x2, w.z2, +1)
+        if (mP && inRangeOf(mP.x, mP.z, w.x2, w.z2)) p1 = mP
+        if (mN && inRangeOf(mN.x, mN.z, w.x2, w.z2)) n1 = mN
+      } else {
+        const mP = tjunctionMiter(p1.x, p1.z, conn2.wall, w.x2, w.z2, -dx, -dz)
+        const mN = tjunctionMiter(n1.x, n1.z, conn2.wall, w.x2, w.z2, -dx, -dz)
+        if (mP && inRangeOf(mP.x, mP.z, w.x2, w.z2)) p1 = mP
+        if (mN && inRangeOf(mN.x, mN.z, w.x2, w.z2)) n1 = mN
+      }
+    }
+    wallOutlines.set(w.id, { p0, p1, n0, n1, pIsInterior })
   }
 
   // ── Group cabinets by nearest wall (must face the wall) ──
@@ -1078,10 +1336,22 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
         )
       })()}
 
-      {/* Floor steps — draggable bodies + per-corner resize handles. */}
+      {/* Floor steps — body polygons. Corner drag handles are rendered later
+          (after walls, dimensions, etc.) so they sit on top of every other
+          element and remain grabbable when a step overlaps a wall. */}
       {floorSteps.map(step => {
         const isSel = selectedFloorStepId === step.id
         const locked = !!step.locked
+        // Bounding-box dims (axis-aligned). Width = X extent, Depth = Z extent.
+        let minXc = Infinity, maxXc = -Infinity, minZc = Infinity, maxZc = -Infinity
+        for (const [cx, cz] of step.corners) {
+          if (cx < minXc) minXc = cx; if (cx > maxXc) maxXc = cx
+          if (cz < minZc) minZc = cz; if (cz > maxZc) maxZc = cz
+        }
+        const stepW = maxXc - minXc
+        const stepD = maxZc - minZc
+        const cxMid = (minXc + maxXc) / 2
+        const czMid = (minZc + maxZc) / 2
         return (
           <g key={step.id}>
             <polygon
@@ -1096,25 +1366,20 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
               onPointerUp={onStepBodyUp}
               onPointerCancel={onStepBodyUp}
             />
-            {isSel && !locked && step.corners.map(([cx, cz], i) => {
-              const handleId = `step-corner-${step.id}-${i}`
-              const hidden = activeHandleId === handleId
-              // Keep the circle mounted so pointer-capture survives; just hide
-              // it visually during the drag so it doesn't cover the snap target.
-              return (
-                <circle
-                  key={`sc-${step.id}-${i}`}
-                  cx={sx(cx)} cy={sz(cz)} r={6}
-                  fill="none" stroke="#44aaff" strokeWidth={1.5}
-                  pointerEvents="all"
-                  style={{ cursor: 'grab', opacity: hidden ? 0 : 1 }}
-                  onPointerDown={e => onStepCornerDown(e, step, i)}
-                  onPointerMove={onStepCornerMove}
-                  onPointerUp={onStepCornerUp}
-                  onPointerCancel={onStepCornerUp}
-                />
-              )
-            })}
+            {/* Width centered along the top edge of the bbox; depth centered
+                along the left edge, rotated 90°. Placed inside the step so it
+                reads against the lighter step fill. */}
+            <text x={sx(cxMid)} y={sz(minZc) + 6} textAnchor="middle" dominantBaseline="hanging"
+              fontSize={3.5} fontWeight={600} fill="#6a5530"
+              pointerEvents="none" style={{ userSelect: 'none' }}>
+              {inchesToDisplay(stepW)}
+            </text>
+            <text x={sx(minXc) + 6} y={sz(czMid)} textAnchor="middle" dominantBaseline="middle"
+              fontSize={3.5} fontWeight={600} fill="#6a5530"
+              transform={`rotate(-90 ${sx(minXc) + 6} ${sz(czMid)})`}
+              pointerEvents="none" style={{ userSelect: 'none' }}>
+              {inchesToDisplay(stepD)}
+            </text>
           </g>
         )
       })}
@@ -1135,113 +1400,33 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
       })()}
 
       {/* Walls — drawn as filled rectangles with proper corner joints */}
-      {(() => {
-        // 2D line intersection: ray from (ax,az) dir (adx,adz) with ray from (bx,bz) dir (bdx,bdz).
-        // Returns t along the first ray, or NaN if parallel.
-        const intersectT = (ax: number, az: number, adx: number, adz: number,
-                            bx: number, bz: number, bdx: number, bdz: number) => {
-          const det = adx * (-bdz) - adz * (-bdx)
-          if (Math.abs(det) < 1e-6) return NaN
-          return ((bx - ax) * (-bdz) - (bz - az) * (-bdx)) / det
-        }
-
-        // Compute mitered face point at a connected corner.
-        // Given this wall's face line and the connected wall, find where they intersect.
-        const miterFace = (
-          faceX: number, faceZ: number, dirX: number, dirZ: number,  // this wall's face line
-          conn: GarageWall, epx: number, epz: number,                // connected wall + corner point
-          sidePx: number, sidePz: number,                             // this wall's face offset direction
-        ): { x: number; z: number } | null => {
-          const cLen = wallLen(conn)
-          if (cLen < 0.5) return null
-          const [cdx, cdz] = wallDir(conn)
-          const cpx = -cdz, cpz = cdx  // conn perpendicular
-          const cHT = conn.thickness / 2
-          // Pick the connected wall's face that lies on the SAME side of the
-          // corner as our current face. If our face is offset in (sidePx, sidePz)
-          // direction from the centerline endpoint, pick conn's face on the
-          // side that has positive dot product with (sidePx, sidePz).
-          const cSide = (sidePx * cpx + sidePz * cpz) >= 0 ? +1 : -1
-          // Use the endpoint shared with this wall as the anchor; the conn
-          // line passes through (epx, epz) parallel to (cdx, cdz). Shift it
-          // perpendicular by cHT*cSide to get the face line.
-          const cFaceX = epx + cpx * cHT * cSide
-          const cFaceZ = epz + cpz * cHT * cSide
-          const t = intersectT(faceX, faceZ, dirX, dirZ, cFaceX, cFaceZ, cdx, cdz)
-          if (isNaN(t)) return null
-          return { x: faceX + t * dirX, z: faceZ + t * dirZ }
-        }
-
-        return walls.map(w => {
-          const len = wallLen(w)
-          if (len < 0.5) return null
-          const [dx, dz] = wallDir(w)
-          const halfT = w.thickness / 2
-          const px = -dz, pz = dx  // perpendicular
-
-          const conn1 = endpointConnected(w.x1, w.z1, w.id)
-          const conn2 = endpointConnected(w.x2, w.z2, w.id)
-
-          // Default perpendicular face corners
-          let p0 = { x: w.x1 + px * halfT, z: w.z1 + pz * halfT }  // +side start
-          let n0 = { x: w.x1 - px * halfT, z: w.z1 - pz * halfT }  // -side start
-          let p1 = { x: w.x2 + px * halfT, z: w.z2 + pz * halfT }  // +side end
-          let n1 = { x: w.x2 - px * halfT, z: w.z2 - pz * halfT }  // -side end
-
-          // At connected corners, miter BOTH faces to their intersections
-          // so adjacent wall polygons meet cleanly (a single diagonal line
-          // across the corner) without overlapping. Cap the miter extension
-          // at ~2× wall thickness to avoid long spikes at very acute angles.
-          const maxExt = 2 * Math.max(halfT, conn1?.thickness ?? 0, conn2?.thickness ?? 0)
-          const inRange = (px: number, pz: number, ex: number, ez: number) =>
-            Math.hypot(px - ex, pz - ez) < maxExt
-          if (conn1) {
-            const mP = miterFace(p0.x, p0.z, dx, dz, conn1, w.x1, w.z1, +1)
-            const mN = miterFace(n0.x, n0.z, dx, dz, conn1, w.x1, w.z1, -1)
-            if (mP && inRange(mP.x, mP.z, w.x1, w.z1)) p0 = mP
-            if (mN && inRange(mN.x, mN.z, w.x1, w.z1)) n0 = mN
-          }
-          if (conn2) {
-            const mP = miterFace(p1.x, p1.z, dx, dz, conn2, w.x2, w.z2, +1)
-            const mN = miterFace(n1.x, n1.z, dx, dz, conn2, w.x2, w.z2, -1)
-            if (mP && inRange(mP.x, mP.z, w.x2, w.z2)) p1 = mP
-            if (mN && inRange(mN.x, mN.z, w.x2, w.z2)) n1 = mN
-          }
-
-          const isSel = selectedWallId === w.id
-          const strokeColor = isSel ? '#66aaff' : '#222'
-          const strokeW = isSel ? 1.2 : 0.8
-          // Render each wall as two parallel polylines (interior face + exterior
-          // face) rather than a filled polygon, so corners appear as clean
-          // right-angles where adjacent walls' faces meet, without any diagonal
-          // end-cap lines crossing through the corner.
-          // Invisible polygon for hit detection on the wall body.
-          const hitPoints = [
-            `${sx(p0.x)},${sz(p0.z)}`,
-            `${sx(p1.x)},${sz(p1.z)}`,
-            `${sx(n1.x)},${sz(n1.z)}`,
-            `${sx(n0.x)},${sz(n0.z)}`,
-          ].join(' ')
-          return (
-            <g key={w.id}>
-              <polygon points={hitPoints}
-                fill={isSel ? 'rgba(102,170,255,0.15)' : 'transparent'}
-                stroke="none"
-                style={{ cursor: 'move' }}
-                onPointerDown={e => onWallBodyPointerDown(e, w)}
-                onPointerMove={onWallBodyPointerMove}
-                onPointerUp={onWallBodyPointerUp}
-                onPointerCancel={onWallBodyPointerUp} />
-              {/* Interior face */}
-              <line x1={sx(p0.x)} y1={sz(p0.z)} x2={sx(p1.x)} y2={sz(p1.z)}
-                stroke={strokeColor} strokeWidth={strokeW} pointerEvents="none" />
-              {/* Exterior face */}
-              <line x1={sx(n0.x)} y1={sz(n0.z)} x2={sx(n1.x)} y2={sz(n1.z)}
-                stroke={strokeColor} strokeWidth={strokeW} pointerEvents="none" />
-            </g>
-          )
-        })
-      })()}
+      {walls.map(w => {
+        const outline = wallOutlines.get(w.id)
+        if (!outline) return null
+        const { p0, p1, n0, n1 } = outline
+        const isSel = selectedWallId === w.id
+        const strokeColor = isSel ? '#66aaff' : '#222'
+        const strokeW = isSel ? 1.2 : 0.8
+        const wallPoints = [
+          `${sx(p0.x)},${sz(p0.z)}`,
+          `${sx(p1.x)},${sz(p1.z)}`,
+          `${sx(n1.x)},${sz(n1.z)}`,
+          `${sx(n0.x)},${sz(n0.z)}`,
+        ].join(' ')
+        return (
+          <g key={w.id}>
+            <polygon points={wallPoints}
+              fill={isSel ? 'rgba(102,170,255,0.15)' : '#ffffff'}
+              stroke={strokeColor} strokeWidth={strokeW}
+              strokeLinejoin="miter"
+              style={{ cursor: 'move' }}
+              onPointerDown={e => onWallBodyPointerDown(e, w)}
+              onPointerMove={onWallBodyPointerMove}
+              onPointerUp={onWallBodyPointerUp}
+              onPointerCancel={onWallBodyPointerUp} />
+          </g>
+        )
+      })}
 
       {/* Openings (doors, windows, garage doors) — blueprint-style symbols
           overlaid on the walls. Each opening gets a white cover that erases
@@ -1662,13 +1847,31 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
             }
           }
 
-          // Overall wall length is always the outermost tier.
+          // Overall wall length is always the outermost tier. Add the wall
+          // thickness so the dim line sits outside the wall body — the witness
+          // is anchored at the INTERIOR face and has to traverse the wall.
           const tierCount = tierStrips.length + 1
-          const overallOff = TIER_BASE + TIER_STEP * (tierCount - 1)
+          const overallOff = w.thickness + TIER_BASE + TIER_STEP * (tierCount - 1)
+          // Witness lines start at the EXTERIOR wall face (with a small visible
+          // gap), not at the interior face — otherwise they cut through the
+          // wall body. Inner tier strips are anchored to the wall centerline,
+          // so add the wall half-thickness + gap to push them past the
+          // exterior face. `WIT_GAP` is the visible space between the wall
+          // edge and the start of the witness/dim lines.
+          const WIT_GAP = 4
+          const halfT = w.thickness / 2
 
-          // Overall wall dimension line
-          const ix1s = sx(ifx1), iz1s = sz(ifz1)
-          const ix2s = sx(ifx2), iz2s = sz(ifz2)
+          // Overall wall dimension line — anchored to the INTERIOR mitered
+          // polygon corners (from wallOutlines). The dimension reads the
+          // inside-face length of the wall (corner to corner along the
+          // interior surface), which is what cabinet/build planning needs.
+          // The witness lines drop OUTWARD from those interior corners,
+          // crossing the wall body to the dim tier outside.
+          const ol = wallOutlines.get(w.id)
+          const intStart = ol ? (ol.pIsInterior ? ol.p0 : ol.n0) : { x: w.x1, z: w.z1 }
+          const intEnd   = ol ? (ol.pIsInterior ? ol.p1 : ol.n1) : { x: w.x2, z: w.z2 }
+          const ix1s = sx(intStart.x) + outX * WIT_GAP, iz1s = sz(intStart.z) + outZ * WIT_GAP
+          const ix2s = sx(intEnd.x)   + outX * WIT_GAP, iz2s = sz(intEnd.z)   + outZ * WIT_GAP
           dims.push(
             <g key={`tover-${w.id}`}>
               <line x1={ix1s} y1={iz1s} x2={ix1s + outX * (overallOff + 4)} y2={iz1s + outZ * (overallOff + 4)}
@@ -1683,8 +1886,11 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
           )
 
           // Inner tiers: render each strip with witness lines at its endpoints.
+          // Strip endpoints are wall-centerline positions; offset outward by
+          // halfT + WIT_GAP so witness lines start clear of the wall.
+          const stripBase = halfT + WIT_GAP
           for (let ti = 0; ti < tierStrips.length; ti++) {
-            const off = TIER_BASE + TIER_STEP * ti
+            const off = stripBase + TIER_BASE + TIER_STEP * ti
             const strips = tierStrips[ti]
             for (let si = 0; si < strips.length; si++) {
               const s = strips[si]
@@ -1692,13 +1898,15 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
               if (segLen < 0.5) continue
               const s1x = w.x1 + wdx * s.start, s1z = w.z1 + wdz * s.start
               const s2x = w.x1 + wdx * s.end,   s2z = w.z1 + wdz * s.end
+              const witStart1X = sx(s1x) + outX * stripBase, witStart1Z = sz(s1z) + outZ * stripBase
+              const witStart2X = sx(s2x) + outX * stripBase, witStart2Z = sz(s2z) + outZ * stripBase
               const sx1 = sx(s1x) + outX * off, sz1 = sz(s1z) + outZ * off
               const sx2 = sx(s2x) + outX * off, sz2 = sz(s2z) + outZ * off
               dims.push(
                 <g key={`t${ti}-${w.id}-${si}`}>
-                  <line x1={sx(s1x)} y1={sz(s1z)} x2={sx(s1x) + outX * (off + 4)} y2={sz(s1z) + outZ * (off + 4)}
+                  <line x1={witStart1X} y1={witStart1Z} x2={sx(s1x) + outX * (off + 4)} y2={sz(s1z) + outZ * (off + 4)}
                     stroke={dimColorLight} strokeWidth={0.25} strokeDasharray="2 1.5" />
-                  <line x1={sx(s2x)} y1={sz(s2z)} x2={sx(s2x) + outX * (off + 4)} y2={sz(s2z) + outZ * (off + 4)}
+                  <line x1={witStart2X} y1={witStart2Z} x2={sx(s2x) + outX * (off + 4)} y2={sz(s2z) + outZ * (off + 4)}
                     stroke={dimColorLight} strokeWidth={0.25} strokeDasharray="2 1.5" />
                   <DimLine x1={sx1} y1={sz1} x2={sx2} y2={sz2}
                     label={s.label} outX={outX} outZ={outZ}
@@ -1731,6 +1939,169 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
           )}
         </g>
       )}
+
+      {/* ── Placed 3D items (cars, equipment, etc.) — top-down silhouettes ──
+          Each model's GLB is loaded once, projected to XZ, hulled, and the
+          normalized polygon is rendered scaled to the item's dims. While the
+          hull is loading we show a dashed rectangle as a fallback so the
+          item is still visible. */}
+      {items.map(item => {
+        const isImported = item.type.startsWith('imported:')
+        const importedAssetId = isImported ? item.type.replace('imported:', '') : null
+        const def = !isImported ? MODEL_CATALOG.find(m => m.type === item.type) : null
+        const asset = importedAssetId ? importedAssets.find(a => a.id === importedAssetId) : null
+        const baseW = def?.w ?? asset?.w ?? 72
+        const baseD = def?.d ?? asset?.d ?? 144
+        const baseH = def?.h ?? asset?.h ?? 54
+        let w = baseW * (item.scale?.[0] ?? 1)
+        let d = baseD * (item.scale?.[2] ?? 1)
+        let hIn = baseH * (item.scale?.[1] ?? 1)
+        const cxIn = item.position[0] * 12
+        const czIn = item.position[2] * 12
+        const rotY = item.rotation?.[1] ?? 0
+        const category = def?.category ?? asset?.modelCategory ?? 'car'
+        const stroke = CATEGORY_COLORS[category as keyof typeof CATEGORY_COLORS] ?? '#444'
+
+        // Resolve the GLB url + cache key. Catalog models live at
+        // /assets/models/{type}.glb; imported assets use the cached blob URL
+        // (restored from IndexedDB on demand).
+        const cacheKey = isImported ? `imported:${importedAssetId}` : `catalog:${item.type}`
+        let url: string | undefined
+        if (isImported && importedAssetId) {
+          url = getCachedModelUrl(importedAssetId)
+          if (!url) {
+            // Kick off restore — when it lands the cache subscription fires
+            // a re-render and we'll have the URL on the next pass.
+            restoreModelFromDB(importedAssetId).catch(() => {})
+          }
+        } else if (!isImported) {
+          url = `${import.meta.env.BASE_URL}assets/models/${item.type}.glb`
+        }
+
+        let hull = getCachedHull(cacheKey)
+        if (hull === undefined && url) loadHull(cacheKey, url)
+
+        // Build the silhouette points, or fall back to a rectangle.
+        const cos = Math.cos(rotY), sin = Math.sin(rotY)
+        const place = (lx: number, lz: number): [number, number] => [
+          cxIn + lx * cos - lz * sin,
+          czIn + lx * sin + lz * cos,
+        ]
+        const longest = Math.max(w, d)
+        const isFallback = !hull
+        const isSel = selectedItemId === item.id
+        // Drag handlers — translate the item's position (stored in feet) by
+        // the cursor's delta in inches converted to feet.
+        const onItemDown = (e: React.PointerEvent) => {
+          e.stopPropagation()
+          e.preventDefault()
+          selectItem(item.id)
+          const pos = mouseToSvg(e)
+          if (!pos) return
+          itemDragRef.current = {
+            itemId: item.id,
+            startMouseX: pos.x, startMouseZ: pos.z,
+            initFx: item.position[0], initFz: item.position[2],
+          }
+          ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
+        }
+        const onItemMove = (e: React.PointerEvent) => {
+          const id = itemDragRef.current
+          if (!id || id.itemId !== item.id) return
+          const pos = mouseToSvg(e)
+          if (!pos) return
+          const dxIn = pos.x - id.startMouseX
+          const dzIn = pos.z - id.startMouseZ
+          updateItem(item.id, {
+            position: [id.initFx + dxIn / 12, item.position[1], id.initFz + dzIn / 12],
+          })
+        }
+        const onItemUp = (e: React.PointerEvent) => {
+          itemDragRef.current = null
+          try { (e.currentTarget as Element).releasePointerCapture(e.pointerId) } catch (_) {}
+        }
+        // Render the cached PNG snapshot as a single SVG <image>. The
+        // displayed footprint must match what the 3D view actually renders.
+        if (hull?.snapshotDataUrl) {
+          // Two scaling modes — the floor plan matches whichever the 3D
+          // view uses for this item:
+          //   • Imported assets: ImportedGLBModelInner scales the GLB so its
+          //     longest 3D dim = CATEGORY_TARGET_FT[category]. We replicate
+          //     that here so the floor plan footprint equals the actual 3D
+          //     footprint, regardless of asset.w/d/h placeholders.
+          //   • Catalog models: GLBModel scales so longest 3D dim = max(w,h,d)
+          //     in feet, with native model proportions on the other axes.
+          let footprintW: number
+          let footprintD: number
+          if (isImported) {
+            const cat = asset?.modelCategory ?? 'car'
+            const targetFt = ({ car: 15, motorcycle: 7, equipment: 4, furniture: 5 } as Record<string, number>)[cat] ?? 10
+            const targetIn = targetFt * 12
+            const modelLongest3D = Math.max(hull.modelW, hull.modelH, hull.modelD)
+            const s = targetIn / modelLongest3D
+            footprintW = hull.modelW * s
+            footprintD = hull.modelD * s
+          } else {
+            const longest3D = Math.max(w, hIn, d)
+            const modelLongest3D = Math.max(hull.modelW, hull.modelH, hull.modelD)
+            const s = longest3D / modelLongest3D
+            footprintW = hull.modelW * s
+            footprintD = hull.modelD * s
+          }
+          // The bitmap is square with the silhouette at native proportions
+          // inside (modelW/modelLongestXZ × modelD/modelLongestXZ of canvas).
+          // Stretch it non-uniformly so the visible silhouette = footprintW × footprintD.
+          const modelLongest = Math.max(hull.modelW, hull.modelD)
+          const imgW = footprintW * (modelLongest / hull.modelW)
+          const imgD = footprintD * (modelLongest / hull.modelD)
+          const halfWPx = (imgW * scale) / 2
+          const halfDPx = (imgD * scale) / 2
+          const cxPx = sx(cxIn)
+          const czPx = sz(czIn)
+          // Apply the catalog's modelRotY (per-vehicle orientation fix) on
+          // top of the user's rotation so the floor plan matches the 3D view.
+          const totalRotDeg = ((rotY + (def?.modelRotY ?? 0)) * 180) / Math.PI
+          const selW = footprintW * scale
+          const selD = footprintD * scale
+          return (
+            <g key={`item-${item.id}`}
+              transform={`translate(${cxPx} ${czPx}) rotate(${totalRotDeg})`}
+              style={{ cursor: 'grab' }}
+              onPointerDown={onItemDown}
+              onPointerMove={onItemMove}
+              onPointerUp={onItemUp}
+              onPointerCancel={onItemUp}>
+              <image href={hull.snapshotDataUrl}
+                x={-halfWPx} y={-halfDPx} width={halfWPx * 2} height={halfDPx * 2}
+                opacity={isSel ? 1 : 0.85}
+                preserveAspectRatio="none" />
+              {isSel && (
+                <rect x={-selW / 2} y={-selD / 2} width={selW} height={selD}
+                  fill="none" stroke="#0a84ff" strokeWidth={0.8}
+                  strokeDasharray="3 2" pointerEvents="none" />
+              )}
+            </g>
+          )
+        }
+        // Fallback rectangle while loading or for items without a cached hull.
+        const hw = w / 2, hd = d / 2
+        const polyPts = [[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd]].map(([lx, lz]) => place(lx, lz))
+        const pts = polyPts.map(([x, z]) => `${sx(x)},${sz(z)}`).join(' ')
+        return (
+          <g key={`item-${item.id}`}
+            style={{ cursor: 'grab' }}
+            onPointerDown={onItemDown}
+            onPointerMove={onItemMove}
+            onPointerUp={onItemUp}
+            onPointerCancel={onItemUp}>
+            <polygon points={pts}
+              fill={isSel ? 'rgba(10,132,255,0.12)' : 'transparent'}
+              stroke={stroke} strokeWidth={0.8}
+              strokeDasharray={isFallback ? '4 2' : undefined}
+              opacity={0.75} />
+          </g>
+        )
+      })}
 
       {/* ── Overhead racks (interactive: drag + rotate) ── */}
       {overheadRacks.map(rack => {
@@ -1928,6 +2299,112 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
           </g>
         )
       })}
+
+      {/* Floor-step corner drag handles — rendered last so they sit above
+          walls/dimensions and stay grabbable when a step overlaps a wall. */}
+      {floorSteps.map(step => {
+        const isSel = selectedFloorStepId === step.id
+        const locked = !!step.locked
+        if (!isSel || locked) return null
+        return (
+          <g key={`sch-${step.id}`}>
+            {step.corners.map(([cx, cz], i) => {
+              const handleId = `step-corner-${step.id}-${i}`
+              const hidden = activeHandleId === handleId
+              // Keep the circle mounted so pointer-capture survives; just hide
+              // it visually during the drag so it doesn't cover the snap target.
+              return (
+                <circle
+                  key={`sc-${step.id}-${i}`}
+                  cx={sx(cx)} cy={sz(cz)} r={6}
+                  fill="none" stroke="#44aaff" strokeWidth={1.5}
+                  pointerEvents="all"
+                  style={{ cursor: 'grab', opacity: hidden ? 0 : 1 }}
+                  onPointerDown={e => onStepCornerDown(e, step, i)}
+                  onPointerMove={onStepCornerMove}
+                  onPointerUp={onStepCornerUp}
+                  onPointerCancel={onStepCornerUp}
+                />
+              )
+            })}
+          </g>
+        )
+      })}
+
+      {/* Measurement line — two draggable endpoints with the distance label
+          rendered along the line. Toggled via the floor-plan toolbar. */}
+      {showMeasureTool && measureLine && (() => {
+        const { ax, az, bx, bz } = measureLine
+        const A = { sx: sx(ax), sz: sz(az) }
+        const B = { sx: sx(bx), sz: sz(bz) }
+        const distIn = Math.hypot(bx - ax, bz - az)
+        const midX = (A.sx + B.sx) / 2
+        const midZ = (A.sz + B.sz) / 2
+        const angDeg = readableAngle(Math.atan2(B.sz - A.sz, B.sx - A.sx) * 180 / Math.PI)
+        const onMeasureDown = (end: 'a' | 'b') => (e: React.PointerEvent) => {
+          e.stopPropagation()
+          e.preventDefault()
+          const pos = mouseToSvg(e)
+          if (!pos) return
+          const initX = end === 'a' ? ax : bx
+          const initZ = end === 'a' ? az : bz
+          measureDragRef.current = { end, startMouseX: pos.x, startMouseZ: pos.z, initX, initZ }
+          setActiveHandleId(`measure-${end}`)
+          ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
+        }
+        const onMeasureMove = (e: React.PointerEvent) => {
+          const md = measureDragRef.current
+          if (!md) return
+          const pos = mouseToSvg(e)
+          if (!pos) return
+          const nx = md.initX + (pos.x - md.startMouseX)
+          const nz = md.initZ + (pos.z - md.startMouseZ)
+          setMeasureLine(ml => ml && (md.end === 'a'
+            ? { ...ml, ax: nx, az: nz }
+            : { ...ml, bx: nx, bz: nz }))
+        }
+        const onMeasureUp = (e: React.PointerEvent) => {
+          measureDragRef.current = null
+          setActiveHandleId(null)
+          try { (e.currentTarget as Element).releasePointerCapture(e.pointerId) } catch (_) {}
+        }
+        return (
+          <g key="measure-line">
+            <line x1={A.sx} y1={A.sz} x2={B.sx} y2={B.sz}
+              stroke="#0a84ff" strokeWidth={1} strokeDasharray="4 2" pointerEvents="none" />
+            {/* Distance label centered on the line, rotated to follow it. */}
+            <g transform={`translate(${midX} ${midZ}) rotate(${angDeg})`} pointerEvents="none">
+              <rect x={-22} y={-6} width={44} height={11} rx={2}
+                fill="#ffffffdd" stroke="#0a84ff" strokeWidth={0.4} />
+              <text x={0} y={0} textAnchor="middle" dominantBaseline="central"
+                fontSize={4.5} fontWeight={700} fill="#0a4a8a">
+                {inchesToDisplay(distIn)}
+              </text>
+            </g>
+            {/* Endpoint handles — transparent inside with a small crosshair
+                so the user can see exactly what's beneath the cursor. The
+                blue ring stays for grab affordance. */}
+            {([['a', A], ['b', B]] as const).map(([key, P]) => (
+              <g key={`mh-${key}`}
+                style={{ cursor: 'grab', opacity: activeHandleId === `measure-${key}` ? 0 : 1 }}>
+                {/* Crosshair lines */}
+                <line x1={P.sx - 5} y1={P.sz} x2={P.sx + 5} y2={P.sz}
+                  stroke="#0a84ff" strokeWidth={0.7} pointerEvents="none" />
+                <line x1={P.sx} y1={P.sz - 5} x2={P.sx} y2={P.sz + 5}
+                  stroke="#0a84ff" strokeWidth={0.7} pointerEvents="none" />
+                {/* Outer ring — transparent fill so the underlying scene
+                    stays visible; pointer-events still hit the disc area. */}
+                <circle cx={P.sx} cy={P.sz} r={6}
+                  fill="transparent" stroke="#0a84ff" strokeWidth={1.8}
+                  onPointerDown={onMeasureDown(key)}
+                  onPointerMove={onMeasureMove}
+                  onPointerUp={onMeasureUp}
+                  onPointerCancel={onMeasureUp} />
+              </g>
+            ))}
+          </g>
+        )
+      })()}
     </svg>
   )
 }

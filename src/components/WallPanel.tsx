@@ -5,7 +5,7 @@ import type { GarageWall } from '../store/garageStore'
 import MeasureInput from './MeasureInput'
 import { wallLengthIn, inchesToDisplay } from '../utils/measurements'
 import { slatwallColors } from '../data/slatwallColors'
-import { wallTextures, doorTextures, texturePath } from '../data/textureCatalog'
+import { wallTextures, texturePath } from '../data/textureCatalog'
 import { flooringColors, flooringTexturePath } from '../data/flooringColors'
 import type { ImportedAsset } from '../store/garageStore'
 import { getModelsForType } from '../data/openingModels'
@@ -164,44 +164,66 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
     importedAssets,
     addBaseboard, addStemWall, addCabinet, walls,
   } = useGarageStore()
-  // Spawn a default baseboard piece centered against the given wall's interior face.
+  // Compute the interior span of a wall — trims each end by the connected
+  // wall's thickness/2 so baseboard / stem-wall pieces sit between adjacent
+  // walls without clipping into them.
+  const interiorSpan = (w: typeof walls[number]) => {
+    const len = Math.hypot(w.x2 - w.x1, w.z2 - w.z1) || 1
+    const CONNECT = 6
+    let trim1 = 0, trim2 = 0
+    for (const o of walls) {
+      if (o.id === w.id) continue
+      const halfO = o.thickness / 2
+      if (Math.hypot(o.x1 - w.x1, o.z1 - w.z1) < CONNECT ||
+          Math.hypot(o.x2 - w.x1, o.z2 - w.z1) < CONNECT) trim1 = Math.max(trim1, halfO)
+      if (Math.hypot(o.x1 - w.x2, o.z1 - w.z2) < CONNECT ||
+          Math.hypot(o.x2 - w.x2, o.z2 - w.z2) < CONNECT) trim2 = Math.max(trim2, halfO)
+    }
+    return { len, trim1, trim2, interior: Math.max(1, len - trim1 - trim2) }
+  }
+  // Spawn a baseboard sized edge-to-edge along the wall's interior span,
+  // centered on that span and flush against the wall's interior face.
   const addBaseboardForWall = (wallId: string) => {
     const w = walls.find(ww => ww.id === wallId)
     if (!w) return addBaseboard()
     const dx = w.x2 - w.x1, dz = w.z2 - w.z1
     const len = Math.hypot(dx, dz) || 1
     const ux = dx / len, uz = dz / len
-    const cx = (w.x1 + w.x2) / 2, cz = (w.z1 + w.z2) / 2
+    const { trim1, trim2, interior } = interiorSpan(w)
+    // Center of the interior span (along the wall axis).
+    const midAlong = (trim1 + len - trim2) / 2
+    const cx = w.x1 + ux * midAlong, cz = w.z1 + uz * midAlong
     let nx = -uz, nz = ux
-    if (cx * nx + cz * nz > 0) { nx = -nx; nz = -nz }
-    // wall thickness/2 + baseboard thickness/2 → inner face flush with wall surface.
+    const wmx = (w.x1 + w.x2) / 2, wmz = (w.z1 + w.z2) / 2
+    if (wmx * nx + wmz * nz > 0) { nx = -nx; nz = -nz }
     const inset = w.thickness / 2 + 0.25
     addBaseboard({
       x: cx + nx * inset,
       z: cz + nz * inset,
       rotY: -Math.atan2(uz, ux),
-      length: Math.min(36, len),
+      length: interior,
     })
   }
-  // Spawn a stem wall piece against the selected wall. Same axis as baseboard
-  // but RECESSED 1" past the interior wall face (sits inside wall thickness).
+  // Spawn a stem wall sized edge-to-edge along the wall's interior span,
+  // centered on that span. Inset to sit flush with the wall's interior face.
   const addStemWallForWall = (wallId: string) => {
     const w = walls.find(ww => ww.id === wallId)
     if (!w) return addStemWall()
     const dx = w.x2 - w.x1, dz = w.z2 - w.z1
     const len = Math.hypot(dx, dz) || 1
     const ux = dx / len, uz = dz / len
-    const cx = (w.x1 + w.x2) / 2, cz = (w.z1 + w.z2) / 2
+    const { trim1, trim2, interior } = interiorSpan(w)
+    const midAlong = (trim1 + len - trim2) / 2
+    const cx = w.x1 + ux * midAlong, cz = w.z1 + uz * midAlong
     let nx = -uz, nz = ux
-    if (cx * nx + cz * nz > 0) { nx = -nx; nz = -nz }
-    // Inset 1" PAST the interior face — center sits behind the wall surface.
-    // Flush with interior wall face (tiny 1/16" forward bump to avoid z-fight).
+    const wmx = (w.x1 + w.x2) / 2, wmz = (w.z1 + w.z2) / 2
+    if (wmx * nx + wmz * nz > 0) { nx = -nx; nz = -nz }
     const inset = w.thickness / 2 + 0.0625
     addStemWall({
       x: cx + nx * inset,
       z: cz + nz * inset,
       rotY: -Math.atan2(uz, ux),
-      length: Math.min(36, len),
+      length: interior,
     })
   }
   // All imported textures are available across every surface; the legacy
@@ -242,8 +264,11 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
     const curLen = Math.hypot(dx, dz)
     if (curLen === 0) return
     const ux = dx / curLen, uz = dz / curLen
-    // Keep the end connected to another wall fixed; move the free end.
-    // If both or neither are connected, default to moving (x2, z2).
+    // Pick the anchor end (stays fixed) and the moving end. If exactly one
+    // end is connected to another wall, anchor that end. Otherwise anchor
+    // (x1, z1). Then any OTHER walls whose endpoint sits at the moving end's
+    // OLD position get translated by the same delta — so welded corners stay
+    // welded when the length changes.
     const CONNECT = 2
     const connectedAt = (x: number, z: number) =>
       walls.some(o => o.id !== wall.id && (
@@ -252,12 +277,33 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
       ))
     const end2Connected = connectedAt(wall.x2, wall.z2)
     const end1Connected = connectedAt(wall.x1, wall.z1)
-    if (end2Connected && !end1Connected) {
-      // Keep (x2, z2) fixed; shorten/extend from the (x1, z1) side.
-      updateWall(wall.id, { x1: wall.x2 - ux * newLen, z1: wall.z2 - uz * newLen })
-    } else {
-      updateWall(wall.id, { x2: wall.x1 + ux * newLen, z2: wall.z1 + uz * newLen })
+    const anchorIs2 = end2Connected && !end1Connected
+    const oldMoveX = anchorIs2 ? wall.x1 : wall.x2
+    const oldMoveZ = anchorIs2 ? wall.z1 : wall.z2
+    const anchorX  = anchorIs2 ? wall.x2 : wall.x1
+    const anchorZ  = anchorIs2 ? wall.z2 : wall.z1
+    const newMoveX = anchorIs2 ? anchorX - ux * newLen : anchorX + ux * newLen
+    const newMoveZ = anchorIs2 ? anchorZ - uz * newLen : anchorZ + uz * newLen
+    const dX = newMoveX - oldMoveX
+    const dZ = newMoveZ - oldMoveZ
+
+    // Translate connected walls' matching endpoints by the same delta so the
+    // shared corner moves as one. Locked walls are skipped — they stay put
+    // and the corner detaches.
+    for (const o of walls) {
+      if (o.id === wall.id || o.locked) continue
+      const changes: Partial<GarageWall> = {}
+      if (Math.hypot(o.x1 - oldMoveX, o.z1 - oldMoveZ) < CONNECT) {
+        changes.x1 = o.x1 + dX; changes.z1 = o.z1 + dZ
+      }
+      if (Math.hypot(o.x2 - oldMoveX, o.z2 - oldMoveZ) < CONNECT) {
+        changes.x2 = o.x2 + dX; changes.z2 = o.z2 + dZ
+      }
+      if (Object.keys(changes).length > 0) updateWall(o.id, changes)
     }
+
+    if (anchorIs2) updateWall(wall.id, { x1: newMoveX, z1: newMoveZ })
+    else           updateWall(wall.id, { x2: newMoveX, z2: newMoveZ })
   }
 
   const handleDeleteConfirm = () => {
@@ -359,17 +405,34 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
             <div style={{ marginBottom: 8 }}>
               <span className="coord-label">Wall Color</span>
               <div className="slat-color-row" role="radiogroup" aria-label="Wall color">
-                {WALL_COLORS.map(c => (
-                  <button
-                    key={c.hex}
-                    role="radio"
-                    aria-checked={!wall.wallTextureId && (wall.wallColor ?? '#e0dedd') === c.hex}
-                    className={`slat-color-swatch${!wall.wallTextureId && (wall.wallColor ?? '#e0dedd') === c.hex ? ' active' : ''}`}
-                    style={{ background: c.hex }}
-                    aria-label={c.name}
-                    onClick={() => updateWall(wall.id, { wallColor: c.hex, wallTextureId: undefined })}
-                  />
-                ))}
+                {WALL_COLORS.map(c => {
+                  const isActive = !wall.wallTextureId && (wall.wallColor ?? '#e0dedd') === c.hex
+                  return (
+                    <button
+                      key={c.hex}
+                      role="radio"
+                      aria-checked={isActive}
+                      className={`slat-color-swatch${isActive ? ' active' : ''}`}
+                      style={{ background: c.hex, position: 'relative' }}
+                      aria-label={c.name}
+                      onClick={() => updateWall(wall.id, { wallColor: c.hex, wallTextureId: undefined })}
+                    >
+                      {isActive && (
+                        <span aria-hidden style={{
+                          position: 'absolute', top: '50%', right: 8, transform: 'translateY(-50%)',
+                          width: 16, height: 16, borderRadius: '50%',
+                          background: 'var(--accent)', color: '#fff',
+                          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                          boxShadow: '0 1px 3px rgba(0,0,0,0.4)',
+                        }}>
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
               </div>
             </div>
             <div>
@@ -496,41 +559,6 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
                       >Exterior</button>
                     </div>
                   )}
-                  {/* Garage-door texture picker (regular doors use slab/frame colors instead) */}
-                  {op.type === 'garage-door' && (
-                    <div style={{ marginTop: 6 }}>
-                      <span className="coord-label">Texture</span>
-                      <div className="slat-color-row" role="radiogroup" aria-label="Garage door texture" style={{ flexWrap: 'wrap', gap: 4 }}>
-                        <button
-                          role="radio"
-                          aria-checked={!op.textureId}
-                          className={`slat-color-swatch${!op.textureId ? ' active' : ''}`}
-                          style={{ background: '#b8b4a8', fontSize: 8, color: '#666', lineHeight: 1 }}
-                          aria-label="Default (no texture)"
-                          title="Default"
-                          onClick={() => updateOpening(wall.id, op.id, { textureId: undefined })}
-                        >
-                          —
-                        </button>
-                        {doorTextures.map(t => (
-                          <button
-                            key={t.id}
-                            role="radio"
-                            aria-checked={op.textureId === t.id}
-                            className={`slat-color-swatch${op.textureId === t.id ? ' active' : ''}`}
-                            style={{
-                              backgroundImage: `url(${import.meta.env.BASE_URL}${texturePath(t.category, t.file)})`,
-                              backgroundSize: 'cover',
-                              backgroundPosition: 'center',
-                            }}
-                            aria-label={t.name}
-                            title={t.name}
-                            onClick={() => updateOpening(wall.id, op.id, { textureId: t.id })}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  )}
 
                   {/* Style picker for doors — 2D preview tiles showing door shape */}
                   {op.type === 'door' && (
@@ -563,37 +591,6 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
                     </div>
                   )}
 
-                  {/* 3D Model picker for windows only */}
-                  {op.type === 'window' && (
-                    <div style={{ marginTop: 6 }}>
-                      <span className="coord-label">3D Style</span>
-                      <div className="slat-color-row" role="radiogroup" aria-label="Window 3D model" style={{ flexWrap: 'wrap', gap: 4 }}>
-                        <button
-                          role="radio"
-                          aria-checked={!op.modelId}
-                          className={`slat-color-swatch${!op.modelId ? ' active' : ''}`}
-                          style={{ background: '#87CEEB', fontSize: 8, color: '#444', lineHeight: 1 }}
-                          aria-label="Default (flat panel)"
-                          title="Flat Panel"
-                          onClick={() => updateOpening(wall.id, op.id, { modelId: undefined })}
-                        >
-                          —
-                        </button>
-                        {getModelsForType('window').map(m => (
-                          <button
-                            key={m.id}
-                            role="radio"
-                            aria-checked={op.modelId === m.id}
-                            className={`slat-color-swatch${op.modelId === m.id ? ' active' : ''}`}
-                            style={{ background: m.preview }}
-                            aria-label={m.name}
-                            title={m.name}
-                            onClick={() => updateOpening(wall.id, op.id, { modelId: m.id })}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  )}
 
                   {/* Procedural door colors — door slab + frame (separate swatches) */}
                   {op.type === 'door' && (op.modelId === 'custom-plain' || op.modelId === 'custom-double') && (
@@ -689,10 +686,10 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
                           role="radio"
                           aria-checked={panel.color === c.id}
                           className={`slat-color-swatch${panel.color === c.id ? ' active' : ''}`}
-                          style={{ background: c.hex }}
+                          style={{ ['--swatch' as string]: c.hex }}
                           aria-label={c.name}
                           onClick={() => updateSlatwallPanel(panel.id, { color: c.id })}
-                        />
+                        >{c.name}</button>
                       ))}
                     </div>
                     {/* Accessories for this panel */}
@@ -843,10 +840,10 @@ function SelectedPanelColorPicker() {
             role="radio"
             aria-checked={panel.color === c.id}
             className={`slat-color-swatch${panel.color === c.id ? ' active' : ''}`}
-            style={{ background: c.hex }}
+            style={{ ['--swatch' as string]: c.hex }}
             aria-label={c.name}
             onClick={() => updateSlatwallPanel(panel.id, { color: c.id })}
-          />
+          >{c.name}</button>
         ))}
       </div>
     </div>
@@ -992,17 +989,34 @@ function FlakeTexturePicker({ selectedId, onChange }: {
     <div style={{ marginTop: 6 }}>
       <div style={{ fontSize: 9, color: '#888', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>{title}</div>
       <div className="color-grid" role="radiogroup" aria-label={title}>
-        {items.map(c => (
-          <button key={c.id} type="button"
-            role="radio"
-            aria-checked={selectedId === c.id}
-            className={`color-swatch ${selectedId === c.id ? 'selected' : ''}`}
-            onClick={() => onChange(c.id)}
-            aria-label={c.name}>
-            <div className="swatch-img" style={{ backgroundImage: `url(${import.meta.env.BASE_URL}${flooringTexturePath(c)})` }} />
-            <span className="swatch-name">{c.name}</span>
-          </button>
-        ))}
+        {items.map(c => {
+          const isActive = selectedId === c.id
+          return (
+            <button key={c.id} type="button"
+              role="radio"
+              aria-checked={isActive}
+              className={`color-swatch ${isActive ? 'selected' : ''}`}
+              onClick={() => onChange(c.id)}
+              aria-label={c.name}
+              style={{ position: 'relative' }}>
+              <div className="swatch-img" style={{ backgroundImage: `url(${import.meta.env.BASE_URL}${flooringTexturePath(c)})` }} />
+              <span className="swatch-name">{c.name}</span>
+              {isActive && (
+                <span aria-hidden style={{
+                  position: 'absolute', top: 4, right: 4,
+                  width: 16, height: 16, borderRadius: '50%',
+                  background: 'var(--accent)', color: '#fff',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.35)',
+                }}>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                </span>
+              )}
+            </button>
+          )
+        })}
       </div>
     </div>
   )
@@ -1042,7 +1056,7 @@ function BBSWRow({ isSel, onClick, children }: {
 }
 
 export default function WallPanel() {
-  const { walls, addWall, selectedSlatwallPanelId, selectedWallId, ceilingHeight, setCeilingHeight } = useGarageStore()
+  const { walls, addWall, selectedSlatwallPanelId, selectedWallId, ceilingHeight, setCeilingHeight, activeTab, viewMode, elevationWallIndex } = useGarageStore()
   // Track which wall's detail section is expanded in the side panel. Starts
   // in sync with the scene's selection, then persists even when the scene
   // deselects (so clicking off a wall doesn't collapse the info dropdown).
@@ -1050,6 +1064,17 @@ export default function WallPanel() {
   useEffect(() => {
     if (selectedWallId) setExpandedWallId(selectedWallId)
   }, [selectedWallId])
+  // When the Walls tab is opened, expand the wall the user is currently
+  // editing — in wall-elevation mode that's the elevation wall, otherwise
+  // it's the scene-selected wall.
+  useEffect(() => {
+    if (activeTab !== 'walls') return
+    const elevId = walls[elevationWallIndex]?.id
+    const target = viewMode === 'elevation' && elevId
+      ? elevId
+      : (selectedWallId ?? null)
+    if (target) setExpandedWallId(target)
+  }, [activeTab, viewMode, elevationWallIndex, selectedWallId, walls])
   return (
     <div className="wall-panel">
       <TracingImageControls />

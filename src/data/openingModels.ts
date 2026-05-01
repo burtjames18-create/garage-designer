@@ -11,6 +11,13 @@ export interface OpeningModel {
   type: OpeningModelType // which opening types this model can be used for
   preview: string       // CSS color or emoji for the picker swatch
   kind?: OpeningModelKind // 'glb' (default) renders from GLB file; 'procedural' renders from primitives
+  /** Ratio of the visible FRAME extent to the GLB's full bounding box. The
+   *  Kenney building-kit GLBs include a wall panel surrounding the frame.
+   *  We render the model bigger by 1/frameScale so its visible frame fills
+   *  the user's opening rectangle, and the wall panel extends past — that
+   *  surplus is hidden behind the surrounding solid wall.
+   *  Default: 1 (no surrounding wall section). */
+  frameScale?: number
 }
 
 export const openingModels: OpeningModel[] = [
@@ -32,35 +39,9 @@ export const openingModels: OpeningModel[] = [
     kind: 'procedural',
   },
 
-  // ── Windows ────────────────────────────────────────────────────────────────
-  {
-    id: 'window-square',
-    name: 'Square Window',
-    file: 'window-square.glb',
-    type: 'window',
-    preview: '#87CEEB',
-  },
-  {
-    id: 'window-square-detailed',
-    name: 'Detailed Window',
-    file: 'window-square-detailed.glb',
-    type: 'window',
-    preview: '#5F9EA0',
-  },
-  {
-    id: 'window-wide',
-    name: 'Wide Window',
-    file: 'window-wide.glb',
-    type: 'window',
-    preview: '#4682B4',
-  },
-  {
-    id: 'window-round',
-    name: 'Round Window',
-    file: 'window-round.glb',
-    type: 'window',
-    preview: '#B0C4DE',
-  },
+  // Window 3D model variants (square / detailed / wide / round) were
+  // removed — they shipped with awkward bundled wall panels. Windows now
+  // always render as the procedural flat panel.
 ]
 
 /** Get models that match a given opening type */

@@ -9,6 +9,28 @@ export interface PatchNote {
 
 export const PATCH_NOTES: PatchNote[] = [
   {
+    version: '1.2.19',
+    date: '2026-05-01',
+    items: [
+      'Undo / Redo — arrows in the top-left of every viewer plus Ctrl+Z and Ctrl+Shift+Z',
+      'Floor plan walls render as solid mitered rectangles with proper L-corners and T-junctions',
+      'Floor plan dimensions measure the inside-face wall length',
+      'Floor plan measurement tool — toggle a draggable tape line with crosshair endpoints',
+      'Cars and 3D items show as top-down silhouettes in the floor plan, scaled to match the 3D footprint and click-and-draggable',
+      'Wall edits live in floor plan + wall edit views — 3D is for placing 3D objects',
+      '3D wireframe mode shows cross wires on walls; GLB items decimate ~60% of triangles for readable wires',
+      'Step-ups spawn as a 48"×48" square at center; clamp inside walls; settings expose Width / Depth / Height',
+      'Wall length input pulls connected walls so welded corners stay welded',
+      'Walls tab opens the editor for the wall you are currently editing',
+      'Adding a baseboard or stem wall in wall edit mode spans the full interior length',
+      'Slatwall colors render vertically with names; new panels skip openings, cabinets and existing slatwall',
+      'Window trim — 3" white casing in 3D and wall edit, with cabinets snapping flush to the outer trim edge',
+      'Garage doors are pure openings — no panel, no texture',
+      'Overhead racks ship in a single dark brushed-stainless finish',
+      'Selected wall color and baseboard color swatches show a check mark badge',
+    ],
+  },
+  {
     version: '1.2.18',
     date: '2026-04-21',
     items: [

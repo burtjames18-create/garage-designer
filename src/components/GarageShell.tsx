@@ -14,6 +14,7 @@ import { MODEL_CATALOG, CATEGORY_COLORS } from '../data/modelCatalog'
 import WildfireLift from './WildfireLift'
 import { getCachedModelUrl, restoreModelFromDB } from '../utils/importedModelCache'
 import { getLibraryModels } from '../utils/modelLibrary'
+import { getDecimatedGeometry } from '../utils/decimateCache'
 import {
   wallLengthIn, inchesToDisplay, snapToGrid,
   snapToFloorEdge, snapAngle, snapRackToWalls,
@@ -49,9 +50,9 @@ interface WallSeg { x0: number; x1: number; y0: number; y1: number }
 function buildWallSegments(wall: GarageWall, lengthIn: number): WallSeg[] {
   const wallY0 = wall.yOffset
   const wallY1 = wall.yOffset + wall.height
-  // Filter out openings that have a GLB 3D model — those don't need a wall cutout.
-  // Procedural doors (e.g. 'custom-plain') DO need a cutout because the slab sits
-  // inside the opening rather than replacing the wall panel wholesale.
+  // Cut a hole at the opening rectangle for openings that need a visible
+  // through-view. Flat-panel openings and procedural doors both need this.
+  // (GLB door models bring their own wall panel and don't need a cut.)
   const cutOpenings = wall.openings.filter(op => {
     if (!op.modelId) return true
     const entry = getOpeningModelById(op.modelId)
@@ -159,10 +160,13 @@ function getBaseboardWallOverlaps(
 }
 
 /** Outer casing extension (inches) along the wall for a given opening.
- *  Procedural doors render casing trim `CASING_W` past the cut-out; items on
- *  the wall should snap to the visible outside of the trim, not the rough
- *  opening. Returns 0 for openings without trim (GLB / flat-panel / windows). */
+ *  Items on the wall should snap to the OUTSIDE of the visible trim, not
+ *  the rough opening. Procedural doors use `PDOOR.CASING_W` (2.5"); windows
+ *  render with a 3" casing in 3D and snap targets sit at the OUTER trim
+ *  edge so cabinets butt up flush against the visible window casing. */
+const WINDOW_CASING_W = 3
 function openingCasingExt(op: WallOpening): number {
+  if (op.type === 'window') return WINDOW_CASING_W
   if (!op.modelId) return 0
   const entry = getOpeningModelById(op.modelId)
   if (entry?.kind !== 'procedural') return 0
@@ -263,6 +267,11 @@ function snapToTargets(
   excludeWallId?: string,
   excludeShapeId?: string,
   threshold = 6,
+  // Wall endpoint drags should only see centerline endpoints — that way every
+  // wall-to-wall corner snaps to the same canonical point (matching how the
+  // default project's walls connect, centerline-to-centerline). Shapes still
+  // want face-corner targets so their edges can sit flush to wall faces.
+  includeFaceCorners = true,
 ): [number, number, boolean, boolean] {
   // Deduplicate wall endpoints — merge any that are within 2" of each other
   // so a shared corner counts as ONE snap target, not two
@@ -292,23 +301,26 @@ function snapToTargets(
   // (2) Face corners — each wall endpoint offset ±halfT along the normal.
   //     These catch T-junctions where one wall abuts another wall's face
   //     at the far wall's end. Same magnetic threshold as centerline corners.
-  for (const w of walls) {
-    if (w.id === excludeWallId) continue
-    const wdx = w.x2 - w.x1, wdz = w.z2 - w.z1
-    const len = Math.hypot(wdx, wdz)
-    if (len < 0.1) continue
-    const ux = wdx / len, uz = wdz / len
-    const nx = -uz, nz = ux
-    const halfT = w.thickness / 2
-    const fc: [number, number][] = [
-      [w.x1 + nx * halfT, w.z1 + nz * halfT],
-      [w.x1 - nx * halfT, w.z1 - nz * halfT],
-      [w.x2 + nx * halfT, w.z2 + nz * halfT],
-      [w.x2 - nx * halfT, w.z2 - nz * halfT],
-    ]
-    for (const [fx, fz] of fc) {
-      const d = Math.hypot(x - fx, z - fz)
-      if (d < bestDist) { bestDist = d; bx = fx; bz = fz; snappedToWall = true; lockDirection = true }
+  //     Skipped for wall-endpoint drags (see `includeFaceCorners`).
+  if (includeFaceCorners) {
+    for (const w of walls) {
+      if (w.id === excludeWallId) continue
+      const wdx = w.x2 - w.x1, wdz = w.z2 - w.z1
+      const len = Math.hypot(wdx, wdz)
+      if (len < 0.1) continue
+      const ux = wdx / len, uz = wdz / len
+      const nx = -uz, nz = ux
+      const halfT = w.thickness / 2
+      const fc: [number, number][] = [
+        [w.x1 + nx * halfT, w.z1 + nz * halfT],
+        [w.x1 - nx * halfT, w.z1 - nz * halfT],
+        [w.x2 + nx * halfT, w.z2 + nz * halfT],
+        [w.x2 - nx * halfT, w.z2 - nz * halfT],
+      ]
+      for (const [fx, fz] of fc) {
+        const d = Math.hypot(x - fx, z - fz)
+        if (d < bestDist) { bestDist = d; bx = fx; bz = fz; snappedToWall = true; lockDirection = true }
+      }
     }
   }
 
@@ -3060,37 +3072,42 @@ function OpeningGLBModel({ modelId, widthIn, heightIn }: {
   modelId: string; widthIn: number; heightIn: number
 }) {
   const entry = getOpeningModelById(modelId)
-  if (!entry) return null
-  const { scene } = useGLTF(`${import.meta.env.BASE_URL}assets/models/${entry.file}`)
+  const url = entry?.file
+    ? `${import.meta.env.BASE_URL}assets/models/${entry.file}`
+    : `${import.meta.env.BASE_URL}assets/models/window-square.glb`
+  const { scene } = useGLTF(url)
 
   const tw = FT(widthIn), th = FT(heightIn)
+  const frameScale = entry?.frameScale ?? 1
 
-  const { s, ox, oy, oz } = useMemo(() => {
+  const { sx, sy, sz, ox, oy, oz } = useMemo(() => {
     const box = new THREE.Box3().setFromObject(scene)
     const size = box.getSize(new THREE.Vector3())
     const center = box.getCenter(new THREE.Vector3())
-    if (size.lengthSq() < 0.0001) return { s: 1, ox: 0, oy: 0, oz: 0 }
+    if (size.lengthSq() < 0.0001) return { sx: 1, sy: 1, sz: 1, ox: 0, oy: 0, oz: 0 }
 
-    // model Z = door/window width, model Y = height
-    const modelWidth  = size.z
-    const modelHeight = size.y
+    // Scale the GLB so its visible FRAME matches the opening rectangle.
+    // For Kenney windows the frame is ~40% of the bounding box (the rest
+    // is a wall panel that's hidden behind our solid wall). Dividing the
+    // target size by frameScale makes the frame fill the opening; the wall
+    // panel extends past on all sides and gets occluded.
+    const sZ = (tw / size.z) / frameScale
+    const sY = (th / size.y) / frameScale
+    const sX = sY
 
-    // Scale to match opening dimensions (width & height only, depth stays natural)
-    const scale = Math.min(tw / modelWidth, th / modelHeight)
-
-    // Offsets in group-local (model) axes to center the model at origin:
     return {
-      s: scale,
-      ox: -center.x * scale,               // center thickness (model X) at group-local 0
-      oy: -box.min.y * scale - th / 2,     // bottom of model at opening bottom
-      oz: -center.z * scale,               // center width (model Z) at group-local 0
+      sx: sX, sy: sY, sz: sZ,
+      ox: -center.x * sX,
+      oy: -box.min.y * sY - th / 2,
+      oz: -center.z * sZ,
     }
-  }, [scene, tw, th])
+  }, [scene, tw, th, frameScale])
 
   const cloned = useMemo(() => scene.clone(true), [scene])
+  if (!entry) return null
   return (
     <group rotation={[0, Math.PI / 2, 0]}>
-      <primitive object={cloned} scale={s} position={[ox, oy, oz]} />
+      <primitive object={cloned} scale={[sx, sy, sz]} position={[ox, oy, oz]} />
     </group>
   )
 }
@@ -3236,25 +3253,27 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
         )
       }
       if (entry) {
+        // Magenta placeholder so we see SOMETHING if the GLB fails to load.
+        // Replaces the previous silent `null` fallback that made model errors
+        // indistinguishable from "flat panel still showing".
+        const placeholder = (
+          <mesh>
+            <boxGeometry args={[opW, opH, opT]} />
+            <meshBasicMaterial color="#ff00aa" wireframe />
+          </mesh>
+        )
         return (
           <group key={op.id || i} position={[FT(along), FT(y), 0]} onPointerDown={onOpDown}>
-            {/* Per-opening Suspense so loading a new GLB only blanks out
-                this single window, not the entire scene. Without this, any
-                model swap triggered by changing op.modelId would suspend
-                the parent <Suspense> and unmount the whole GarageShell —
-                which made it look like the other window styles weren't
-                rendering when they were just churning the scene tree. */}
-            <Suspense fallback={null}>
-              {/* keyed on modelId so the GLB component fully remounts when
-                  the user picks a different window; useGLTF caches by URL
-                  so the swap is instant after first load. */}
-              <OpeningGLBModel
-                key={op.modelId}
-                modelId={op.modelId}
-                widthIn={op.width}
-                heightIn={op.height}
-              />
-            </Suspense>
+            <ModelErrorBoundary fallback={placeholder}>
+              <Suspense fallback={placeholder}>
+                <OpeningGLBModel
+                  key={op.modelId}
+                  modelId={op.modelId}
+                  widthIn={op.width}
+                  heightIn={op.height}
+                />
+              </Suspense>
+            </ModelErrorBoundary>
           </group>
         )
       }
@@ -3287,28 +3306,83 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
                 transparent={true} opacity={0.4} />
           }
         </mesh>
-        {/* Window frame — depth matches wall so it's flush on both faces */}
+        {/* Window casing — 1.5" trim sitting on the wall face around the
+            rough opening. Matches the elevation view's 1.5" casing so a
+            cabinet snapped to the trim's outer edge lines up flush in both
+            views. Mounted slightly proud of the wall (depth FT(0.75)) so
+            it reads as applied trim, not flush window stops.
+            Inner sash bars sit INSIDE the rough opening like before. */}
         {op.type === 'window' && !wireframe && (
           <group position={[FT(along), FT(y), 0]}>
-            {/* Top bar */}
+            {/* OUTER casing — extends 1.5" past the rough opening */}
+            {(() => {
+              // Wider 3D casing (3") visually meets adjacent cabinets that
+              // snap at the 1.5" mark — the extra 1.5" of trim closes the gap
+              // without changing where cabinets land. The casing sits PROUD
+              // of each wall face (interior + exterior copy) so it's visible
+              // — earlier the trim was buried inside the wall thickness.
+              const casW = FT(3)
+              const casD = FT(0.75)
+              const casColor = '#ffffff'
+              // Interior face Z = -thickFt/2; exterior face Z = +thickFt/2.
+              // Casing center sits casD/2 outside each face.
+              const intZ = -thickFt / 2 - casD / 2
+              const extZ =  thickFt / 2 + casD / 2
+              return (
+                <>
+                  {/* Interior-face casing */}
+                  <mesh position={[0, opH / 2 + casW / 2, intZ]}>
+                    <boxGeometry args={[opW + 2 * casW, casW, casD]} />
+                    <meshStandardMaterial color={casColor} roughness={0.5} />
+                  </mesh>
+                  <mesh position={[0, -opH / 2 - casW / 2, intZ]}>
+                    <boxGeometry args={[opW + 2 * casW, casW, casD]} />
+                    <meshStandardMaterial color={casColor} roughness={0.5} />
+                  </mesh>
+                  <mesh position={[-opW / 2 - casW / 2, 0, intZ]}>
+                    <boxGeometry args={[casW, opH, casD]} />
+                    <meshStandardMaterial color={casColor} roughness={0.5} />
+                  </mesh>
+                  <mesh position={[opW / 2 + casW / 2, 0, intZ]}>
+                    <boxGeometry args={[casW, opH, casD]} />
+                    <meshStandardMaterial color={casColor} roughness={0.5} />
+                  </mesh>
+                  {/* Exterior-face casing */}
+                  <mesh position={[0, opH / 2 + casW / 2, extZ]}>
+                    <boxGeometry args={[opW + 2 * casW, casW, casD]} />
+                    <meshStandardMaterial color={casColor} roughness={0.5} />
+                  </mesh>
+                  <mesh position={[0, -opH / 2 - casW / 2, extZ]}>
+                    <boxGeometry args={[opW + 2 * casW, casW, casD]} />
+                    <meshStandardMaterial color={casColor} roughness={0.5} />
+                  </mesh>
+                  <mesh position={[-opW / 2 - casW / 2, 0, extZ]}>
+                    <boxGeometry args={[casW, opH, casD]} />
+                    <meshStandardMaterial color={casColor} roughness={0.5} />
+                  </mesh>
+                  <mesh position={[opW / 2 + casW / 2, 0, extZ]}>
+                    <boxGeometry args={[casW, opH, casD]} />
+                    <meshStandardMaterial color={casColor} roughness={0.5} />
+                  </mesh>
+                </>
+              )
+            })()}
+            {/* INNER sash — thin frame inside the rough opening */}
             <mesh position={[0, opH / 2 - FT(1), 0]}>
               <boxGeometry args={[opW, FT(2), thickFt]} />
-              <meshStandardMaterial color="#e0e0e0" roughness={0.4} />
+              <meshStandardMaterial color="#ffffff" roughness={0.4} />
             </mesh>
-            {/* Bottom bar */}
             <mesh position={[0, -opH / 2 + FT(1), 0]}>
               <boxGeometry args={[opW, FT(2), thickFt]} />
-              <meshStandardMaterial color="#e0e0e0" roughness={0.4} />
+              <meshStandardMaterial color="#ffffff" roughness={0.4} />
             </mesh>
-            {/* Left bar */}
             <mesh position={[-opW / 2 + FT(1), 0, 0]}>
               <boxGeometry args={[FT(2), opH, thickFt]} />
-              <meshStandardMaterial color="#e0e0e0" roughness={0.4} />
+              <meshStandardMaterial color="#ffffff" roughness={0.4} />
             </mesh>
-            {/* Right bar */}
             <mesh position={[opW / 2 - FT(1), 0, 0]}>
               <boxGeometry args={[FT(2), opH, thickFt]} />
-              <meshStandardMaterial color="#e0e0e0" roughness={0.4} />
+              <meshStandardMaterial color="#ffffff" roughness={0.4} />
             </mesh>
           </group>
         )}
@@ -3415,9 +3489,10 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
           ? <meshBasicMaterial color={color} />
           : wireframe
             ? <>
-                {/* Transparent fill so the shape still occludes correctly,
-                    with crisp hard edges for the actual geometry. */}
-                <meshBasicMaterial color="#ffffff" transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
+                {/* Wireframe pass — geometry triangulation draws the cross
+                    wires across the wall face. Edges overlay keeps the hard
+                    boundaries crisp on top of the lighter triangle wires. */}
+                <meshBasicMaterial color={color} wireframe wireframeLinewidth={1} side={THREE.DoubleSide} />
                 <Edges threshold={15} color={color} />
               </>
             : hasWallTexture
@@ -3446,7 +3521,7 @@ const WallMesh = memo(function WallMesh({ wall, wireframe, blueprint, selected, 
             <boxGeometry args={[segW, segH, thickFt]} />
             {wireframe
               ? <>
-                  <meshBasicMaterial color="#ffffff" transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
+                  <meshBasicMaterial color={color} wireframe wireframeLinewidth={1} side={THREE.DoubleSide} />
                   <Edges threshold={15} color={color} />
                 </>
               : hasWallTexture ? (
@@ -4514,7 +4589,7 @@ class ModelErrorBoundary extends Component<
   render() { return this.state.hasError ? this.props.fallback : this.props.children }
 }
 
-function GLBModel({ type, tw, th, td, modelRotY }: { type: string; tw: number; th: number; td: number; modelRotY?: number }) {
+function GLBModel({ type, tw, th, td, modelRotY, wireframe }: { type: string; tw: number; th: number; td: number; modelRotY?: number; wireframe?: boolean }) {
   const { scene } = useGLTF(`${import.meta.env.BASE_URL}assets/models/${type}.glb`)
   const { scale, ox, oy, oz } = useMemo(() => {
     const box = new THREE.Box3().setFromObject(scene)
@@ -4527,14 +4602,23 @@ function GLBModel({ type, tw, th, td, modelRotY }: { type: string; tw: number; t
     const center = box.getCenter(new THREE.Vector3())
     return { scale: s, ox: -center.x * s, oy: -box.min.y * s, oz: -center.z * s }
   }, [scene, tw, th, td])
+  // Re-clone whenever the wireframe flag flips so the swapped materials apply
+  // (cached clones would otherwise keep their previous material). In wireframe
+  // mode we also swap the geometry for a decimated copy (~40% of the original
+  // triangle count) so the wires are readable instead of a solid blob.
   const cloned = useMemo(() => {
     const c = scene.clone(true)
     c.traverse((obj: any) => {
-      if (obj.isMesh) { obj.castShadow = true; obj.receiveShadow = true }
+      if (!obj.isMesh) return
+      obj.castShadow = true
+      obj.receiveShadow = true
+      if (wireframe) {
+        if (obj.geometry) obj.geometry = getDecimatedGeometry(obj.geometry)
+        obj.material = new THREE.MeshBasicMaterial({ color: '#4ab4ff', wireframe: true, side: THREE.DoubleSide })
+      }
     })
     return c
-  }, [scene])
-  // Wrap in a group so the per-model rotation offset doesn't fight with positioning
+  }, [scene, wireframe])
   return (
     <group rotation={[0, modelRotY ?? 0, 0]}>
       <primitive object={cloned} scale={scale} position={[ox, oy, oz]} />
@@ -4543,7 +4627,7 @@ function GLBModel({ type, tw, th, td, modelRotY }: { type: string; tw: number; t
 }
 
 /** Renders an imported GLB model — checks memory cache first, then IndexedDB */
-function ImportedGLBModel({ assetId }: { assetId: string }) {
+function ImportedGLBModel({ assetId, wireframe }: { assetId: string; wireframe?: boolean }) {
   const [url, setUrl] = useState<string | null>(() => getCachedModelUrl(assetId) ?? null)
   const [failed, setFailed] = useState(false)
 
@@ -4567,7 +4651,7 @@ function ImportedGLBModel({ assetId }: { assetId: string }) {
   if (failed) return null
   if (!url) return null
 
-  return <ImportedGLBModelInner url={url} category={category} />
+  return <ImportedGLBModelInner url={url} category={category} wireframe={wireframe} />
 }
 
 // Target real-world longest dimension (in feet) by category
@@ -4578,13 +4662,19 @@ const CATEGORY_TARGET_FT: Record<string, number> = {
   furniture: 5,     // ~5ft (workbench, fridge, etc.)
 }
 
-function ImportedGLBModelInner({ url, category }: { url: string; category?: string }) {
+function ImportedGLBModelInner({ url, category, wireframe }: { url: string; category?: string; wireframe?: boolean }) {
   const { scene: gltfScene } = useGLTF(url)
 
   const { obj, scale } = useMemo(() => {
     const c = gltfScene.clone(true)
     c.traverse((o: any) => {
-      if (o.isMesh) { o.castShadow = true; o.receiveShadow = true }
+      if (!o.isMesh) return
+      o.castShadow = true
+      o.receiveShadow = true
+      if (wireframe) {
+        if (o.geometry) o.geometry = getDecimatedGeometry(o.geometry)
+        o.material = new THREE.MeshBasicMaterial({ color: '#4ab4ff', wireframe: true, side: THREE.DoubleSide })
+      }
     })
 
     const box = new THREE.Box3().setFromObject(c)
@@ -4603,7 +4693,7 @@ function ImportedGLBModelInner({ url, category }: { url: string; category?: stri
     c.position.set(-center.x * s, -box.min.y * s, -center.z * s)
 
     return { obj: c, scale: s }
-  }, [gltfScene, category])
+  }, [gltfScene, category, wireframe])
 
   return <primitive object={obj} scale={scale} />
 }
@@ -4652,7 +4742,7 @@ const ItemMesh = memo(function ItemMesh({ item, selected, wireframe, onClick, on
         <>
           <ModelErrorBoundary fallback={placeholder}>
             <Suspense fallback={placeholder}>
-              <ImportedGLBModel assetId={importedAssetId} />
+              <ImportedGLBModel assetId={importedAssetId} wireframe={wireframe} />
             </Suspense>
           </ModelErrorBoundary>
           {selected && (
@@ -4666,7 +4756,7 @@ const ItemMesh = memo(function ItemMesh({ item, selected, wireframe, onClick, on
         <>
           <ModelErrorBoundary fallback={placeholder}>
             <Suspense fallback={placeholder}>
-              <GLBModel type={item.type} tw={tw} th={th} td={td} modelRotY={def?.modelRotY} />
+              <GLBModel type={item.type} tw={tw} th={th} td={td} modelRotY={def?.modelRotY} wireframe={wireframe} />
             </Suspense>
           </ModelErrorBoundary>
           {selected && (
@@ -6542,9 +6632,12 @@ export default function GarageShell() {
                   const endTarget   = lenIn - endInset - halfW
                   if (Math.abs(snappedAlong - startTarget) < CORNER_SNAP) snappedAlong = startTarget
                   else if (Math.abs(snappedAlong - endTarget) < CORNER_SNAP) snappedAlong = endTarget
-                  // Snap a cabinet side edge to any door/window opening edge.
+                  // Snap a cabinet side edge to the OUTER edge of any
+                  // door/window opening's casing trim. 8" threshold so the
+                  // snap is forgiving — cabinets land flush against the
+                  // visible window/door trim without pixel-perfect aim.
                   const snapped = snapSpanToOpeningEdges(
-                    snappedAlong - halfW, snappedAlong + halfW, wall.openings,
+                    snappedAlong - halfW, snappedAlong + halfW, wall.openings, 8,
                   )
                   snappedAlong = (snapped.start + snapped.end) / 2
                 }
@@ -6644,13 +6737,13 @@ export default function GarageShell() {
             updateWallRef.current(wd.wallId, { x1: rawX, z1: rawZ })
             setWallSnapTarget(null)
           } else {
-            const [sx, sz, cornerSnap, lockDir] = snapToTargets(rawX, rawZ, wallsRef.current, shapesRef.current, floorPtsRef.current, wd.wallId)
+            const [sx, sz, cornerSnap, lockDir] = snapToTargets(rawX, rawZ, wallsRef.current, shapesRef.current, floorPtsRef.current, wd.wallId, undefined, undefined, false)
             let nx: number, nz: number
             if (cornerSnap && lockDir) {
               [nx, nz] = [sx, sz]
             } else if (cornerSnap && !lockDir) {
               const [ax, az] = snapAngle(wd.initX2, wd.initZ2, rawX, rawZ)
-              const [fx, fz] = snapToTargets(ax, az, wallsRef.current, shapesRef.current, floorPtsRef.current, wd.wallId)
+              const [fx, fz] = snapToTargets(ax, az, wallsRef.current, shapesRef.current, floorPtsRef.current, wd.wallId, undefined, undefined, false)
               nx = fx; nz = fz
             } else {
               [nx, nz] = snapAngle(wd.initX2, wd.initZ2, sx, sz)
@@ -6677,13 +6770,13 @@ export default function GarageShell() {
             updateWallRef.current(wd.wallId, { x2: rawX, z2: rawZ })
             setWallSnapTarget(null)
           } else {
-            const [sx, sz, cornerSnap, lockDir] = snapToTargets(rawX, rawZ, wallsRef.current, shapesRef.current, floorPtsRef.current, wd.wallId)
+            const [sx, sz, cornerSnap, lockDir] = snapToTargets(rawX, rawZ, wallsRef.current, shapesRef.current, floorPtsRef.current, wd.wallId, undefined, undefined, false)
             let nx: number, nz: number
             if (cornerSnap && lockDir) {
               [nx, nz] = [sx, sz]
             } else if (cornerSnap && !lockDir) {
               const [ax, az] = snapAngle(wd.initX1, wd.initZ1, rawX, rawZ)
-              const [fx, fz] = snapToTargets(ax, az, wallsRef.current, shapesRef.current, floorPtsRef.current, wd.wallId)
+              const [fx, fz] = snapToTargets(ax, az, wallsRef.current, shapesRef.current, floorPtsRef.current, wd.wallId, undefined, undefined, false)
               nx = fx; nz = fz
             } else {
               [nx, nz] = snapAngle(wd.initX1, wd.initZ1, sx, sz)
@@ -6707,8 +6800,8 @@ export default function GarageShell() {
             updateWallRef.current(wd.wallId, { x1: rawX1, z1: rawZ1, x2: rawX2, z2: rawZ2 })
           } else {
             // Try snapping both endpoints; use whichever snapped closer to a target
-            const [sx1, sz1] = snapToTargets(rawX1, rawZ1, wallsRef.current, shapesRef.current, floorPtsRef.current, wd.wallId)
-            const [sx2, sz2] = snapToTargets(rawX2, rawZ2, wallsRef.current, shapesRef.current, floorPtsRef.current, wd.wallId)
+            const [sx1, sz1] = snapToTargets(rawX1, rawZ1, wallsRef.current, shapesRef.current, floorPtsRef.current, wd.wallId, undefined, undefined, false)
+            const [sx2, sz2] = snapToTargets(rawX2, rawZ2, wallsRef.current, shapesRef.current, floorPtsRef.current, wd.wallId, undefined, undefined, false)
             const d1 = Math.hypot(sx1 - rawX1, sz1 - rawZ1)
             const d2 = Math.hypot(sx2 - rawX2, sz2 - rawZ2)
             if (d1 < 0.1 && d2 < 0.1) {
@@ -6925,6 +7018,16 @@ export default function GarageShell() {
               const { startTrim: cAdj0, endTrim: cAdj1 } = computeCornerAdj(wall, wallsRef.current)
               if (cAdj0 > 0 && Math.abs(snappedAlong - cab.w / 2 - cAdj0) < 2) snappedAlong = cAdj0 + cab.w / 2
               if (cAdj1 > 0 && Math.abs(snappedAlong + cab.w / 2 - (len - cAdj1)) < 2) snappedAlong = len - cAdj1 - cab.w / 2
+              // Snap cabinet edge to the OUTER edge of any door/window opening
+              // casing trim on this wall — same threshold as the wall-edit
+              // drag path so 3D and elevation stay consistent.
+              if (!skipSnap) {
+                const halfW = cab.w / 2
+                const snappedSpan = snapSpanToOpeningEdges(
+                  snappedAlong - halfW, snappedAlong + halfW, wall.openings, 8,
+                )
+                snappedAlong = (snappedSpan.start + snappedSpan.end) / 2
+              }
               const cabCx = wall.x1 + snappedAlong * ux + nx * targetPerp
               const cabCz = wall.z1 + snappedAlong * uz + nz * targetPerp
 
@@ -7553,26 +7656,17 @@ export default function GarageShell() {
         </mesh>
       )}
 
-      {/* Walls */}
+      {/* Walls — click-to-select only. Wall geometry (endpoints, body
+          translation) is edited from the floor-plan and wall-edit views;
+          3D mode is reserved for moving 3D objects (openings, cabinets,
+          racks, shapes, etc.) that benefit from the perspective view. */}
       {walls.map(wall => {
         const { startTrim, endTrim } = cornerAdjMap.get(wall.id) ?? { startExt: 0, endExt: 0, startTrim: 0, endTrim: 0 }
         const isSel = selectedWallId === wall.id
-        const wallLen = Math.hypot(wall.x2 - wall.x1, wall.z2 - wall.z1)
-        // Always allow selection and drag in one click
         const handleWallDown = (e: ThreeEvent<PointerEvent>) => {
           if (e.nativeEvent.button !== 0) return  // ignore right-click (orbit) and middle-click
-          selectWall(wall.id);
-          setSelectedOpeningId(null);
-          const hit = floorHit(e.nativeEvent.clientX, e.nativeEvent.clientY)
-          if (hit) {
-            const hx = hit.x * 12, hz = hit.z * 12
-            const dStart = Math.hypot(hx - wall.x1, hz - wall.z1)
-            const dEnd   = Math.hypot(hx - wall.x2, hz - wall.z2)
-            const snap   = Math.min(30, wallLen * 0.25)  // within 30" or 25% of wall
-            if (dStart < snap && dStart <= dEnd) { startWallDrag(wall.id, 'start', e); return }
-            if (dEnd   < snap)                   { startWallDrag(wall.id, 'end',   e); return }
-          }
-          startWallDrag(wall.id, 'body', e)
+          selectWall(wall.id)
+          setSelectedOpeningId(null)
         }
         return (
           <group key={wall.id} visible={wall.visible !== false}>
@@ -7596,18 +7690,6 @@ export default function GarageShell() {
                 }
                 return { nx, nz }
               })()} />
-            {isSel && !selectedSlatwallPanelId && !selectedStainlessBacksplashPanelId && !selectedOpeningId && <>
-              <DragHandle
-                position={[FT(wall.x1), 0.08, FT(wall.z1)]}
-                color='#ff8800'
-                size={0.18}
-                onPointerDown={(e) => { selectWall(wall.id); startWallDrag(wall.id, 'start', e); }} />
-              <DragHandle
-                position={[FT(wall.x2), 0.08, FT(wall.z2)]}
-                color='#ff8800'
-                size={0.18}
-                onPointerDown={(e) => { selectWall(wall.id); startWallDrag(wall.id, 'end', e); }} />
-            </>}
           </group>
         )
       })}
