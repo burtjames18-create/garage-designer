@@ -14,6 +14,20 @@ _(No changes yet.)_
 
 ---
 
+## [1.2.20] — 2026-05-01
+
+### PDF export
+- **Cars and 3D items render on the floor-plan page** — silhouettes appear in the exported PDF the same way they do in the floor-plan viewer.
+- **Item silhouettes export as native SVG paths** so wire-mesh detail (hull + feature edges) survives the SVG → PNG → PDF pipeline.
+- **All silhouette strokes are black** (was muted blue) for readability on print.
+- **3D shot capture clears selections** before each shot and restores them after — no more random blue selection outlines or drag handles in the exported renders.
+- **Item selection rect and dashed-fallback rectangles are suppressed** in export mode so the printed plan doesn't show stray bounding boxes.
+
+### Floor plan input
+- **Right-click pans the floor plan**; left-click drags items, walls, racks, steps, openings, measurement endpoints, and the tracing image. Middle-click no longer pans.
+
+---
+
 ## [1.2.19] — 2026-05-01
 
 ### Floor plan rebuild

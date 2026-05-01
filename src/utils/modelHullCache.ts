@@ -189,8 +189,8 @@ function renderSnapshot(
 
   ctx.imageSmoothingEnabled = true
 
-  // Feature lines underneath — light, semi-transparent.
-  ctx.strokeStyle = 'rgba(60, 80, 110, 0.55)'
+  // Feature lines underneath — black, semi-transparent for readability.
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)'
   ctx.lineWidth = 2
   ctx.lineCap = 'round'
   ctx.beginPath()
@@ -200,8 +200,8 @@ function renderSnapshot(
   }
   ctx.stroke()
 
-  // Outline on top — bolder.
-  ctx.strokeStyle = 'rgba(20, 40, 80, 0.9)'
+  // Outline on top — bold black.
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.95)'
   ctx.lineWidth = 4
   ctx.beginPath()
   hull.forEach(([x, z], i) => {

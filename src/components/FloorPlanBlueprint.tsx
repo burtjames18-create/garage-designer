@@ -31,12 +31,16 @@ interface Props {
   showTracing?: boolean
   /** When true, the floor-plan measurement tool (draggable tape line) is shown. */
   showMeasureTool?: boolean
+  /** When true, item silhouettes render as native SVG <path>s instead of
+   *  `<image>` PNG snapshots. Used by the PDF export so the silhouette
+   *  rasterizes correctly when the SVG is serialized. */
+  exportMode?: boolean
 }
 
 const PAD = 40  // compact padding to keep dim tiers close to wall edges
 const SLATWALL_DEPTH = 3  // visual depth of slatwall on floor plan (inches)
 
-export default function FloorPlanBlueprint({ walls, cabinets, countertops, floorPoints, floorSteps = [], slatwallPanels = [], stainlessBacksplashPanels = [], overheadRacks = [], baseboards = [], stemWalls = [], items = [], importedAssets = [], showTracing = true, showMeasureTool = false }: Props) {
+export default function FloorPlanBlueprint({ walls, cabinets, countertops, floorPoints, floorSteps = [], slatwallPanels = [], stainlessBacksplashPanels = [], overheadRacks = [], baseboards = [], stemWalls = [], items = [], importedAssets = [], showTracing = true, showMeasureTool = false, exportMode = false }: Props) {
   const { selectRack, updateRack, selectedRackId,
     selectCabinet, updateCabinet, selectedCabinetId, snappingEnabled,
     tracingImage, updateTracingImage,
@@ -198,6 +202,7 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
 
   // Rack drag handlers
   const onRackPointerDown = useCallback((e: React.PointerEvent, rack: OverheadRack) => {
+    if (e.button !== 0) return
     e.stopPropagation()
     e.preventDefault()
     selectRack(rack.id)
@@ -238,6 +243,7 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
 
   // ── Cabinet drag (floor plan) ──────────────────────────────────────────────
   const onCabPointerDown = useCallback((e: React.PointerEvent, cab: PlacedCabinet) => {
+    if (e.button !== 0) return
     e.stopPropagation()
     e.preventDefault()
     selectCabinet(cab.id)
@@ -362,6 +368,7 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
   const onWallEndPointerDown = useCallback((
     e: React.PointerEvent, wall: GarageWall, end: 'start' | 'end',
   ) => {
+    if (e.button !== 0) return
     if (wall.locked) return
     e.stopPropagation()
     e.preventDefault()
@@ -728,6 +735,7 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
 
   // ─── Step-up body drag (translate all corners) ───────────────────────────
   const onStepBodyDown = useCallback((e: React.PointerEvent, step: FloorStep) => {
+    if (e.button !== 0) return
     if (step.locked) return
     e.stopPropagation()
     e.preventDefault()
@@ -789,6 +797,7 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
 
   // ─── Step-up corner drag (reshape single corner) ─────────────────────────
   const onStepCornerDown = useCallback((e: React.PointerEvent, step: FloorStep, cornerIdx: number) => {
+    if (e.button !== 0) return
     if (step.locked) return
     e.stopPropagation()
     e.preventDefault()
@@ -849,6 +858,7 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
 
   // ─── Opening (door/window/garage-door) drag — slide along wall ───────────
   const onOpeningDown = useCallback((e: React.PointerEvent, wall: GarageWall, op: { id: string; xOffset: number; width: number }) => {
+    if (e.button !== 0) return
     if (wall.locked) return
     e.stopPropagation()
     e.preventDefault()
@@ -1264,6 +1274,7 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
         const x0 = sx(img.x - halfW), y0 = sz(img.z - halfH)
         const x1 = sx(img.x + halfW), y1 = sz(img.z + halfH)
         const startDrag = (mode: 'move' | 'resize') => (e: React.PointerEvent) => {
+          if (e.button !== 0) return
           if (img.locked) return
           e.stopPropagation(); e.preventDefault()
           const pos = mouseToSvg(e)
@@ -1993,6 +2004,7 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
         // Drag handlers — translate the item's position (stored in feet) by
         // the cursor's delta in inches converted to feet.
         const onItemDown = (e: React.PointerEvent) => {
+          if (e.button !== 0) return
           e.stopPropagation()
           e.preventDefault()
           selectItem(item.id)
@@ -2063,6 +2075,33 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
           const totalRotDeg = ((rotY + (def?.modelRotY ?? 0)) * 180) / Math.PI
           const selW = footprintW * scale
           const selD = footprintD * scale
+          // Export mode: render hull + feature edges as native SVG <path>s
+          // so the silhouette serializes correctly when the SVG is converted
+          // to a PNG/PDF (data-URL <image> tags don't always rasterize
+          // through the serialize → <img> → canvas pipeline used by export).
+          if (exportMode && hull.points.length >= 3) {
+            const sf = Math.max(footprintW, footprintD) * scale
+            const featureD: string[] = []
+            if (hull.featureLines) {
+              for (const [x1, z1, x2, z2] of hull.featureLines) {
+                featureD.push(`M${(x1 * sf).toFixed(2)} ${(z1 * sf).toFixed(2)}L${(x2 * sf).toFixed(2)} ${(z2 * sf).toFixed(2)}`)
+              }
+            }
+            let outlineD = ''
+            hull.points.forEach(([x, z], i) => {
+              outlineD += `${i === 0 ? 'M' : 'L'}${(x * sf).toFixed(2)} ${(z * sf).toFixed(2)}`
+            })
+            outlineD += 'Z'
+            return (
+              <g key={`item-${item.id}`} pointerEvents="none"
+                transform={`translate(${cxPx} ${czPx}) rotate(${totalRotDeg})`}>
+                {featureD.length > 0 && (
+                  <path d={featureD.join(' ')} fill="none" stroke="#000000" strokeWidth={0.45} opacity={0.65} />
+                )}
+                <path d={outlineD} fill="none" stroke="#000000" strokeWidth={0.9} opacity={0.95} />
+              </g>
+            )
+          }
           return (
             <g key={`item-${item.id}`}
               transform={`translate(${cxPx} ${czPx}) rotate(${totalRotDeg})`}
@@ -2075,7 +2114,7 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
                 x={-halfWPx} y={-halfDPx} width={halfWPx * 2} height={halfDPx * 2}
                 opacity={isSel ? 1 : 0.85}
                 preserveAspectRatio="none" />
-              {isSel && (
+              {isSel && !exportMode && (
                 <rect x={-selW / 2} y={-selD / 2} width={selW} height={selD}
                   fill="none" stroke="#0a84ff" strokeWidth={0.8}
                   strokeDasharray="3 2" pointerEvents="none" />
@@ -2083,7 +2122,12 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
             </g>
           )
         }
-        // Fallback rectangle while loading or for items without a cached hull.
+        // Fallback rectangle while the model hull is loading (or for items
+        // with no cached hull). In export mode we suppress this entirely —
+        // a dashed bounding box looks like a stray selection on a printed
+        // PDF. On screen, render the dashed rect so the user knows the
+        // item is there.
+        if (exportMode) return null
         const hw = w / 2, hd = d / 2
         const polyPts = [[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd]].map(([lx, lz]) => place(lx, lz))
         const pts = polyPts.map(([x, z]) => `${sx(x)},${sz(z)}`).join(' ')
@@ -2342,6 +2386,7 @@ export default function FloorPlanBlueprint({ walls, cabinets, countertops, floor
         const midZ = (A.sz + B.sz) / 2
         const angDeg = readableAngle(Math.atan2(B.sz - A.sz, B.sx - A.sx) * 180 / Math.PI)
         const onMeasureDown = (end: 'a' | 'b') => (e: React.PointerEvent) => {
+          if (e.button !== 0) return
           e.stopPropagation()
           e.preventDefault()
           const pos = mouseToSvg(e)

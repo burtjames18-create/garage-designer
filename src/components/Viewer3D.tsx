@@ -409,6 +409,44 @@ function ExportCapture({ orbitRef }: { orbitRef: React.RefObject<any> }) {
       const origTarget = orbitRef.current?.target?.clone() ?? new THREE.Vector3(0, chFt * 0.35, 0)
       const origViewMode = useGarageStore.getState().viewMode
 
+      // Clear all selections so the captured shots don't include selection
+      // highlights, drag handles, blue outlines, etc. Snapshot the prior
+      // ids and restore them after all shots are taken.
+      const stateBefore = useGarageStore.getState()
+      const origSelections = {
+        selectedWallId: stateBefore.selectedWallId,
+        selectedShapeId: stateBefore.selectedShapeId,
+        selectedSlatwallPanelId: stateBefore.selectedSlatwallPanelId,
+        selectedStainlessBacksplashPanelId: stateBefore.selectedStainlessBacksplashPanelId,
+        selectedAccessoryId: stateBefore.selectedAccessoryId,
+        selectedCabinetId: stateBefore.selectedCabinetId,
+        selectedCountertopId: stateBefore.selectedCountertopId,
+        selectedBaseboardId: stateBefore.selectedBaseboardId,
+        selectedStemWallId: stateBefore.selectedStemWallId,
+        selectedFloorStepId: stateBefore.selectedFloorStepId,
+        selectedCeilingLightId: stateBefore.selectedCeilingLightId,
+        selectedItemId: stateBefore.selectedItemId,
+        selectedRackId: stateBefore.selectedRackId,
+      }
+      useGarageStore.setState({
+        selectedWallId: null,
+        selectedShapeId: null,
+        selectedSlatwallPanelId: null,
+        selectedStainlessBacksplashPanelId: null,
+        selectedAccessoryId: null,
+        selectedCabinetId: null,
+        selectedCountertopId: null,
+        selectedBaseboardId: null,
+        selectedStemWallId: null,
+        selectedFloorStepId: null,
+        selectedCeilingLightId: null,
+        selectedItemId: null,
+        selectedRackId: null,
+      })
+      // Wait a frame so React re-renders the scene without the highlights
+      // before the first shot is captured.
+      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+
       for (let i = 0; i < shots.length; i++) {
         if (onProgress) onProgress(i)
         const shot = shots[i]
@@ -447,6 +485,9 @@ function ExportCapture({ orbitRef }: { orbitRef: React.RefObject<any> }) {
       }
       camera.lookAt(origTarget)
       if (orbitRef.current) orbitRef.current.enabled = true
+
+      // Restore selections that were cleared before capture started.
+      useGarageStore.setState(origSelections)
 
       return results
     }
@@ -536,9 +577,9 @@ export default function Viewer3D() {
       forceUpdate(n => n + 1)
     }
     const handlePointerDown = (e: React.PointerEvent) => {
-      // Only pan on right-click (2) or middle-click (1). Left-click (0) is
-      // reserved for cabinet/rack drag inside the SVG.
-      if (e.button !== 1 && e.button !== 2) return
+      // Only pan the floor plan on right-click. Left-click is reserved for
+      // dragging items, walls, and other entities inside the SVG.
+      if (e.button !== 2) return
       e.preventDefault()
       fpDragging.current = true
       fpLastMouse.current = [e.clientX, e.clientY]

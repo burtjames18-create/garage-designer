@@ -9,6 +9,17 @@ export interface PatchNote {
 
 export const PATCH_NOTES: PatchNote[] = [
   {
+    version: '1.2.20',
+    date: '2026-05-01',
+    items: [
+      'PDF export — cars and 3D items now appear on the floor plan page with the same wire-mesh silhouette',
+      'PDF export — silhouettes drawn in black for readability',
+      'PDF export — selections cleared during 3D shot capture so no stray blue outlines or drag handles show',
+      'PDF export — no more bounding-box rectangles around items',
+      'Floor plan input — right-click pans, left-click drags items / walls / racks / steps / openings / measurement endpoints',
+    ],
+  },
+  {
     version: '1.2.19',
     date: '2026-05-01',
     items: [
