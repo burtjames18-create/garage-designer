@@ -14,6 +14,24 @@ _(No changes yet.)_
 
 ---
 
+## [1.2.21] — 2026-05-01
+
+### Wall fixtures
+- **New "Wall Fixtures" sidebar section** consolidates breaker panels, outlets, water heaters, and a generic fridge under one expandable group on each wall.
+- **Single + double breaker panels** as flat wall props with rounded body and door, light grey finish, ~3" black handles that protrude only ~0.09" from the door.
+- **Duplex outlet** loaded from a bundled GLB, ~2.75" × 4.5" plate, spawns at standard 16" outlet height, 180° flipped so the front faces into the garage.
+- **Mini water heater** loaded from a bundled GLB, sized roughly to a single breaker panel, depth squashed to 50% so it barely protrudes from the wall.
+- **Generic fridge** loaded from a bundled GLB, free-standing 30 × 65 × 30 prop that spawns flush to the active wall in wall edit mode and drags freely on the floor like a cabinet. Auto-offsets in front of any baseboard or stem wall on the spawn wall.
+- **Drag any fixture in 3D** by clicking and sliding along the wall (or floor for the fridge); they snap to the grid and clamp to the wall span.
+- **Drag in wall edit mode** with horizontal + vertical movement (vertical for wall-attached, horizontal-along-wall for the fridge).
+- **Pink dimension labels on selected fixtures** show height from the floor and distance from the nearest wall edge.
+- **Selecting a fixture no longer highlights the entire wall** — only the fixture itself shows the selection outline.
+
+### Sidebar cleanup
+- **Removed Fill Lowers / Fill Uppers / Fill Lockers** quick-action buttons and the supporting `cabinetFill.ts` utility.
+
+---
+
 ## [1.2.20] — 2026-05-01
 
 ### PDF export

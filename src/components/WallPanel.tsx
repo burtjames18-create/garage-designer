@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react'
-import { useGarageStore } from '../store/garageStore'
+import { useGarageStore, BREAKER_PANEL_DIMS, WALL_OUTLET_DIMS, WALL_WATER_HEATER_DIMS, WALL_FRIDGE_DIMS } from '../store/garageStore'
 import { useScrollToSelected } from '../hooks/useScrollToSelected'
 import type { GarageWall } from '../store/garageStore'
 import MeasureInput from './MeasureInput'
@@ -12,7 +12,6 @@ import { getModelsForType } from '../data/openingModels'
 import { SLATWALL_ACCESSORIES } from '../data/slatwallAccessories'
 import { IconDelete, IconDuplicate, IconLocked, IconUnlocked } from './Icons'
 import TracingImageControls from './TracingImageControls'
-import { planWallFill, type FillStyle } from '../utils/cabinetFill'
 // BaseboardStemWallList below uses IconLocked/IconUnlocked too, so we just reuse
 // the imports already brought in for WallEditor.
 import ConfirmDialog from './ConfirmDialog'
@@ -161,8 +160,12 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
     slatwallPanels, addSlatwallPanel, updateSlatwallPanel, deleteSlatwallPanel, selectSlatwallPanel, selectedSlatwallPanelId,
     slatwallAccessories, addSlatwallAccessory, deleteSlatwallAccessory,
     stainlessBacksplashPanels, addStainlessBacksplashPanel, updateStainlessBacksplashPanel, deleteStainlessBacksplashPanel, selectStainlessBacksplashPanel, selectedStainlessBacksplashPanelId,
+    breakerPanels, addBreakerPanel, updateBreakerPanel, deleteBreakerPanel, selectBreakerPanel, selectedBreakerPanelId,
+    wallOutlets, addWallOutlet, updateWallOutlet, deleteWallOutlet, selectWallOutlet, selectedWallOutletId,
+    wallWaterHeaters, addWallWaterHeater, updateWallWaterHeater, deleteWallWaterHeater, selectWallWaterHeater, selectedWallWaterHeaterId,
+    fridges, addFridge, deleteFridge, selectFridge, selectedFridgeId,
     importedAssets,
-    addBaseboard, addStemWall, addCabinet, walls,
+    addBaseboard, addStemWall, walls,
   } = useGarageStore()
   // Compute the interior span of a wall — trims each end by the connected
   // wall's thickness/2 so baseboard / stem-wall pieces sit between adjacent
@@ -232,6 +235,12 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
     a.assetType === 'wall-texture' || a.assetType === 'floor-texture' || a.assetType === 'texture')
   const wallPanels = slatwallPanels.filter(p => p.wallId === wall.id)
   const wallBacksplashes = stainlessBacksplashPanels.filter(p => p.wallId === wall.id)
+  const wallBreakers = breakerPanels.filter(p => p.wallId === wall.id)
+  const wallOutletsList = wallOutlets.filter(o => o.wallId === wall.id)
+  const wallHeatersList = wallWaterHeaters.filter(h => h.wallId === wall.id)
+  // Fridges are free-standing (not wall-attached); show the global list in the
+  // sidebar regardless of which wall is open.
+  const wallFridgesList = fridges
   const selected = selectedWallId === wall.id
   // Detail section stays open even after the wall is deselected in the scene;
   // it only closes when another wall is expanded or the user toggles it off.
@@ -243,6 +252,11 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
   const backsplashRef = useRef<HTMLDivElement>(null)
   const hasSlatwallSelected = wallPanels.some(p => p.id === selectedSlatwallPanelId)
   const hasBacksplashSelected = wallBacksplashes.some(p => p.id === selectedStainlessBacksplashPanelId)
+  const hasBreakerSelected = wallBreakers.some(p => p.id === selectedBreakerPanelId)
+  const hasOutletSelected = wallOutletsList.some(o => o.id === selectedWallOutletId)
+  const hasHeaterSelected = wallHeatersList.some(h => h.id === selectedWallWaterHeaterId)
+  const hasFridgeSelected = wallFridgesList.some(f => f.id === selectedFridgeId)
+  const breakerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (hasSlatwallSelected && slatwallRef.current) {
@@ -255,6 +269,12 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
       backsplashRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }
   }, [hasBacksplashSelected, selectedStainlessBacksplashPanelId])
+
+  useEffect(() => {
+    if ((hasBreakerSelected || hasOutletSelected || hasHeaterSelected || hasFridgeSelected) && breakerRef.current) {
+      breakerRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }, [hasBreakerSelected, hasOutletSelected, hasHeaterSelected, hasFridgeSelected, selectedBreakerPanelId, selectedWallOutletId, selectedWallWaterHeaterId, selectedFridgeId])
 
   const handleLengthChange = (newLen: number) => {
     if (newLen <= 0) return
@@ -372,32 +392,6 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
               className="stem-wall-tex-btn"
               onClick={e => { e.stopPropagation(); addStemWallForWall(wall.id) }}
             >+ Stem Wall</button>
-          </div>
-
-          {/* Fill-with-cabinets quick actions. Each button auto-packs the wall's
-              open stretches (gaps between doors/windows) with stock-size
-              cabinets of the chosen style. */}
-          <div className="stem-wall-texture-row" style={{ marginBottom: 10, gap: 6, flexWrap: 'wrap' }}>
-            {(['lower', 'upper', 'locker'] as FillStyle[]).map(style => {
-              const handleFill = (e: React.MouseEvent) => {
-                e.stopPropagation()
-                const plan = planWallFill({ wall, style })
-                if (plan.length === 0) {
-                  showToast(`No room for ${style} cabinets on this wall`, 'info')
-                  return
-                }
-                for (const p of plan) addCabinet(p.preset, p.x, p.z, p.rotY)
-                showToast(`Placed ${plan.length} ${style} cabinet${plan.length === 1 ? '' : 's'}`, 'info')
-              }
-              const label = style === 'lower' ? 'Lowers' : style === 'upper' ? 'Uppers' : 'Lockers'
-              return (
-                <button
-                  key={style}
-                  className="stem-wall-tex-btn"
-                  onClick={handleFill}
-                >Fill {label}</button>
-              )
-            })}
           </div>
 
           {/* Appearance */}
@@ -804,6 +798,141 @@ function WallEditor({ wall, expandedWallId, setExpandedWallId }: {
                         </div>
                       )
                     })()}
+                  </div>
+                </div>
+              )
+            })}
+          </Section>
+
+          {/* Wall fixtures — breaker panels, outlets, water heaters, fridges */}
+          <Section title={`Wall Fixtures (${wallBreakers.length + wallOutletsList.length + wallHeatersList.length + wallFridgesList.length})`} forceOpen={hasBreakerSelected || hasOutletSelected || hasHeaterSelected || hasFridgeSelected} sectionRef={breakerRef}>
+            <div className="openings-header" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <button className="opening-add-btn" onClick={() => addBreakerPanel(wall.id, 'single')}>+ Single</button>
+              <button className="opening-add-btn" onClick={() => addBreakerPanel(wall.id, 'double')}>+ Double</button>
+              <button className="opening-add-btn" onClick={() => addWallOutlet(wall.id)}>+ Outlet</button>
+              <button className="opening-add-btn" onClick={() => addWallWaterHeater(wall.id)}>+ Water Heater</button>
+              <button className="opening-add-btn" onClick={() => addFridge(wall.id)}>+ Generic Fridge</button>
+            </div>
+            {wallBreakers.map(panel => {
+              const dims = BREAKER_PANEL_DIMS[panel.kind]
+              return (
+                <div key={panel.id}
+                  className={`opening-item${selectedBreakerPanelId === panel.id ? ' selected' : ''}`}
+                  onClick={() => selectBreakerPanel(panel.id)}
+                >
+                  <div className="opening-item-header">
+                    <span className="opening-type-label">
+                      Breaker ({panel.kind}) — {inchesToDisplay(dims.w)} × {inchesToDisplay(dims.h)}
+                    </span>
+                    <button className="delete-btn" onClick={e => { e.stopPropagation(); deleteBreakerPanel(panel.id) }}
+                      aria-label="Delete breaker panel">
+                      <IconDelete size={10} />
+                    </button>
+                  </div>
+                  <div onClick={e => e.stopPropagation()}>
+                    <div className="dim-grid">
+                      <MeasureInput label="Left Offset" inches={panel.alongStart}
+                        onChange={v => {
+                          const clamped = Math.max(0, Math.min(v, len - dims.w))
+                          updateBreakerPanel(panel.id, { alongStart: clamped })
+                        }}
+                        min={0} max={len} compact />
+                      <MeasureInput label="Bottom" inches={panel.yBottom}
+                        onChange={v => {
+                          const clamped = Math.max(0, Math.min(v, wall.height - dims.h))
+                          updateBreakerPanel(panel.id, { yBottom: clamped })
+                        }}
+                        min={0} max={wall.height} compact />
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+            {wallOutletsList.map(outlet => {
+              const dims = WALL_OUTLET_DIMS
+              return (
+                <div key={outlet.id}
+                  className={`opening-item${selectedWallOutletId === outlet.id ? ' selected' : ''}`}
+                  onClick={() => selectWallOutlet(outlet.id)}
+                >
+                  <div className="opening-item-header">
+                    <span className="opening-type-label">
+                      Outlet — {inchesToDisplay(dims.w)} × {inchesToDisplay(dims.h)}
+                    </span>
+                    <button className="delete-btn" onClick={e => { e.stopPropagation(); deleteWallOutlet(outlet.id) }}
+                      aria-label="Delete wall outlet">
+                      <IconDelete size={10} />
+                    </button>
+                  </div>
+                  <div onClick={e => e.stopPropagation()}>
+                    <div className="dim-grid">
+                      <MeasureInput label="Left Offset" inches={outlet.alongStart}
+                        onChange={v => {
+                          const clamped = Math.max(0, Math.min(v, len - dims.w))
+                          updateWallOutlet(outlet.id, { alongStart: clamped })
+                        }}
+                        min={0} max={len} compact />
+                      <MeasureInput label="Bottom" inches={outlet.yBottom}
+                        onChange={v => {
+                          const clamped = Math.max(0, Math.min(v, wall.height - dims.h))
+                          updateWallOutlet(outlet.id, { yBottom: clamped })
+                        }}
+                        min={0} max={wall.height} compact />
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+            {wallHeatersList.map(heater => {
+              const dims = WALL_WATER_HEATER_DIMS
+              return (
+                <div key={heater.id}
+                  className={`opening-item${selectedWallWaterHeaterId === heater.id ? ' selected' : ''}`}
+                  onClick={() => selectWallWaterHeater(heater.id)}
+                >
+                  <div className="opening-item-header">
+                    <span className="opening-type-label">
+                      Water Heater — {inchesToDisplay(dims.w)} × {inchesToDisplay(dims.h)}
+                    </span>
+                    <button className="delete-btn" onClick={e => { e.stopPropagation(); deleteWallWaterHeater(heater.id) }}
+                      aria-label="Delete water heater">
+                      <IconDelete size={10} />
+                    </button>
+                  </div>
+                  <div onClick={e => e.stopPropagation()}>
+                    <div className="dim-grid">
+                      <MeasureInput label="Left Offset" inches={heater.alongStart}
+                        onChange={v => {
+                          const clamped = Math.max(0, Math.min(v, len - dims.w))
+                          updateWallWaterHeater(heater.id, { alongStart: clamped })
+                        }}
+                        min={0} max={len} compact />
+                      <MeasureInput label="Bottom" inches={heater.yBottom}
+                        onChange={v => {
+                          const clamped = Math.max(0, Math.min(v, wall.height - dims.h))
+                          updateWallWaterHeater(heater.id, { yBottom: clamped })
+                        }}
+                        min={0} max={wall.height} compact />
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+            {wallFridgesList.map(fridge => {
+              const dims = WALL_FRIDGE_DIMS
+              return (
+                <div key={fridge.id}
+                  className={`opening-item${selectedFridgeId === fridge.id ? ' selected' : ''}`}
+                  onClick={() => selectFridge(fridge.id)}
+                >
+                  <div className="opening-item-header">
+                    <span className="opening-type-label">
+                      Generic Fridge — {inchesToDisplay(dims.w)} × {inchesToDisplay(dims.h)}
+                    </span>
+                    <button className="delete-btn" onClick={e => { e.stopPropagation(); deleteFridge(fridge.id) }}
+                      aria-label="Delete fridge">
+                      <IconDelete size={10} />
+                    </button>
                   </div>
                 </div>
               )

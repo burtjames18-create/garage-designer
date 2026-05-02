@@ -4,7 +4,8 @@ import { useTexture, Text, useGLTF, MeshReflectorMaterial, RoundedBox, Edges } f
 import { useThree, useFrame } from '@react-three/fiber'
 import type { ThreeEvent } from '@react-three/fiber'
 import { useGarageStore, COUNTERTOP_DEPTH, COUNTERTOP_THICKNESS, CEILING_LIGHT_W, CEILING_LIGHT_L, CEILING_LIGHT_TH, RACK_DECK_THICKNESS, RACK_LEG_SIZE } from '../store/garageStore'
-import type { GarageWall, GarageShape, FloorPoint, SlatwallPanel, StainlessBacksplashPanel, SlatwallAccessory, PlacedCabinet, Countertop, CeilingLight, PlacedItem, FloorStep, OverheadRack, WallOpening } from '../store/garageStore'
+import type { GarageWall, GarageShape, FloorPoint, SlatwallPanel, StainlessBacksplashPanel, SlatwallAccessory, PlacedCabinet, Countertop, CeilingLight, PlacedItem, FloorStep, OverheadRack, WallOpening, BreakerPanel, WallOutlet, WallWaterHeater, PlacedFridge } from '../store/garageStore'
+import { BREAKER_PANEL_DIMS, WALL_OUTLET_DIMS, WALL_WATER_HEATER_DIMS, WALL_FRIDGE_DIMS } from '../store/garageStore'
 import { stepBounds } from '../store/garageStore'
 import { slatwallColors } from '../data/slatwallColors'
 import { getTextureById, texturePath } from '../data/textureCatalog'
@@ -3933,6 +3934,358 @@ const StainlessBacksplashPanelMesh = memo(function StainlessBacksplashPanelMesh(
   )
 })
 
+// Rounded rectangle Shape for ExtrudeGeometry. Centered on (0,0).
+function roundedRectShape(w: number, h: number, r: number): THREE.Shape {
+  const s = new THREE.Shape()
+  const x = -w / 2, y = -h / 2
+  const rr = Math.min(r, w / 2, h / 2)
+  s.moveTo(x + rr, y)
+  s.lineTo(x + w - rr, y)
+  s.quadraticCurveTo(x + w, y, x + w, y + rr)
+  s.lineTo(x + w, y + h - rr)
+  s.quadraticCurveTo(x + w, y + h, x + w - rr, y + h)
+  s.lineTo(x + rr, y + h)
+  s.quadraticCurveTo(x, y + h, x, y + h - rr)
+  s.lineTo(x, y + rr)
+  s.quadraticCurveTo(x, y, x + rr, y)
+  return s
+}
+
+// ─── Breaker panel mesh — slim rounded prop on wall face with rounded door(s) ──
+const BreakerPanelMesh = memo(function BreakerPanelMesh({ panel, wall, wireframe, selected, onClick, onPointerDown }: {
+  panel: BreakerPanel; wall: GarageWall; wireframe: boolean; selected: boolean
+  onClick: () => void
+  onPointerDown?: (e: ThreeEvent<PointerEvent>) => void
+}) {
+  const dims = BREAKER_PANEL_DIMS[panel.kind]
+  const dx = wall.x2 - wall.x1, dz = wall.z2 - wall.z1
+  const lengthIn = Math.hypot(dx, dz)
+  const rotY  = -Math.atan2(dz, dx)
+  const midX  = FT((wall.x1 + wall.x2) / 2)
+  const midZ  = FT((wall.z1 + wall.z2) / 2)
+
+  const sideSign = panel.side === 'exterior' ? -1 : 1
+  const bodyDepth = dims.d  // 0.5" — barely protrudes from wall
+  const localX = FT(-lengthIn / 2 + panel.alongStart + dims.w / 2)
+  const localY = FT(panel.yBottom + dims.h / 2)
+  // Back face of body sits flush with wall surface; body extrudes outward.
+  const wallFaceZ = sideSign * FT(wall.thickness / 2)
+
+  // Real-world geometry (inches).
+  const doorInset    = 0.6    // bezel width around door
+  const doorProtrude = 0.15   // door face proud of body face
+  const handleW = 0.75, handleH = 3.0, handleD = 0.0875
+
+  const bodyRadius = 0.4   // outer corner radius (inches)
+  const doorRadius = 0.3
+  const bevelSize  = 0.08  // soft bevel on extrude edges
+
+  const dFt = FT(bodyDepth)
+  const bodyHex = '#cfcdc6'
+  const doorHex = '#cfcdc6'
+  const handleHex = '#6a6a6a'
+
+  const innerW = dims.w - doorInset * 2
+  const innerH = dims.h - doorInset * 2
+
+  // Build extruded shapes once per dim/kind change.
+  const bodyGeo = useMemo(() => {
+    const shape = roundedRectShape(FT(dims.w), FT(dims.h), FT(bodyRadius))
+    const geo = new THREE.ExtrudeGeometry(shape, {
+      depth: dFt, bevelEnabled: true,
+      bevelThickness: FT(bevelSize), bevelSize: FT(bevelSize),
+      bevelSegments: 2, curveSegments: 8,
+    })
+    return geo
+  }, [dims.w, dims.h, dFt])
+
+  const doorGeoSingle = useMemo(() => {
+    if (panel.kind !== 'single') return null
+    const shape = roundedRectShape(FT(innerW), FT(innerH), FT(doorRadius))
+    return new THREE.ExtrudeGeometry(shape, {
+      depth: FT(doorProtrude), bevelEnabled: true,
+      bevelThickness: FT(bevelSize * 0.6), bevelSize: FT(bevelSize * 0.6),
+      bevelSegments: 2, curveSegments: 8,
+    })
+  }, [panel.kind, innerW, innerH])
+
+  const doorGeoDouble = useMemo(() => {
+    if (panel.kind !== 'double') return null
+    const seamGap = 0.25
+    const doorW = (innerW - seamGap) / 2
+    const shape = roundedRectShape(FT(doorW), FT(innerH), FT(doorRadius))
+    return new THREE.ExtrudeGeometry(shape, {
+      depth: FT(doorProtrude), bevelEnabled: true,
+      bevelThickness: FT(bevelSize * 0.6), bevelSize: FT(bevelSize * 0.6),
+      bevelSegments: 2, curveSegments: 8,
+    })
+  }, [panel.kind, innerW, innerH])
+
+  const matBody   = <meshStandardMaterial wireframe={wireframe} color={bodyHex}   roughness={0.7} metalness={0.05}
+                      emissive={selected ? '#4488bb' : '#000000'} emissiveIntensity={selected ? 0.25 : 0} />
+  const matDoor   = <meshStandardMaterial wireframe={wireframe} color={doorHex}   roughness={0.6} metalness={0.05} />
+  const matHandle = <meshStandardMaterial wireframe={wireframe} color={handleHex} roughness={0.4} metalness={0.2} />
+
+  // ExtrudeGeometry only grows along +Z. Wrap everything in a group that scales Z
+  // by sideSign so interior (+1) and exterior (-1) both extrude outward from the wall.
+  // Inside that group, place pieces at z = (offset from wall face).
+  const handleZ = dFt + FT(doorProtrude) + FT(handleD) / 2
+
+  return (
+    <group position={[midX, 0, midZ]} rotation={[0, rotY, 0]}>
+      <group scale={[1, 1, sideSign]} position={[0, 0, FT(wall.thickness / 2)]}>
+        <group onClick={(e) => { e.stopPropagation(); onClick() }} onPointerDown={onPointerDown}>
+          {/* Body — rounded extruded plate, back face at wall surface */}
+          <mesh position={[localX, localY, 0]} geometry={bodyGeo} castShadow receiveShadow>
+            {matBody}
+          </mesh>
+
+          {panel.kind === 'single' && doorGeoSingle && (
+            <>
+              <mesh position={[localX, localY, dFt]} geometry={doorGeoSingle}>
+                {matDoor}
+              </mesh>
+              {/* Handle on right edge mid-height */}
+              <mesh position={[localX + FT(innerW / 2 - 1.0), localY, handleZ]}>
+                <boxGeometry args={[FT(handleW), FT(handleH), FT(handleD)]} />
+                {matHandle}
+              </mesh>
+            </>
+          )}
+
+          {panel.kind === 'double' && doorGeoDouble && (() => {
+            const seamGap = 0.25
+            const doorW = (innerW - seamGap) / 2
+            const leftCx  = localX - FT(doorW / 2 + seamGap / 2)
+            const rightCx = localX + FT(doorW / 2 + seamGap / 2)
+            const leftHandleCx  = localX - FT(seamGap / 2 + 1.0)
+            const rightHandleCx = localX + FT(seamGap / 2 + 1.0)
+            return (
+              <>
+                <mesh position={[leftCx,  localY, dFt]} geometry={doorGeoDouble}>{matDoor}</mesh>
+                <mesh position={[rightCx, localY, dFt]} geometry={doorGeoDouble}>{matDoor}</mesh>
+                <mesh position={[leftHandleCx,  localY, handleZ]}>
+                  <boxGeometry args={[FT(handleW), FT(handleH), FT(handleD)]} />
+                  {matHandle}
+                </mesh>
+                <mesh position={[rightHandleCx, localY, handleZ]}>
+                  <boxGeometry args={[FT(handleW), FT(handleH), FT(handleD)]} />
+                  {matHandle}
+                </mesh>
+              </>
+            )
+          })()}
+        </group>
+      </group>
+    </group>
+  )
+})
+
+// ─── Wall outlet mesh — duplex outlet GLB mounted flush on wall surface ─────
+const WallOutletMesh = memo(function WallOutletMesh({ outlet, wall, wireframe, selected, onClick, onPointerDown }: {
+  outlet: WallOutlet; wall: GarageWall; wireframe: boolean; selected: boolean
+  onClick: () => void
+  onPointerDown?: (e: ThreeEvent<PointerEvent>) => void
+}) {
+  const dims = WALL_OUTLET_DIMS
+  const { scene } = useGLTF(`${import.meta.env.BASE_URL}assets/models/outlet.glb`)
+
+  const dx = wall.x2 - wall.x1, dz = wall.z2 - wall.z1
+  const lengthIn = Math.hypot(dx, dz)
+  const rotY  = -Math.atan2(dz, dx)
+  const midX  = FT((wall.x1 + wall.x2) / 2)
+  const midZ  = FT((wall.z1 + wall.z2) / 2)
+
+  const sideSign = outlet.side === 'exterior' ? -1 : 1
+  const localX = FT(-lengthIn / 2 + outlet.alongStart + dims.w / 2)
+  const localY = FT(outlet.yBottom + dims.h / 2)
+
+  // Fit the model into the target box (w × h × d) with the back face flush
+  // against the wall surface. Same auto-fit pattern as GLBModel.
+  const tw = FT(dims.w), th = FT(dims.h), td = FT(dims.d)
+  const { scale, ox, oy, oz } = useMemo(() => {
+    const box = new THREE.Box3().setFromObject(scene)
+    const size = box.getSize(new THREE.Vector3())
+    if (size.lengthSq() < 0.0001) return { scale: 1, ox: 0, oy: 0, oz: 0 }
+    // Match the largest model axis to the largest target axis (preserves aspect).
+    const maxModel = Math.max(size.x, size.y, size.z)
+    const maxTarget = Math.max(tw, th, td)
+    const s = maxTarget / maxModel
+    const center = box.getCenter(new THREE.Vector3())
+    return {
+      scale: s,
+      // After the inner Y-rotation flips X and Z, we negate ox/oz so the
+      // resulting world position still centers correctly. The model's back
+      // face — originally at box.max.z — needs to land at z=0 (wall surface)
+      // after rotation, which means oz = box.max.z * s (not -min.z).
+      ox: center.x * s,
+      oy: -center.y * s,
+      oz: box.max.z * s,
+    }
+  }, [scene, tw, th, td])
+
+  const cloned = useMemo(() => {
+    const c = scene.clone(true)
+    c.traverse((obj: any) => {
+      if (!obj.isMesh) return
+      obj.castShadow = true
+      obj.receiveShadow = true
+      if (wireframe) {
+        obj.material = new THREE.MeshBasicMaterial({ color: '#4ab4ff', wireframe: true, side: THREE.DoubleSide })
+      } else if (selected) {
+        // Tint selected by cloning material and adding emissive.
+        const orig = obj.material as THREE.MeshStandardMaterial
+        const mat = orig.clone ? orig.clone() : new THREE.MeshStandardMaterial()
+        ;(mat as any).emissive = new THREE.Color('#4488bb')
+        ;(mat as any).emissiveIntensity = 0.3
+        obj.material = mat
+      }
+    })
+    return c
+  }, [scene, wireframe, selected])
+
+  return (
+    <group position={[midX, 0, midZ]} rotation={[0, rotY, 0]}>
+      <group scale={[1, 1, sideSign]} position={[0, 0, FT(wall.thickness / 2)]}>
+        <group onClick={(e) => { e.stopPropagation(); onClick() }} onPointerDown={onPointerDown}>
+          <group position={[localX + ox, localY + oy, oz]} scale={[scale, scale, scale]} rotation={[0, Math.PI, 0]}>
+            <primitive object={cloned} />
+          </group>
+        </group>
+      </group>
+    </group>
+  )
+})
+
+// ─── Wall water heater mesh — fixed-size GLB mounted flush on wall surface ──
+const WallWaterHeaterMesh = memo(function WallWaterHeaterMesh({ heater, wall, wireframe, selected, onClick, onPointerDown }: {
+  heater: WallWaterHeater; wall: GarageWall; wireframe: boolean; selected: boolean
+  onClick: () => void
+  onPointerDown?: (e: ThreeEvent<PointerEvent>) => void
+}) {
+  const dims = WALL_WATER_HEATER_DIMS
+  const { scene } = useGLTF(`${import.meta.env.BASE_URL}assets/models/water-heater.glb`)
+
+  const dx = wall.x2 - wall.x1, dz = wall.z2 - wall.z1
+  const lengthIn = Math.hypot(dx, dz)
+  const rotY  = -Math.atan2(dz, dx)
+  const midX  = FT((wall.x1 + wall.x2) / 2)
+  const midZ  = FT((wall.z1 + wall.z2) / 2)
+
+  const sideSign = heater.side === 'exterior' ? -1 : 1
+  const localX = FT(-lengthIn / 2 + heater.alongStart + dims.w / 2)
+  const localY = FT(heater.yBottom + dims.h / 2)
+
+  const tw = FT(dims.w), th = FT(dims.h), td = FT(dims.d)
+  const { scale, ox, oy, oz } = useMemo(() => {
+    const box = new THREE.Box3().setFromObject(scene)
+    const size = box.getSize(new THREE.Vector3())
+    if (size.lengthSq() < 0.0001) return { scale: 1, ox: 0, oy: 0, oz: 0 }
+    const maxModel = Math.max(size.x, size.y, size.z)
+    const maxTarget = Math.max(tw, th, td)
+    const s = maxTarget / maxModel
+    const center = box.getCenter(new THREE.Vector3())
+    // No Y-rotation flip — anchor back face at z=0 (model's min.z lands at the wall surface).
+    return {
+      scale: s,
+      ox: -center.x * s,
+      oy: -center.y * s,
+      oz: -box.min.z * s,
+    }
+  }, [scene, tw, th, td])
+
+  const cloned = useMemo(() => {
+    const c = scene.clone(true)
+    c.traverse((obj: any) => {
+      if (!obj.isMesh) return
+      obj.castShadow = true
+      obj.receiveShadow = true
+      if (wireframe) {
+        obj.material = new THREE.MeshBasicMaterial({ color: '#4ab4ff', wireframe: true, side: THREE.DoubleSide })
+      } else if (selected) {
+        const orig = obj.material as THREE.MeshStandardMaterial
+        const mat = orig.clone ? orig.clone() : new THREE.MeshStandardMaterial()
+        ;(mat as any).emissive = new THREE.Color('#4488bb')
+        ;(mat as any).emissiveIntensity = 0.3
+        obj.material = mat
+      }
+    })
+    return c
+  }, [scene, wireframe, selected])
+
+  return (
+    <group position={[midX, 0, midZ]} rotation={[0, rotY, 0]}>
+      <group scale={[1, 1, sideSign]} position={[0, 0, FT(wall.thickness / 2)]}>
+        <group onClick={(e) => { e.stopPropagation(); onClick() }} onPointerDown={onPointerDown}>
+          {/* Scale Z to half so the heater protrudes less from the wall while
+              keeping width/height at the auto-fit size. */}
+          <group position={[localX + ox, localY + oy, oz * 0.5]} scale={[scale, scale, scale * 0.5]}>
+            <primitive object={cloned} />
+          </group>
+        </group>
+      </group>
+    </group>
+  )
+})
+
+// ─── Generic fridge mesh — free-standing GLB on the floor (like a cabinet) ──
+const FridgeMesh = memo(function FridgeMesh({ fridge, wireframe, selected, onClick, onPointerDown }: {
+  fridge: PlacedFridge; wireframe: boolean; selected: boolean
+  onClick: () => void
+  onPointerDown?: (e: ThreeEvent<PointerEvent>) => void
+}) {
+  const dims = WALL_FRIDGE_DIMS
+  const { scene } = useGLTF(`${import.meta.env.BASE_URL}assets/models/fridge.glb`)
+
+  const tw = FT(dims.w), th = FT(dims.h), td = FT(dims.d)
+  const { scale, ox, oy, oz } = useMemo(() => {
+    const box = new THREE.Box3().setFromObject(scene)
+    const size = box.getSize(new THREE.Vector3())
+    if (size.lengthSq() < 0.0001) return { scale: 1, ox: 0, oy: 0, oz: 0 }
+    const maxModel = Math.max(size.x, size.y, size.z)
+    const maxTarget = Math.max(tw, th, td)
+    const s = maxTarget / maxModel
+    const center = box.getCenter(new THREE.Vector3())
+    // Center model on its X/Z footprint and anchor its bottom to y=0 so it
+    // sits on the floor.
+    return {
+      scale: s,
+      ox: -center.x * s,
+      oy: -box.min.y * s,
+      oz: -center.z * s,
+    }
+  }, [scene, tw, th, td])
+
+  const cloned = useMemo(() => {
+    const c = scene.clone(true)
+    c.traverse((obj: any) => {
+      if (!obj.isMesh) return
+      obj.castShadow = true
+      obj.receiveShadow = true
+      if (wireframe) {
+        obj.material = new THREE.MeshBasicMaterial({ color: '#4ab4ff', wireframe: true, side: THREE.DoubleSide })
+      } else if (selected) {
+        const orig = obj.material as THREE.MeshStandardMaterial
+        const mat = orig.clone ? orig.clone() : new THREE.MeshStandardMaterial()
+        ;(mat as any).emissive = new THREE.Color('#4488bb')
+        ;(mat as any).emissiveIntensity = 0.3
+        obj.material = mat
+      }
+    })
+    return c
+  }, [scene, wireframe, selected])
+
+  return (
+    <group position={[FT(fridge.x), 0, FT(fridge.z)]} rotation={[0, fridge.rotY, 0]}>
+      <group onClick={(e) => { e.stopPropagation(); onClick() }} onPointerDown={onPointerDown}>
+        <group position={[ox, oy, oz]} scale={[scale, scale, scale]}>
+          <primitive object={cloned} />
+        </group>
+      </group>
+    </group>
+  )
+})
+
 // ─── Slatwall accessory mesh — positioned on parent panel's wall ─────────────
 const SlatwallAccessoryMesh = memo(function SlatwallAccessoryMesh({ acc, panel, wall, wireframe, selected, onClick }: {
   acc: SlatwallAccessory; panel: SlatwallPanel; wall: GarageWall
@@ -4564,6 +4917,24 @@ interface SlatwallBodyDragState {
   wallId: string          // to look up wall height / baseboard during drag
 }
 
+/** Drag state for fixed-size wall fixtures (breaker panels, outlets) — only
+ *  position changes; width/height are immutable. */
+interface FixtureDragState {
+  fixtureId: string
+  plane: THREE.Plane
+  wallMidX: number; wallMidZ: number
+  wallUx: number; wallUz: number
+  wallLenIn: number
+  startTrimIn: number; endTrimIn: number
+  startAlongIn: number    // alongStart at drag start
+  fixtureWidthIn: number
+  fixtureHeightIn: number
+  startYBottomIn: number  // yBottom at drag start
+  hitAlongIn: number
+  hitHeightIn: number
+  wallId: string
+}
+
 /** Dragging one corner of a slatwall panel in wall-face-plane space */
 interface SlatwallCornerDragState {
   panelId: string
@@ -4778,6 +5149,10 @@ export default function GarageShell() {
     walls, shapes, floorPoints, ceilingHeight, garageWidth, garageDepth, flooringColor, floorTextureScale, floorReflection,
     slatwallPanels, selectedSlatwallPanelId,
     stainlessBacksplashPanels, selectedStainlessBacksplashPanelId, selectStainlessBacksplashPanel, updateStainlessBacksplashPanel,
+    breakerPanels, selectedBreakerPanelId, selectBreakerPanel, updateBreakerPanel,
+    wallOutlets, selectedWallOutletId, selectWallOutlet, updateWallOutlet,
+    wallWaterHeaters, selectedWallWaterHeaterId, selectWallWaterHeater, updateWallWaterHeater,
+    fridges, selectedFridgeId, selectFridge, updateFridge,
     floorSteps, selectedFloorStepId, selectFloorStep, updateFloorStep: updateFloorStepAction,
     deleteFloorStep,
     cabinets, selectedCabinetId, selectCabinet, updateCabinet,
@@ -4894,12 +5269,20 @@ export default function GarageShell() {
   const floorPtsRef     = useRef(effectiveFloorPts);        useEffect(() => { floorPtsRef.current = effectiveFloorPts }, [effectiveFloorPts])
   const slatsRef        = useRef(slatwallPanels);  useEffect(() => { slatsRef.current = slatwallPanels }, [slatwallPanels])
   const backsplashesRef = useRef(stainlessBacksplashPanels); useEffect(() => { backsplashesRef.current = stainlessBacksplashPanels }, [stainlessBacksplashPanels])
+  const breakersRef     = useRef(breakerPanels);    useEffect(() => { breakersRef.current = breakerPanels }, [breakerPanels])
+  const outletsRef      = useRef(wallOutlets);      useEffect(() => { outletsRef.current = wallOutlets }, [wallOutlets])
+  const heatersRef      = useRef(wallWaterHeaters); useEffect(() => { heatersRef.current = wallWaterHeaters }, [wallWaterHeaters])
+  const fridgesRef      = useRef(fridges);          useEffect(() => { fridgesRef.current = fridges }, [fridges])
   const cabinetsRef     = useRef(cabinets);         useEffect(() => { cabinetsRef.current = cabinets }, [cabinets])
   const updateWallRef   = useRef(updateWall);      useEffect(() => { updateWallRef.current = updateWall }, [updateWall])
   const updateShapeRef  = useRef(updateShape);     useEffect(() => { updateShapeRef.current = updateShape }, [updateShape])
   const updateOpeningRef = useRef(updateOpening);  useEffect(() => { updateOpeningRef.current = updateOpening }, [updateOpening])
   const updateSlatRef       = useRef(updateSlatwallPanel); useEffect(() => { updateSlatRef.current = updateSlatwallPanel }, [updateSlatwallPanel])
   const updateBacksplashRef = useRef(updateStainlessBacksplashPanel); useEffect(() => { updateBacksplashRef.current = updateStainlessBacksplashPanel }, [updateStainlessBacksplashPanel])
+  const updateBreakerRef    = useRef(updateBreakerPanel);     useEffect(() => { updateBreakerRef.current = updateBreakerPanel }, [updateBreakerPanel])
+  const updateOutletRef     = useRef(updateWallOutlet);       useEffect(() => { updateOutletRef.current = updateWallOutlet }, [updateWallOutlet])
+  const updateHeaterRef     = useRef(updateWallWaterHeater);  useEffect(() => { updateHeaterRef.current = updateWallWaterHeater }, [updateWallWaterHeater])
+  const updateFridgeRef     = useRef(updateFridge);           useEffect(() => { updateFridgeRef.current = updateFridge }, [updateFridge])
   const slatwallPanelsRef   = useRef(slatwallPanels);      useEffect(() => { slatwallPanelsRef.current = slatwallPanels }, [slatwallPanels])
   const updateCabRef    = useRef(updateCabinet);    useEffect(() => { updateCabRef.current = updateCabinet }, [updateCabinet])
   const countertopsRef  = useRef(countertops);       useEffect(() => { countertopsRef.current = countertops }, [countertops])
@@ -4931,6 +5314,10 @@ export default function GarageShell() {
   const slatCornerDragRef   = useRef<SlatwallCornerDragState | null>(null)
   const backsplashBodyDragRef   = useRef<SlatwallBodyDragState | null>(null)
   const backsplashCornerDragRef = useRef<SlatwallCornerDragState | null>(null)
+  const breakerDragRef          = useRef<FixtureDragState | null>(null)
+  const outletDragRef           = useRef<FixtureDragState | null>(null)
+  const heaterDragRef           = useRef<FixtureDragState | null>(null)
+  const fridgeDragRef           = useRef<{ fridgeId: string; startX: number; startZ: number; startHitXFt: number; startHitZFt: number } | null>(null)
   const cabinetDragRef      = useRef<CabinetDragState | null>(null)
   // Direct mesh mutation: registry of cabinet Three.js groups + transient drag position
   const cabinetGroupRefs    = useRef<Record<string, THREE.Group>>({})
@@ -5418,6 +5805,115 @@ export default function GarageShell() {
     beginDrag()
   }, [selectStainlessBacksplashPanel, beginDrag])
 
+  // ── Start breaker / outlet body drag ─────────────────────────────────────
+  // Fixed-size fixtures: only position changes, never width/height. The drag
+  // plane sits on the wall face; we project mouse hits onto it and slide.
+  const startFixtureDrag = useCallback((opts: {
+    fixtureId: string
+    wallId: string
+    side: 'interior' | 'exterior'
+    alongStart: number
+    yBottom: number
+    widthIn: number
+    heightIn: number
+    e: ThreeEvent<PointerEvent>
+    targetRef: React.MutableRefObject<FixtureDragState | null>
+    onSelect: (id: string) => void
+  }) => {
+    const { e } = opts
+    if (e.nativeEvent.button !== 0) return
+    const wall = wallsRef.current.find(w => w.id === opts.wallId)
+    if (!wall) return
+    e.stopPropagation()
+    e.nativeEvent.stopImmediatePropagation()
+    opts.onSelect(opts.fixtureId)
+
+    const dx = wall.x2 - wall.x1, dz = wall.z2 - wall.z1
+    const len = Math.hypot(dx, dz)
+    const sideSign = opts.side === 'exterior' ? -1 : 1
+    const nx = sideSign * (-dz / len), nz = sideSign * (dx / len)
+    const midXFt = FT((wall.x1 + wall.x2) / 2)
+    const midZFt = FT((wall.z1 + wall.z2) / 2)
+    const planePt = new THREE.Vector3(
+      midXFt + nx * FT(wall.thickness / 2 + 0.5),
+      FT(opts.yBottom + opts.heightIn / 2),
+      midZFt + nz * FT(wall.thickness / 2 + 0.5),
+    )
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(new THREE.Vector3(nx, 0, nz), planePt)
+
+    const relHitX = e.point.x - midXFt, relHitZ = e.point.z - midZFt
+    const hitAlong  = (relHitX * (dx / len) + relHitZ * (dz / len)) * 12 + len / 2
+    const hitHeight = e.point.y * 12
+
+    const { startTrim, endTrim } = computeCornerAdj(wall, wallsRef.current)
+    opts.targetRef.current = {
+      fixtureId: opts.fixtureId, plane,
+      wallMidX: midXFt, wallMidZ: midZFt,
+      wallUx: dx / len, wallUz: dz / len,
+      wallLenIn: len,
+      startTrimIn: startTrim, endTrimIn: endTrim,
+      startAlongIn: opts.alongStart,
+      fixtureWidthIn: opts.widthIn,
+      fixtureHeightIn: opts.heightIn,
+      startYBottomIn: opts.yBottom,
+      hitAlongIn: hitAlong, hitHeightIn: hitHeight,
+      wallId: wall.id,
+    }
+    beginDrag()
+  }, [beginDrag])
+
+  const startBreakerBodyDrag = useCallback((panelId: string, e: ThreeEvent<PointerEvent>) => {
+    const panel = breakersRef.current.find(p => p.id === panelId)
+    if (!panel) return
+    const dims = BREAKER_PANEL_DIMS[panel.kind]
+    startFixtureDrag({
+      fixtureId: panelId, wallId: panel.wallId, side: panel.side,
+      alongStart: panel.alongStart, yBottom: panel.yBottom,
+      widthIn: dims.w, heightIn: dims.h,
+      e, targetRef: breakerDragRef, onSelect: selectBreakerPanel,
+    })
+  }, [startFixtureDrag, selectBreakerPanel])
+
+  const startOutletBodyDrag = useCallback((outletId: string, e: ThreeEvent<PointerEvent>) => {
+    const outlet = outletsRef.current.find(o => o.id === outletId)
+    if (!outlet) return
+    startFixtureDrag({
+      fixtureId: outletId, wallId: outlet.wallId, side: outlet.side,
+      alongStart: outlet.alongStart, yBottom: outlet.yBottom,
+      widthIn: WALL_OUTLET_DIMS.w, heightIn: WALL_OUTLET_DIMS.h,
+      e, targetRef: outletDragRef, onSelect: selectWallOutlet,
+    })
+  }, [startFixtureDrag, selectWallOutlet])
+
+  const startHeaterBodyDrag = useCallback((heaterId: string, e: ThreeEvent<PointerEvent>) => {
+    const heater = heatersRef.current.find(h => h.id === heaterId)
+    if (!heater) return
+    startFixtureDrag({
+      fixtureId: heaterId, wallId: heater.wallId, side: heater.side,
+      alongStart: heater.alongStart, yBottom: heater.yBottom,
+      widthIn: WALL_WATER_HEATER_DIMS.w, heightIn: WALL_WATER_HEATER_DIMS.h,
+      e, targetRef: heaterDragRef, onSelect: selectWallWaterHeater,
+    })
+  }, [startFixtureDrag, selectWallWaterHeater])
+
+  // Fridge is free-standing — drag on the floor plane like a cabinet/item.
+  const startFridgeBodyDrag = useCallback((fridgeId: string, e: ThreeEvent<PointerEvent>) => {
+    if (e.nativeEvent.button !== 0) return
+    e.stopPropagation()
+    e.nativeEvent.stopImmediatePropagation()
+    const fridge = fridgesRef.current.find(f => f.id === fridgeId)
+    if (!fridge) return
+    selectFridge(fridgeId)
+    const hit = floorHit(e.nativeEvent.clientX, e.nativeEvent.clientY)
+    fridgeDragRef.current = {
+      fridgeId,
+      startX: fridge.x, startZ: fridge.z,
+      startHitXFt: hit ? hit.x : FT(fridge.x),
+      startHitZFt: hit ? hit.z : FT(fridge.z),
+    }
+    beginDrag()
+  }, [selectFridge, floorHit, beginDrag])
+
   // ── Start backsplash corner drag ─────────────────────────────────────────
   const startBacksplashCornerDrag = useCallback((
     panelId: string, corner: 0 | 1 | 2 | 3,
@@ -5483,6 +5979,7 @@ export default function GarageShell() {
       const isDragging = wallDragRef.current || shapeDragRef.current || floorPointDragRef.current ||
         vertDragRef.current || slatBodyDragRef.current || slatCornerDragRef.current ||
         backsplashBodyDragRef.current || backsplashCornerDragRef.current ||
+        breakerDragRef.current || outletDragRef.current || heaterDragRef.current || fridgeDragRef.current ||
         cabinetDragRef.current || countertopDragRef.current || baseboardDragRef.current || lightDragRef.current ||
         ceilingLightDragRef.current || itemDragRef.current || rackDragRef.current || floorStepDragRef.current || floorStepCornerDragRef.current ||
         openingDragRef.current || openingCornerDragRef.current
@@ -5768,6 +6265,55 @@ export default function GarageShell() {
             alongStart: newStart, alongEnd: newEnd,
             yBottom: newBottom, yTop: newTop,
           })
+        }
+        return
+      }
+
+      // Fridge floor drag (free-standing, like cabinets/items)
+      const fdg = fridgeDragRef.current
+      if (fdg) {
+        const hit = floorHit(e.clientX, e.clientY)
+        if (hit) {
+          // hits are in feet; convert delta back to inches and apply to start.
+          const dxIn = (hit.x - fdg.startHitXFt) * 12
+          const dzIn = (hit.z - fdg.startHitZFt) * 12
+          const newX = snapToGrid(fdg.startX + dxIn)
+          const newZ = snapToGrid(fdg.startZ + dzIn)
+          updateFridgeRef.current(fdg.fridgeId, { x: newX, z: newZ })
+        }
+        return
+      }
+
+      // Breaker / outlet / water-heater body drag — fixed size, position only
+      const fxd = breakerDragRef.current ?? outletDragRef.current ?? heaterDragRef.current
+      if (fxd) {
+        const updateFn = breakerDragRef.current === fxd ? updateBreakerRef.current
+          : outletDragRef.current === fxd ? updateOutletRef.current
+          : updateHeaterRef.current
+        const rect = gl.domElement.getBoundingClientRect()
+        const ndc = new THREE.Vector2(
+          ((e.clientX - rect.left) / rect.width) * 2 - 1,
+          ((e.clientY - rect.top)  / rect.height) * -2 + 1,
+        )
+        ray.setFromCamera(ndc, cameraRef.current)
+        const hitPt = new THREE.Vector3()
+        if (ray.ray.intersectPlane(fxd.plane, hitPt)) {
+          const relX = hitPt.x - fxd.wallMidX, relZ = hitPt.z - fxd.wallMidZ
+          const curAlong = (relX * fxd.wallUx + relZ * fxd.wallUz) * 12 + fxd.wallLenIn / 2
+          const curHeight = hitPt.y * 12
+          const dAlong = curAlong - fxd.hitAlongIn
+          const dHeight = curHeight - fxd.hitHeightIn
+
+          const minA = fxd.startTrimIn, maxA = fxd.wallLenIn - fxd.endTrimIn
+          let newStart = snapToGrid(fxd.startAlongIn + dAlong)
+          newStart = Math.max(minA, Math.min(newStart, maxA - fxd.fixtureWidthIn))
+
+          const dragWall = wallsRef.current.find(w => w.id === fxd.wallId)
+          const wallH = dragWall?.height ?? 9999
+          let newBottom = snapToGrid(fxd.startYBottomIn + dHeight)
+          newBottom = Math.max(0, Math.min(newBottom, wallH - fxd.fixtureHeightIn))
+
+          updateFn(fxd.fixtureId, { alongStart: newStart, yBottom: newBottom })
         }
         return
       }
@@ -7447,7 +7993,7 @@ export default function GarageShell() {
         updateCabRef.current(cd.cabinetId, { x: dragPos.x, z: dragPos.z, y: dragPos.y, rotY: dragPos.rotY })
         cabinetDragPosRef.current = null
       }
-      const wasDragging = wallDragRef.current || shapeDragRef.current || floorPointDragRef.current || vertDragRef.current || slatBodyDragRef.current || slatCornerDragRef.current || backsplashBodyDragRef.current || backsplashCornerDragRef.current || cabinetDragRef.current || countertopDragRef.current || baseboardDragRef.current || lightDragRef.current || ceilingLightDragRef.current || ledbarResizeRef.current || itemDragRef.current || rackDragRef.current || floorStepDragRef.current || floorStepCornerDragRef.current || openingDragRef.current || openingCornerDragRef.current
+      const wasDragging = wallDragRef.current || shapeDragRef.current || floorPointDragRef.current || vertDragRef.current || slatBodyDragRef.current || slatCornerDragRef.current || backsplashBodyDragRef.current || backsplashCornerDragRef.current || breakerDragRef.current || outletDragRef.current || heaterDragRef.current || fridgeDragRef.current || cabinetDragRef.current || countertopDragRef.current || baseboardDragRef.current || lightDragRef.current || ceilingLightDragRef.current || ledbarResizeRef.current || itemDragRef.current || rackDragRef.current || floorStepDragRef.current || floorStepCornerDragRef.current || openingDragRef.current || openingCornerDragRef.current
       openingDragRef.current = null
       openingCornerDragRef.current = null
       wallDragRef.current = null
@@ -7458,6 +8004,10 @@ export default function GarageShell() {
       slatCornerDragRef.current = null
       backsplashBodyDragRef.current = null
       backsplashCornerDragRef.current = null
+      breakerDragRef.current = null
+      outletDragRef.current = null
+      heaterDragRef.current = null
+      fridgeDragRef.current = null
       cabinetDragRef.current = null
       countertopDragRef.current = null
       baseboardDragRef.current = null
@@ -7671,7 +8221,7 @@ export default function GarageShell() {
         return (
           <group key={wall.id} visible={wall.visible !== false}>
             <WallMesh wall={wall} wireframe={wireframe} blueprint={blueprint}
-              selected={isSel && !selectedSlatwallPanelId && !selectedStainlessBacksplashPanelId && !selectedOpeningId}
+              selected={isSel && !selectedSlatwallPanelId && !selectedStainlessBacksplashPanelId && !selectedBreakerPanelId && !selectedWallOutletId && !selectedWallWaterHeaterId && !selectedFridgeId && !selectedOpeningId}
               onClick={() => { if (suppressNextClick.current) { suppressNextClick.current = false; return } selectWall(wall.id); setSelectedOpeningId(null) }}
               onPointerDown={handleWallDown}
               onOpeningPointerDown={(openingId, e) => startOpeningDrag(wall.id, openingId, e)}
@@ -7952,6 +8502,54 @@ export default function GarageShell() {
           </group>
         )
       })}
+
+      {/* Breaker panels — hidden in blueprint view */}
+      {!blueprint && breakerPanels.map(panel => {
+        const wall = walls.find(w => w.id === panel.wallId)
+        if (!wall) return null
+        return (
+          <BreakerPanelMesh key={panel.id}
+            panel={panel} wall={wall} wireframe={wireframe}
+            selected={selectedBreakerPanelId === panel.id}
+            onClick={() => selectBreakerPanel(panel.id)}
+            onPointerDown={(e) => startBreakerBodyDrag(panel.id, e)} />
+        )
+      })}
+
+      {/* Wall outlets — hidden in blueprint view */}
+      {!blueprint && wallOutlets.map(outlet => {
+        const wall = walls.find(w => w.id === outlet.wallId)
+        if (!wall) return null
+        return (
+          <WallOutletMesh key={outlet.id}
+            outlet={outlet} wall={wall} wireframe={wireframe}
+            selected={selectedWallOutletId === outlet.id}
+            onClick={() => selectWallOutlet(outlet.id)}
+            onPointerDown={(e) => startOutletBodyDrag(outlet.id, e)} />
+        )
+      })}
+
+      {/* Wall water heaters — hidden in blueprint view */}
+      {!blueprint && wallWaterHeaters.map(heater => {
+        const wall = walls.find(w => w.id === heater.wallId)
+        if (!wall) return null
+        return (
+          <WallWaterHeaterMesh key={heater.id}
+            heater={heater} wall={wall} wireframe={wireframe}
+            selected={selectedWallWaterHeaterId === heater.id}
+            onClick={() => selectWallWaterHeater(heater.id)}
+            onPointerDown={(e) => startHeaterBodyDrag(heater.id, e)} />
+        )
+      })}
+
+      {/* Free-standing fridges — hidden in blueprint view */}
+      {!blueprint && fridges.map(fridge => (
+        <FridgeMesh key={fridge.id}
+          fridge={fridge} wireframe={wireframe}
+          selected={selectedFridgeId === fridge.id}
+          onClick={() => selectFridge(fridge.id)}
+          onPointerDown={(e) => startFridgeBodyDrag(fridge.id, e)} />
+      ))}
 
       {/* Slatwall accessories — hidden in blueprint view */}
       {!blueprint && slatwallAccessories.map(acc => {

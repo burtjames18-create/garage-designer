@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react'
-import { useGarageStore, CABINET_PRESETS, COUNTERTOP_THICKNESS, COUNTERTOP_DEPTH } from '../store/garageStore'
-import type { GarageWall, PlacedCabinet, SlatwallPanel, StainlessBacksplashPanel, Countertop, FloorStep, Baseboard, StemWall } from '../store/garageStore'
+import { useGarageStore, CABINET_PRESETS, COUNTERTOP_THICKNESS, COUNTERTOP_DEPTH, BREAKER_PANEL_DIMS, WALL_OUTLET_DIMS, WALL_WATER_HEATER_DIMS, WALL_FRIDGE_DIMS } from '../store/garageStore'
+import type { GarageWall, PlacedCabinet, SlatwallPanel, StainlessBacksplashPanel, BreakerPanel, WallOutlet, WallWaterHeater, PlacedFridge, Countertop, FloorStep, Baseboard, StemWall } from '../store/garageStore'
 import { slatwallColors } from '../data/slatwallColors'
 import { snapToGrid, inchesToDisplay } from '../utils/measurements'
 import {
@@ -20,7 +20,7 @@ const SNAP_DIST = 2  // inches
 // ─── Drag state ───────────────────────────────────────────────────────────────
 
 interface SvgDrag {
-  type: 'panel-body' | 'panel-corner' | 'backsplash-body' | 'backsplash-corner' | 'cabinet' | 'countertop' | 'opening-body' | 'opening-corner' | 'bb-body' | 'bb-edge' | 'sw-body' | 'sw-edge'
+  type: 'panel-body' | 'panel-corner' | 'backsplash-body' | 'backsplash-corner' | 'breaker-body' | 'outlet-body' | 'heater-body' | 'fridge-body' | 'cabinet' | 'countertop' | 'opening-body' | 'opening-corner' | 'bb-body' | 'bb-edge' | 'sw-body' | 'sw-edge'
   id: string
   corner?: 0 | 1 | 2 | 3
   moved: boolean  // becomes true once pointer moves past click threshold
@@ -69,6 +69,14 @@ export default function WallElevationView() {
     updateSlatwallPanel, selectSlatwallPanel, selectedSlatwallPanelId, addSlatwallPanel, deleteSlatwallPanel,
     updateStainlessBacksplashPanel, selectStainlessBacksplashPanel, selectedStainlessBacksplashPanelId,
     addStainlessBacksplashPanel, deleteStainlessBacksplashPanel,
+    breakerPanels, addBreakerPanel, updateBreakerPanel, deleteBreakerPanel,
+    selectBreakerPanel, selectedBreakerPanelId,
+    wallOutlets, addWallOutlet, updateWallOutlet, deleteWallOutlet,
+    selectWallOutlet, selectedWallOutletId,
+    wallWaterHeaters, addWallWaterHeater, updateWallWaterHeater, deleteWallWaterHeater,
+    selectWallWaterHeater, selectedWallWaterHeaterId,
+    fridges, addFridge, updateFridge, deleteFridge,
+    selectFridge, selectedFridgeId,
     updateCabinet, selectCabinet, selectedCabinetId, addCabinet, deleteCabinet,
     updateCountertop, selectCountertop, selectedCountertopId, addCountertop, deleteCountertop,
     updateBaseboard, selectBaseboard, selectedBaseboardId,
@@ -174,6 +182,30 @@ export default function WallElevationView() {
 
   const wallPanels = slatwallPanels.filter(p => p.wallId === wall.id && (p.side ?? 'interior') === wallSide)
   const wallBacksplashes = stainlessBacksplashPanels.filter(p => p.wallId === wall.id && (p.side ?? 'interior') === wallSide)
+  const wallBreakers = breakerPanels.filter(p => p.wallId === wall.id && (p.side ?? 'interior') === wallSide)
+  const wallOutletsList = wallOutlets.filter(o => o.wallId === wall.id && (o.side ?? 'interior') === wallSide)
+  const wallHeatersList = wallWaterHeaters.filter(h => h.wallId === wall.id && (h.side ?? 'interior') === wallSide)
+  // Free-standing fridges that sit close to this wall, on the chosen side.
+  // Mirrors the cabinet projection: perpendicular distance must be within a
+  // generous threshold and the along position must overlap the wall span.
+  const wallFridgesList = (() => {
+    const dims_w = WALL_FRIDGE_DIMS.w, dims_d = WALL_FRIDGE_DIMS.d
+    const len = wallLen(wall)
+    const [dxF, dzF] = wallDir(wall)
+    const [nxF, nzF] = wallNormal(wall)
+    return fridges.filter(f => {
+      const vx = f.x - wall.x1, vz = f.z - wall.z1
+      const along = vx * dxF + vz * dzF
+      const perpSigned = vx * nxF + vz * nzF  // sign distinguishes interior/exterior side
+      const perp = Math.abs(perpSigned)
+      if (perp > dims_d / 2 + wall.thickness / 2 + 12) return false
+      if (along + dims_w / 2 < 0 || along - dims_w / 2 > len) return false
+      // wallNormal points INTO the garage (toward origin), so a fridge on
+      // the interior side has perpSigned > 0.
+      const side: 'interior' | 'exterior' = perpSigned >= 0 ? 'interior' : 'exterior'
+      return side === wallSide
+    })
+  })()
   const wallCabinets = cabinets.filter(c => isCabinetOnWall(c, wall, wallSide))
   const wallCountertops = countertops.filter(ct => isCountertopOnWall(ct, wall))
   const [dx, dz] = wallDir(wall)
@@ -557,6 +589,58 @@ export default function WallElevationView() {
     }
   }
 
+  const onBreakerDown = (e: React.MouseEvent, panel: BreakerPanel) => {
+    e.stopPropagation()
+    const pt = getSvgPt(e)
+    if (!pt) return
+    const dims = BREAKER_PANEL_DIMS[panel.kind]
+    dragRef.current = {
+      type: 'breaker-body', id: panel.id, moved: false,
+      startSvgX: pt.x, startSvgY: pt.y,
+      startAlongStart: panel.alongStart, startAlongEnd: panel.alongStart + dims.w,
+      startYBottom: panel.yBottom, startYTop: panel.yBottom + dims.h,
+    }
+  }
+
+  const onOutletDown = (e: React.MouseEvent, outlet: WallOutlet) => {
+    e.stopPropagation()
+    const pt = getSvgPt(e)
+    if (!pt) return
+    const dims = WALL_OUTLET_DIMS
+    dragRef.current = {
+      type: 'outlet-body', id: outlet.id, moved: false,
+      startSvgX: pt.x, startSvgY: pt.y,
+      startAlongStart: outlet.alongStart, startAlongEnd: outlet.alongStart + dims.w,
+      startYBottom: outlet.yBottom, startYTop: outlet.yBottom + dims.h,
+    }
+  }
+
+  const onHeaterDown = (e: React.MouseEvent, heater: WallWaterHeater) => {
+    e.stopPropagation()
+    const pt = getSvgPt(e)
+    if (!pt) return
+    const dims = WALL_WATER_HEATER_DIMS
+    dragRef.current = {
+      type: 'heater-body', id: heater.id, moved: false,
+      startSvgX: pt.x, startSvgY: pt.y,
+      startAlongStart: heater.alongStart, startAlongEnd: heater.alongStart + dims.w,
+      startYBottom: heater.yBottom, startYTop: heater.yBottom + dims.h,
+    }
+  }
+
+  // Drag a free-standing fridge horizontally along this wall in elevation
+  // view. Vertical drag is ignored — the fridge always sits on the floor.
+  const onFridgeDown = (e: React.MouseEvent, fridge: PlacedFridge) => {
+    e.stopPropagation()
+    const pt = getSvgPt(e)
+    if (!pt) return
+    dragRef.current = {
+      type: 'fridge-body', id: fridge.id, moved: false,
+      startSvgX: pt.x, startSvgY: pt.y,
+      startCabX: fridge.x, startCabZ: fridge.z,  // reuse existing fields
+    }
+  }
+
   const onCabDown = (e: React.MouseEvent, cab: PlacedCabinet) => {
     e.stopPropagation()
 
@@ -789,6 +873,52 @@ export default function WallElevationView() {
       updateStainlessBacksplashPanel(drag.id, { alongStart: newStart, alongEnd: newEnd, yBottom: newBottom, yTop: newTop })
     }
 
+    // ── Breaker panel body drag (fixed size — position only) ───────────────
+    if (drag.type === 'breaker-body') {
+      const panel = breakerPanels.find(p => p.id === drag.id)
+      if (!panel) return
+      const dims = BREAKER_PANEL_DIMS[panel.kind]
+      const rawStart = drag.startAlongStart! + dAlong
+      const rawBottom = drag.startYBottom! + dHeight
+      const newStart = Math.max(0, Math.min(wLen - dims.w, Math.round(rawStart * 4) / 4))
+      const newBottom = Math.max(0, Math.min(wH - dims.h, Math.round(rawBottom * 4) / 4))
+      updateBreakerPanel(drag.id, { alongStart: newStart, yBottom: newBottom })
+    }
+
+    // ── Wall outlet body drag (fixed size — position only) ────────────────
+    if (drag.type === 'outlet-body') {
+      const outlet = wallOutlets.find(o => o.id === drag.id)
+      if (!outlet) return
+      const dims = WALL_OUTLET_DIMS
+      const rawStart = drag.startAlongStart! + dAlong
+      const rawBottom = drag.startYBottom! + dHeight
+      const newStart = Math.max(0, Math.min(wLen - dims.w, Math.round(rawStart * 4) / 4))
+      const newBottom = Math.max(0, Math.min(wH - dims.h, Math.round(rawBottom * 4) / 4))
+      updateWallOutlet(drag.id, { alongStart: newStart, yBottom: newBottom })
+    }
+
+    // ── Water heater body drag (fixed size — position only) ───────────────
+    if (drag.type === 'heater-body') {
+      const heater = wallWaterHeaters.find(h => h.id === drag.id)
+      if (!heater) return
+      const dims = WALL_WATER_HEATER_DIMS
+      const rawStart = drag.startAlongStart! + dAlong
+      const rawBottom = drag.startYBottom! + dHeight
+      const newStart = Math.max(0, Math.min(wLen - dims.w, Math.round(rawStart * 4) / 4))
+      const newBottom = Math.max(0, Math.min(wH - dims.h, Math.round(rawBottom * 4) / 4))
+      updateWallWaterHeater(drag.id, { alongStart: newStart, yBottom: newBottom })
+    }
+
+    // ── Fridge body drag — slide free-standing fridge along the wall axis.
+    //     Vertical drag is ignored (fridge always sits on the floor).
+    if (drag.type === 'fridge-body') {
+      const fridge = fridges.find(f => f.id === drag.id)
+      if (!fridge) return
+      const newX = drag.startCabX! + dx * dAlong
+      const newZ = drag.startCabZ! + dz * dAlong
+      updateFridge(drag.id, { x: newX, z: newZ })
+    }
+
     // ── Cabinet body drag ──────────────────────────────────────────────────
     if (drag.type === 'cabinet') {
       const cab = cabinets.find(c => c.id === drag.id)
@@ -967,6 +1097,10 @@ export default function WallElevationView() {
       // Pure click (no drag) — open the item's settings by selecting it
       if (drag.type === 'panel-body' || drag.type === 'panel-corner') selectSlatwallPanel(drag.id)
       else if (drag.type === 'backsplash-body' || drag.type === 'backsplash-corner') selectStainlessBacksplashPanel(drag.id)
+      else if (drag.type === 'breaker-body') selectBreakerPanel(drag.id)
+      else if (drag.type === 'outlet-body') selectWallOutlet(drag.id)
+      else if (drag.type === 'heater-body') selectWallWaterHeater(drag.id)
+      else if (drag.type === 'fridge-body') selectFridge(drag.id)
       else if (drag.type === 'cabinet') selectCabinet(drag.id)
       else if (drag.type === 'countertop') selectCountertop(drag.id)
       else if (drag.type === 'bb-body' || drag.type === 'bb-edge') selectBaseboard(drag.id)
@@ -980,14 +1114,14 @@ export default function WallElevationView() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        selectSlatwallPanel(null); selectStainlessBacksplashPanel(null); selectCabinet(null); selectCountertop(null)
+        selectSlatwallPanel(null); selectStainlessBacksplashPanel(null); selectBreakerPanel(null); selectWallOutlet(null); selectWallWaterHeater(null); selectFridge(null); selectCabinet(null); selectCountertop(null)
         selectBaseboard(null); selectStemWall(null)
         setSelectedOpeningId(null)
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [selectSlatwallPanel, selectStainlessBacksplashPanel, selectCabinet, selectCountertop, selectBaseboard, selectStemWall])
+  }, [selectSlatwallPanel, selectStainlessBacksplashPanel, selectBreakerPanel, selectWallOutlet, selectWallWaterHeater, selectFridge, selectCabinet, selectCountertop, selectBaseboard, selectStemWall])
 
   // Clear opening selection when switching walls
   useEffect(() => { setSelectedOpeningId(null) }, [wallIdx])
@@ -1048,6 +1182,18 @@ export default function WallElevationView() {
           )}
           {selectedStainlessBacksplashPanelId && wallBacksplashes.some(p => p.id === selectedStainlessBacksplashPanelId) && (
             <button className="wall-elev-del" onClick={() => deleteStainlessBacksplashPanel(selectedStainlessBacksplashPanelId)}>✕ Backsplash</button>
+          )}
+          {selectedBreakerPanelId && wallBreakers.some(p => p.id === selectedBreakerPanelId) && (
+            <button className="wall-elev-del" onClick={() => deleteBreakerPanel(selectedBreakerPanelId)}>✕ Breaker</button>
+          )}
+          {selectedWallOutletId && wallOutletsList.some(o => o.id === selectedWallOutletId) && (
+            <button className="wall-elev-del" onClick={() => deleteWallOutlet(selectedWallOutletId)}>✕ Outlet</button>
+          )}
+          {selectedWallWaterHeaterId && wallHeatersList.some(h => h.id === selectedWallWaterHeaterId) && (
+            <button className="wall-elev-del" onClick={() => deleteWallWaterHeater(selectedWallWaterHeaterId)}>✕ Water Heater</button>
+          )}
+          {selectedFridgeId && wallFridgesList.some(f => f.id === selectedFridgeId) && (
+            <button className="wall-elev-del" onClick={() => deleteFridge(selectedFridgeId)}>✕ Fridge</button>
           )}
           {selectedCabinetId && wallCabinets.some(c => c.id === selectedCabinetId) && (
             <button className="wall-elev-del" onClick={() => deleteCabinet(selectedCabinetId)}>✕ Cabinet</button>
@@ -1597,6 +1743,364 @@ export default function WallElevationView() {
                         onClick={e => e.stopPropagation()} />
                     ))}
                   </>)}
+                </g>
+              )
+            })}
+
+            {/* Breaker panels */}
+            {wallBreakers.map(panel => {
+              const dims = BREAKER_PANEL_DIMS[panel.kind]
+              const isSel = panel.id === selectedBreakerPanelId
+              const px = toX(panel.alongStart), py = toY(panel.yBottom + dims.h)
+              const pw = dims.w, ph = dims.h
+              const bezel = 1.5
+              const handleW = 0.75, handleH = 3.0
+              const cy = toY(panel.yBottom + dims.h / 2) - handleH / 2
+              return (
+                <g key={panel.id}>
+                  {/* Body */}
+                  <rect x={px} y={py} width={pw} height={ph}
+                    fill="#cfcdc6" stroke={isSel ? '#cc22aa' : 'rgba(0,0,0,0.55)'}
+                    strokeWidth={isSel ? 0.7 : 0.4}
+                    style={{ cursor: 'move' }}
+                    onMouseDown={e => onBreakerDown(e, panel)}
+                    onClick={e => e.stopPropagation()} />
+                  {panel.kind === 'single' ? (
+                    <>
+                      {/* Single inset door */}
+                      <rect x={px + bezel} y={py + bezel}
+                        width={pw - bezel * 2} height={ph - bezel * 2}
+                        fill="#bdb9af" stroke="rgba(0,0,0,0.35)" strokeWidth={0.3}
+                        pointerEvents="none" />
+                      {/* Handle on right edge mid-height */}
+                      <rect x={toX(panel.alongStart + dims.w - bezel - 1.0) - handleW / 2}
+                        y={cy} width={handleW} height={handleH}
+                        fill="#1a1a1a" pointerEvents="none" />
+                    </>
+                  ) : (
+                    <>
+                      {/* Two inset doors with small seam gap */}
+                      {(() => {
+                        const innerW = pw - bezel * 2
+                        const seam = 0.25
+                        const doorW = (innerW - seam) / 2
+                        const lx = px + bezel
+                        const rx = px + bezel + doorW + seam
+                        const dy = py + bezel
+                        const dh = ph - bezel * 2
+                        const seamCenter = px + bezel + doorW + seam / 2
+                        return (
+                          <>
+                            <rect x={lx} y={dy} width={doorW} height={dh}
+                              fill="#bdb9af" stroke="rgba(0,0,0,0.35)" strokeWidth={0.3}
+                              pointerEvents="none" />
+                            <rect x={rx} y={dy} width={doorW} height={dh}
+                              fill="#bdb9af" stroke="rgba(0,0,0,0.35)" strokeWidth={0.3}
+                              pointerEvents="none" />
+                            {/* Two handles inset from seam, mid-height */}
+                            <rect x={seamCenter - 1.0 - handleW / 2}
+                              y={cy} width={handleW} height={handleH}
+                              fill="#1a1a1a" pointerEvents="none" />
+                            <rect x={seamCenter + 1.0 - handleW / 2}
+                              y={cy} width={handleW} height={handleH}
+                              fill="#1a1a1a" pointerEvents="none" />
+                          </>
+                        )
+                      })()}
+                    </>
+                  )}
+                  {/* Dim labels — height from floor + distance from nearest wall edge */}
+                  {isSel && (() => {
+                    const distLeft  = panel.alongStart
+                    const distRight = wLen - (panel.alongStart + dims.w)
+                    const fromLeft  = distLeft <= distRight
+                    const wallEdgeAlong = fromLeft ? 0 : wLen
+                    const panelEdgeAlong = fromLeft ? panel.alongStart : panel.alongStart + dims.w
+                    const horizDist = Math.abs(wallEdgeAlong - panelEdgeAlong)
+
+                    const floorY = toY(0)
+                    // Vertical dim drops straight down from the bottom-center of the panel
+                    // to the floor.
+                    const dimX = px + pw / 2
+                    // Horizontal dim runs at the panel's mid-height, from the panel edge
+                    // to the nearest wall edge.
+                    const dimY = py + ph / 2
+                    return (
+                      <g pointerEvents="none">
+                        {/* Vertical dim: floor → panel bottom */}
+                        {panel.yBottom > 0.1 && (<>
+                          <line x1={dimX} y1={floorY} x2={dimX} y2={py + ph}
+                            stroke="#cc22aa" strokeWidth={0.5} />
+                          <line x1={dimX - 1.4} y1={floorY} x2={dimX + 1.4} y2={floorY}
+                            stroke="#cc22aa" strokeWidth={0.5} />
+                          <line x1={dimX - 1.4} y1={py + ph} x2={dimX + 1.4} y2={py + ph}
+                            stroke="#cc22aa" strokeWidth={0.5} />
+                          <text x={dimX + (fromLeft ? 1.5 : -1.5)} y={(floorY + (py + ph)) / 2}
+                            textAnchor={fromLeft ? 'start' : 'end'} dominantBaseline="middle"
+                            fontSize={3.5} fontWeight={600} fill="#a01d80">
+                            {inchesToDisplay(panel.yBottom)}
+                          </text>
+                        </>)}
+
+                        {/* Horizontal dim: nearest wall edge → panel edge */}
+                        {horizDist > 0.1 && (() => {
+                          const x1 = toX(fromLeft ? 0 : wLen)
+                          const x2 = toX(fromLeft ? panel.alongStart : panel.alongStart + dims.w)
+                          const labelX = (x1 + x2) / 2
+                          return (
+                            <>
+                              <line x1={x1} y1={dimY} x2={x2} y2={dimY}
+                                stroke="#cc22aa" strokeWidth={0.5} />
+                              <line x1={x1} y1={dimY - 1.4} x2={x1} y2={dimY + 1.4}
+                                stroke="#cc22aa" strokeWidth={0.5} />
+                              <line x1={x2} y1={dimY - 1.4} x2={x2} y2={dimY + 1.4}
+                                stroke="#cc22aa" strokeWidth={0.5} />
+                              <text x={labelX} y={dimY + 5}
+                                textAnchor="middle" dominantBaseline="hanging"
+                                fontSize={3.5} fontWeight={600} fill="#a01d80">
+                                {inchesToDisplay(horizDist)}
+                              </text>
+                            </>
+                          )
+                        })()}
+                      </g>
+                    )
+                  })()}
+                </g>
+              )
+            })}
+
+            {/* Wall outlets — small duplex outlet plates */}
+            {wallOutletsList.map(outlet => {
+              const dims = WALL_OUTLET_DIMS
+              const isSel = outlet.id === selectedWallOutletId
+              const px = toX(outlet.alongStart), py = toY(outlet.yBottom + dims.h)
+              const pw = dims.w, ph = dims.h
+              return (
+                <g key={outlet.id}>
+                  {/* Faceplate */}
+                  <rect x={px} y={py} width={pw} height={ph}
+                    fill="#f4f1ec" stroke={isSel ? '#cc22aa' : 'rgba(0,0,0,0.55)'}
+                    strokeWidth={isSel ? 0.6 : 0.3}
+                    style={{ cursor: 'move' }}
+                    rx={0.3}
+                    onMouseDown={e => onOutletDown(e, outlet)}
+                    onClick={e => e.stopPropagation()} />
+                  {/* Two duplex sockets stacked vertically */}
+                  {[0.28, 0.72].map((frac, i) => (
+                    <g key={i} pointerEvents="none">
+                      <ellipse cx={px + pw / 2} cy={py + ph * frac}
+                        rx={pw * 0.22} ry={ph * 0.08}
+                        fill="#dcd6cc" stroke="rgba(0,0,0,0.4)" strokeWidth={0.15} />
+                      {/* slots */}
+                      <rect x={px + pw * 0.32} y={py + ph * frac - ph * 0.04}
+                        width={pw * 0.06} height={ph * 0.08} fill="#222" />
+                      <rect x={px + pw * 0.62} y={py + ph * frac - ph * 0.04}
+                        width={pw * 0.06} height={ph * 0.08} fill="#222" />
+                    </g>
+                  ))}
+                  {/* Center mounting screw */}
+                  <circle cx={px + pw / 2} cy={py + ph / 2} r={0.25}
+                    fill="#888" stroke="rgba(0,0,0,0.5)" strokeWidth={0.15}
+                    pointerEvents="none" />
+
+                  {/* Dim labels for selected outlet */}
+                  {isSel && (() => {
+                    const distLeft  = outlet.alongStart
+                    const distRight = wLen - (outlet.alongStart + dims.w)
+                    const fromLeft  = distLeft <= distRight
+                    const wallEdgeAlong = fromLeft ? 0 : wLen
+                    const panelEdgeAlong = fromLeft ? outlet.alongStart : outlet.alongStart + dims.w
+                    const horizDist = Math.abs(wallEdgeAlong - panelEdgeAlong)
+                    const floorY = toY(0)
+                    const dimX = px + pw / 2
+                    const dimY = py + ph / 2
+                    return (
+                      <g pointerEvents="none">
+                        {outlet.yBottom > 0.1 && (<>
+                          <line x1={dimX} y1={floorY} x2={dimX} y2={py + ph}
+                            stroke="#cc22aa" strokeWidth={0.5} />
+                          <line x1={dimX - 1.4} y1={floorY} x2={dimX + 1.4} y2={floorY}
+                            stroke="#cc22aa" strokeWidth={0.5} />
+                          <line x1={dimX - 1.4} y1={py + ph} x2={dimX + 1.4} y2={py + ph}
+                            stroke="#cc22aa" strokeWidth={0.5} />
+                          <text x={dimX + (fromLeft ? 1.5 : -1.5)} y={(floorY + (py + ph)) / 2}
+                            textAnchor={fromLeft ? 'start' : 'end'} dominantBaseline="middle"
+                            fontSize={3.5} fontWeight={600} fill="#a01d80">
+                            {inchesToDisplay(outlet.yBottom)}
+                          </text>
+                        </>)}
+                        {horizDist > 0.1 && (() => {
+                          const x1 = toX(fromLeft ? 0 : wLen)
+                          const x2 = toX(fromLeft ? outlet.alongStart : outlet.alongStart + dims.w)
+                          const labelX = (x1 + x2) / 2
+                          return (
+                            <>
+                              <line x1={x1} y1={dimY} x2={x2} y2={dimY}
+                                stroke="#cc22aa" strokeWidth={0.5} />
+                              <line x1={x1} y1={dimY - 1.4} x2={x1} y2={dimY + 1.4}
+                                stroke="#cc22aa" strokeWidth={0.5} />
+                              <line x1={x2} y1={dimY - 1.4} x2={x2} y2={dimY + 1.4}
+                                stroke="#cc22aa" strokeWidth={0.5} />
+                              <text x={labelX} y={dimY + 5}
+                                textAnchor="middle" dominantBaseline="hanging"
+                                fontSize={3.5} fontWeight={600} fill="#a01d80">
+                                {inchesToDisplay(horizDist)}
+                              </text>
+                            </>
+                          )
+                        })()}
+                      </g>
+                    )
+                  })()}
+                </g>
+              )
+            })}
+
+            {/* Wall water heaters */}
+            {wallHeatersList.map(heater => {
+              const dims = WALL_WATER_HEATER_DIMS
+              const isSel = heater.id === selectedWallWaterHeaterId
+              const px = toX(heater.alongStart), py = toY(heater.yBottom + dims.h)
+              const pw = dims.w, ph = dims.h
+              return (
+                <g key={heater.id}>
+                  {/* Body */}
+                  <rect x={px} y={py} width={pw} height={ph}
+                    fill="#d8d4cc" stroke={isSel ? '#cc22aa' : 'rgba(0,0,0,0.55)'}
+                    strokeWidth={isSel ? 0.6 : 0.4}
+                    style={{ cursor: 'move' }}
+                    rx={1.0}
+                    onMouseDown={e => onHeaterDown(e, heater)}
+                    onClick={e => e.stopPropagation()} />
+                  {/* Stylized vent + control panel hint */}
+                  <circle cx={px + pw / 2} cy={py + ph * 0.18} r={Math.min(pw, ph) * 0.1}
+                    fill="#bdb9af" stroke="rgba(0,0,0,0.45)" strokeWidth={0.3}
+                    pointerEvents="none" />
+                  <rect x={px + pw * 0.25} y={py + ph * 0.55}
+                    width={pw * 0.5} height={ph * 0.18}
+                    fill="#a8a4a0" stroke="rgba(0,0,0,0.4)" strokeWidth={0.3}
+                    pointerEvents="none" />
+
+                  {isSel && (() => {
+                    const distLeft  = heater.alongStart
+                    const distRight = wLen - (heater.alongStart + dims.w)
+                    const fromLeft  = distLeft <= distRight
+                    const wallEdgeAlong = fromLeft ? 0 : wLen
+                    const panelEdgeAlong = fromLeft ? heater.alongStart : heater.alongStart + dims.w
+                    const horizDist = Math.abs(wallEdgeAlong - panelEdgeAlong)
+                    const floorY = toY(0)
+                    const dimX = px + pw / 2
+                    const dimY = py + ph / 2
+                    return (
+                      <g pointerEvents="none">
+                        {heater.yBottom > 0.1 && (<>
+                          <line x1={dimX} y1={floorY} x2={dimX} y2={py + ph}
+                            stroke="#cc22aa" strokeWidth={0.5} />
+                          <line x1={dimX - 1.4} y1={floorY} x2={dimX + 1.4} y2={floorY}
+                            stroke="#cc22aa" strokeWidth={0.5} />
+                          <line x1={dimX - 1.4} y1={py + ph} x2={dimX + 1.4} y2={py + ph}
+                            stroke="#cc22aa" strokeWidth={0.5} />
+                          <text x={dimX + (fromLeft ? 1.5 : -1.5)} y={(floorY + (py + ph)) / 2}
+                            textAnchor={fromLeft ? 'start' : 'end'} dominantBaseline="middle"
+                            fontSize={3.5} fontWeight={600} fill="#a01d80">
+                            {inchesToDisplay(heater.yBottom)}
+                          </text>
+                        </>)}
+                        {horizDist > 0.1 && (() => {
+                          const x1 = toX(fromLeft ? 0 : wLen)
+                          const x2 = toX(fromLeft ? heater.alongStart : heater.alongStart + dims.w)
+                          const labelX = (x1 + x2) / 2
+                          return (
+                            <>
+                              <line x1={x1} y1={dimY} x2={x2} y2={dimY}
+                                stroke="#cc22aa" strokeWidth={0.5} />
+                              <line x1={x1} y1={dimY - 1.4} x2={x1} y2={dimY + 1.4}
+                                stroke="#cc22aa" strokeWidth={0.5} />
+                              <line x1={x2} y1={dimY - 1.4} x2={x2} y2={dimY + 1.4}
+                                stroke="#cc22aa" strokeWidth={0.5} />
+                              <text x={labelX} y={dimY + 5}
+                                textAnchor="middle" dominantBaseline="hanging"
+                                fontSize={3.5} fontWeight={600} fill="#a01d80">
+                                {inchesToDisplay(horizDist)}
+                              </text>
+                            </>
+                          )
+                        })()}
+                      </g>
+                    )
+                  })()}
+                </g>
+              )
+            })}
+
+            {/* Free-standing fridges projected onto this wall */}
+            {wallFridgesList.map(fridge => {
+              const dims = WALL_FRIDGE_DIMS
+              const isSel = fridge.id === selectedFridgeId
+              // Project the fridge's world position onto this wall's axis to
+              // get the along-the-wall offset, then center the rect on it.
+              const [dxF, dzF] = wallDir(wall)
+              const vx = fridge.x - wall.x1, vz = fridge.z - wall.z1
+              const along = vx * dxF + vz * dzF  // inches from wall start
+              const yBottom = 0  // sits on floor
+              const px = toX(along - dims.w / 2)
+              const py = toY(yBottom + dims.h)
+              const pw = dims.w, ph = dims.h
+              return (
+                <g key={fridge.id}>
+                  <rect x={px} y={py} width={pw} height={ph}
+                    fill="#e8e6e0" stroke={isSel ? '#cc22aa' : 'rgba(0,0,0,0.55)'}
+                    strokeWidth={isSel ? 0.6 : 0.4}
+                    style={{ cursor: 'move' }}
+                    rx={1.0}
+                    onMouseDown={e => onFridgeDown(e, fridge)}
+                    onClick={e => e.stopPropagation()} />
+                  {/* Top freezer / fridge split + door handles */}
+                  <line x1={px} y1={py + ph * 0.32} x2={px + pw} y2={py + ph * 0.32}
+                    stroke="rgba(0,0,0,0.4)" strokeWidth={0.4} pointerEvents="none" />
+                  <rect x={px + pw * 0.78} y={py + ph * 0.10}
+                    width={pw * 0.04} height={ph * 0.15}
+                    fill="#888" pointerEvents="none" />
+                  <rect x={px + pw * 0.78} y={py + ph * 0.55}
+                    width={pw * 0.04} height={ph * 0.30}
+                    fill="#888" pointerEvents="none" />
+
+                  {isSel && (() => {
+                    const fridgeStart = along - dims.w / 2
+                    const fridgeEnd   = along + dims.w / 2
+                    const distLeft  = fridgeStart
+                    const distRight = wLen - fridgeEnd
+                    const fromLeft  = distLeft <= distRight
+                    const wallEdgeAlong = fromLeft ? 0 : wLen
+                    const panelEdgeAlong = fromLeft ? fridgeStart : fridgeEnd
+                    const horizDist = Math.abs(wallEdgeAlong - panelEdgeAlong)
+                    return (
+                      <g pointerEvents="none">
+                        {horizDist > 0.1 && (() => {
+                          const x1 = toX(fromLeft ? 0 : wLen)
+                          const x2 = toX(fromLeft ? fridgeStart : fridgeEnd)
+                          const labelX = (x1 + x2) / 2
+                          const dimY = py + ph / 2
+                          return (
+                            <>
+                              <line x1={x1} y1={dimY} x2={x2} y2={dimY}
+                                stroke="#cc22aa" strokeWidth={0.5} />
+                              <line x1={x1} y1={dimY - 1.4} x2={x1} y2={dimY + 1.4}
+                                stroke="#cc22aa" strokeWidth={0.5} />
+                              <line x1={x2} y1={dimY - 1.4} x2={x2} y2={dimY + 1.4}
+                                stroke="#cc22aa" strokeWidth={0.5} />
+                              <text x={labelX} y={dimY + 5}
+                                textAnchor="middle" dominantBaseline="hanging"
+                                fontSize={3.5} fontWeight={600} fill="#a01d80">
+                                {inchesToDisplay(horizDist)}
+                              </text>
+                            </>
+                          )
+                        })()}
+                      </g>
+                    )
+                  })()}
                 </g>
               )
             })}

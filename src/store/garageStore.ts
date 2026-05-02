@@ -298,6 +298,63 @@ export interface SlatwallPanel {
   color: string       // slatwall color id (see slatwallColors.ts)
 }
 
+/** Electrical breaker panel — flat wall-mounted prop, fixed size by kind. */
+export type BreakerPanelKind = 'single' | 'double'
+export interface BreakerPanel {
+  id: string
+  wallId: string
+  side: 'interior' | 'exterior'
+  kind: BreakerPanelKind
+  alongStart: number  // inches from wall start (left edge)
+  yBottom: number     // inches from floor (bottom edge)
+}
+
+// Fixed real-world dimensions (inches) for each breaker panel kind.
+// Depth is the trim-ring protrusion off the wall — the body recesses into the wall.
+export const BREAKER_PANEL_DIMS: Record<BreakerPanelKind, { w: number; h: number; d: number }> = {
+  single: { w: 14.5, h: 30, d: 0.15 },
+  double: { w: 28,   h: 42, d: 0.15 },
+}
+
+/** Wall-mounted electrical outlet — flat prop loaded from a GLB model. */
+export interface WallOutlet {
+  id: string
+  wallId: string
+  side: 'interior' | 'exterior'
+  alongStart: number  // inches from wall start (left edge)
+  yBottom: number     // inches from floor (bottom edge)
+}
+
+// Standard duplex outlet plate footprint (inches).
+export const WALL_OUTLET_DIMS = { w: 2.75, h: 4.5, d: 0.3 }
+// Standard outlet center is ~16" off the floor; bottom edge → 16 - h/2.
+export const WALL_OUTLET_DEFAULT_Y = 16 - WALL_OUTLET_DIMS.h / 2
+
+/** Wall-mounted water heater — fixed-size flat prop loaded from a GLB model. */
+export interface WallWaterHeater {
+  id: string
+  wallId: string
+  side: 'interior' | 'exterior'
+  alongStart: number
+  yBottom: number
+}
+
+// Mini / tankless water heater — sized to roughly match a single breaker panel.
+export const WALL_WATER_HEATER_DIMS = { w: 18, h: 28, d: 2.5 }
+// Spawn ~36" off the floor (typical hanging height).
+export const WALL_WATER_HEATER_DEFAULT_Y = 36
+
+/** Generic fridge — free-standing floor prop, placed and dragged like a cabinet. */
+export interface PlacedFridge {
+  id: string
+  x: number       // inches, floor center X (matches cabinet convention)
+  z: number       // inches, floor center Z
+  rotY: number    // radians
+}
+
+// Standard full-size fridge: 30"W × 65"H × 30"D.
+export const WALL_FRIDGE_DIMS = { w: 30, h: 65, d: 30 }
+
 /** Texture finish options for the metal backsplash panel. */
 export type BacksplashTexture = 'stainless' | 'diamondplate'
 
@@ -472,6 +529,10 @@ const SELECTION_CLEAR = {
   selectedShapeId: null,
   selectedSlatwallPanelId: null,
   selectedStainlessBacksplashPanelId: null,
+  selectedBreakerPanelId: null,
+  selectedWallOutletId: null,
+  selectedWallWaterHeaterId: null,
+  selectedFridgeId: null,
   selectedAccessoryId: null,
   selectedCabinetId: null,
   selectedCountertopId: null,
@@ -540,6 +601,13 @@ function normalizeLoadedProject(d: Record<string, unknown>) {
     walls:            ((d.walls as GarageWall[]) ?? []).map(w => ({ ...w, visible: w.visible ?? true })),
     slatwallPanels:   (d.slatwallPanels as SlatwallPanel[]) ?? [],
     stainlessBacksplashPanels: (d.stainlessBacksplashPanels as StainlessBacksplashPanel[]) ?? [],
+    breakerPanels:    (d.breakerPanels as BreakerPanel[]) ?? [],
+    wallOutlets:      (d.wallOutlets as WallOutlet[]) ?? [],
+    wallWaterHeaters: (d.wallWaterHeaters as WallWaterHeater[]) ?? [],
+    // Free-standing fridges. Old wall-attached `wallFridges` from earlier
+    // dev builds are dropped on load (schema is incompatible) — no users
+    // shipped with that format.
+    fridges:          (d.fridges as PlacedFridge[]) ?? [],
     floorSteps:       ((d.floorSteps as unknown[]) ?? []).map(migrateFloorStep),
     shapes:           (d.shapes as GarageShape[])     ?? [],
     cabinets:         ((d.cabinets as PlacedCabinet[]) ?? []).map(c => ({ ...c, line: c.line ?? 'technica' as const })),
@@ -611,6 +679,14 @@ interface GarageStore {
   selectedSlatwallPanelId: string | null
   stainlessBacksplashPanels: StainlessBacksplashPanel[]
   selectedStainlessBacksplashPanelId: string | null
+  breakerPanels: BreakerPanel[]
+  selectedBreakerPanelId: string | null
+  wallOutlets: WallOutlet[]
+  selectedWallOutletId: string | null
+  wallWaterHeaters: WallWaterHeater[]
+  selectedWallWaterHeaterId: string | null
+  fridges: PlacedFridge[]
+  selectedFridgeId: string | null
 
   // Floor steps
   floorSteps: FloorStep[]
@@ -705,6 +781,26 @@ interface GarageStore {
   updateStainlessBacksplashPanel: (id: string, changes: Partial<StainlessBacksplashPanel>) => void
   deleteStainlessBacksplashPanel: (id: string) => void
   selectStainlessBacksplashPanel: (id: string | null) => void
+
+  addBreakerPanel: (wallId: string, kind: BreakerPanelKind, side?: 'interior' | 'exterior') => void
+  updateBreakerPanel: (id: string, changes: Partial<BreakerPanel>) => void
+  deleteBreakerPanel: (id: string) => void
+  selectBreakerPanel: (id: string | null) => void
+
+  addWallOutlet: (wallId: string, side?: 'interior' | 'exterior') => void
+  updateWallOutlet: (id: string, changes: Partial<WallOutlet>) => void
+  deleteWallOutlet: (id: string) => void
+  selectWallOutlet: (id: string | null) => void
+
+  addWallWaterHeater: (wallId: string, side?: 'interior' | 'exterior') => void
+  updateWallWaterHeater: (id: string, changes: Partial<WallWaterHeater>) => void
+  deleteWallWaterHeater: (id: string) => void
+  selectWallWaterHeater: (id: string | null) => void
+
+  addFridge: (wallId?: string, side?: 'interior' | 'exterior') => void
+  updateFridge: (id: string, changes: Partial<PlacedFridge>) => void
+  deleteFridge: (id: string) => void
+  selectFridge: (id: string | null) => void
 
   addFloorStep: () => void
   updateFloorStep: (id: string, changes: Partial<FloorStep>) => void
@@ -895,6 +991,10 @@ export async function buildProjectJson(getFn: () => GarageStore): Promise<string
     walls: s.walls,
     slatwallPanels: s.slatwallPanels,
     stainlessBacksplashPanels: s.stainlessBacksplashPanels,
+    breakerPanels: s.breakerPanels,
+    wallOutlets: s.wallOutlets,
+    wallWaterHeaters: s.wallWaterHeaters,
+    fridges: s.fridges,
     floorSteps: s.floorSteps,
     shapes: s.shapes,
     cabinets: s.cabinets,
@@ -940,6 +1040,14 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
   selectedSlatwallPanelId: null,
   stainlessBacksplashPanels: [],
   selectedStainlessBacksplashPanelId: null,
+  breakerPanels: [],
+  selectedBreakerPanelId: null,
+  wallOutlets: [],
+  selectedWallOutletId: null,
+  wallWaterHeaters: [],
+  selectedWallWaterHeaterId: null,
+  fridges: [],
+  selectedFridgeId: null,
 
   floorSteps: [],
   selectedFloorStepId: null,
@@ -1295,6 +1403,195 @@ export const useGarageStore = create<GarageStore>((set, get) => ({
       ...(id !== null ? { floorSelected: false, activeTab: 'walls' as SidebarTab } : {}),
     }
   }),
+
+  addBreakerPanel: (wallId, kind, side = 'interior') => {
+    const wall = get().walls.find(w => w.id === wallId)
+    if (!wall) return
+    const dims = BREAKER_PANEL_DIMS[kind]
+    const lenIn = Math.hypot(wall.x2 - wall.x1, wall.z2 - wall.z1)
+    const trim = wall.thickness / 2
+    // Center the panel on the wall by default at typical breaker height (~48" to bottom).
+    const alongStart = Math.max(trim, Math.min(lenIn - trim - dims.w, (lenIn - dims.w) / 2))
+    const yBottom = 48
+    const panel: BreakerPanel = {
+      id: uid(), wallId, side, kind, alongStart, yBottom,
+    }
+    set(s => ({
+      breakerPanels: [...s.breakerPanels, panel],
+      selectedBreakerPanelId: panel.id,
+      selectedSlatwallPanelId: null,
+      selectedStainlessBacksplashPanelId: null,
+    }))
+  },
+
+  updateBreakerPanel: (id, changes) =>
+    set(s => ({ breakerPanels: s.breakerPanels.map(p => p.id === id ? { ...p, ...changes } : p) })),
+
+  deleteBreakerPanel: (id) =>
+    set(s => ({
+      breakerPanels: s.breakerPanels.filter(p => p.id !== id),
+      selectedBreakerPanelId: s.selectedBreakerPanelId === id ? null : s.selectedBreakerPanelId,
+    })),
+
+  selectBreakerPanel: (id) => set(s => {
+    const panel = id ? s.breakerPanels.find(p => p.id === id) : null
+    return {
+      ...SELECTION_CLEAR,
+      selectedBreakerPanelId: id,
+      selectedWallId: panel?.wallId ?? s.selectedWallId,
+      ...(id !== null ? { floorSelected: false, activeTab: 'walls' as SidebarTab } : {}),
+    }
+  }),
+
+  addWallOutlet: (wallId, side = 'interior') => {
+    const wall = get().walls.find(w => w.id === wallId)
+    if (!wall) return
+    const dims = WALL_OUTLET_DIMS
+    const lenIn = Math.hypot(wall.x2 - wall.x1, wall.z2 - wall.z1)
+    const trim = wall.thickness / 2
+    const alongStart = Math.max(trim, Math.min(lenIn - trim - dims.w, (lenIn - dims.w) / 2))
+    const outlet: WallOutlet = {
+      id: uid(), wallId, side, alongStart, yBottom: WALL_OUTLET_DEFAULT_Y,
+    }
+    set(s => ({
+      wallOutlets: [...s.wallOutlets, outlet],
+      selectedWallOutletId: outlet.id,
+      selectedSlatwallPanelId: null,
+      selectedStainlessBacksplashPanelId: null,
+      selectedBreakerPanelId: null,
+    }))
+  },
+
+  updateWallOutlet: (id, changes) =>
+    set(s => ({ wallOutlets: s.wallOutlets.map(o => o.id === id ? { ...o, ...changes } : o) })),
+
+  deleteWallOutlet: (id) =>
+    set(s => ({
+      wallOutlets: s.wallOutlets.filter(o => o.id !== id),
+      selectedWallOutletId: s.selectedWallOutletId === id ? null : s.selectedWallOutletId,
+    })),
+
+  selectWallOutlet: (id) => set(s => {
+    const outlet = id ? s.wallOutlets.find(o => o.id === id) : null
+    return {
+      ...SELECTION_CLEAR,
+      selectedWallOutletId: id,
+      selectedWallId: outlet?.wallId ?? s.selectedWallId,
+      ...(id !== null ? { floorSelected: false, activeTab: 'walls' as SidebarTab } : {}),
+    }
+  }),
+
+  addWallWaterHeater: (wallId, side = 'interior') => {
+    const wall = get().walls.find(w => w.id === wallId)
+    if (!wall) return
+    const dims = WALL_WATER_HEATER_DIMS
+    const lenIn = Math.hypot(wall.x2 - wall.x1, wall.z2 - wall.z1)
+    const trim = wall.thickness / 2
+    const alongStart = Math.max(trim, Math.min(lenIn - trim - dims.w, (lenIn - dims.w) / 2))
+    const heater: WallWaterHeater = {
+      id: uid(), wallId, side, alongStart, yBottom: WALL_WATER_HEATER_DEFAULT_Y,
+    }
+    set(s => ({
+      wallWaterHeaters: [...s.wallWaterHeaters, heater],
+      selectedWallWaterHeaterId: heater.id,
+      selectedSlatwallPanelId: null,
+      selectedStainlessBacksplashPanelId: null,
+      selectedBreakerPanelId: null,
+      selectedWallOutletId: null,
+    }))
+  },
+
+  updateWallWaterHeater: (id, changes) =>
+    set(s => ({ wallWaterHeaters: s.wallWaterHeaters.map(h => h.id === id ? { ...h, ...changes } : h) })),
+
+  deleteWallWaterHeater: (id) =>
+    set(s => ({
+      wallWaterHeaters: s.wallWaterHeaters.filter(h => h.id !== id),
+      selectedWallWaterHeaterId: s.selectedWallWaterHeaterId === id ? null : s.selectedWallWaterHeaterId,
+    })),
+
+  selectWallWaterHeater: (id) => set(s => {
+    const heater = id ? s.wallWaterHeaters.find(h => h.id === id) : null
+    return {
+      ...SELECTION_CLEAR,
+      selectedWallWaterHeaterId: id,
+      selectedWallId: heater?.wallId ?? s.selectedWallId,
+      ...(id !== null ? { floorSelected: false, activeTab: 'walls' as SidebarTab } : {}),
+    }
+  }),
+
+  // Spawn at garage center by default (like a cabinet drop). When called
+  // from wall edit mode, pass the active wall + side so the fridge spawns
+  // flush against the middle of that wall — visible in elevation immediately.
+  addFridge: (wallId, side = 'interior') => {
+    const state = get()
+    let x = 0, z = 0, rotY = 0
+    const wall = wallId ? state.walls.find(w => w.id === wallId) : null
+    if (wall) {
+      const dx = wall.x2 - wall.x1, dz = wall.z2 - wall.z1
+      const len = Math.hypot(dx, dz) || 1
+      const ux = dx / len, uz = dz / len
+      // wall normal pointing into the garage (toward origin).
+      let nx = -uz, nz = ux
+      const mx = (wall.x1 + wall.x2) / 2, mz = (wall.z1 + wall.z2) / 2
+      if (nx * (-mx) + nz * (-mz) <= 0) { nx = -nx; nz = -nz }
+      // For exterior side, flip to push away from origin.
+      if (side === 'exterior') { nx = -nx; nz = -nz }
+      // Push out by wall half-thickness + fridge half-depth so the back face
+      // is flush with the wall. Then add the thickest baseboard/stem-wall on
+      // this wall so the fridge sits in front of the trim instead of clipping.
+      const trimPad = (() => {
+        let maxT = 0
+        const checkPiece = (px: number, pz: number, pLen: number, pRotY: number, pThick: number) => {
+          // Project piece center onto wall axis to test overlap with the
+          // wall's interior face plane.
+          const rx = px - mx, rz = pz - mz
+          const along = rx * ux + rz * uz
+          const perp  = Math.abs(rx * nx + rz * nz)
+          if (perp > wall.thickness / 2 + pThick + 1) return
+          // Piece must overlap the wall span (rough — half its length each way).
+          if (Math.abs(along) > len / 2 + pLen / 2) return
+          // Piece must be roughly parallel to the wall (within 30°).
+          const wallAngle = Math.atan2(uz, ux)
+          let aDiff = Math.abs(((pRotY - wallAngle) % Math.PI) + Math.PI) % Math.PI
+          if (aDiff > Math.PI / 2) aDiff = Math.PI - aDiff
+          if (aDiff > Math.PI / 6) return
+          if (pThick > maxT) maxT = pThick
+        }
+        for (const b of state.baseboards) checkPiece(b.x, b.z, b.length, b.rotY, b.thickness)
+        for (const sw of state.stemWalls)  checkPiece(sw.x, sw.z, sw.length, sw.rotY, sw.thickness)
+        return maxT
+      })()
+      const inset = wall.thickness / 2 + WALL_FRIDGE_DIMS.d / 2 + trimPad
+      const cx = mx + nx * inset
+      const cz = mz + nz * inset
+      x = cx
+      z = cz
+      // Face the fridge so its back is against the wall, doors facing into garage.
+      // Cabinets use -atan2(uz, ux) for the same orientation.
+      rotY = -Math.atan2(uz, ux)
+    }
+    const fridge: PlacedFridge = { id: uid(), x, z, rotY }
+    set(s => ({
+      fridges: [...s.fridges, fridge],
+      selectedFridgeId: fridge.id,
+    }))
+  },
+
+  updateFridge: (id, changes) =>
+    set(s => ({ fridges: s.fridges.map(f => f.id === id ? { ...f, ...changes } : f) })),
+
+  deleteFridge: (id) =>
+    set(s => ({
+      fridges: s.fridges.filter(f => f.id !== id),
+      selectedFridgeId: s.selectedFridgeId === id ? null : s.selectedFridgeId,
+    })),
+
+  selectFridge: (id) => set(s => ({
+    ...SELECTION_CLEAR,
+    selectedFridgeId: id,
+    ...(id !== null ? { floorSelected: false, activeTab: 'walls' as SidebarTab } : {}),
+  })),
 
   addFloorStep: () => {
     // Spawn a 48"×48" square centered in the garage. Users can grab any

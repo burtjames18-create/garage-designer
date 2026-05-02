@@ -9,6 +9,19 @@ export interface PatchNote {
 
 export const PATCH_NOTES: PatchNote[] = [
   {
+    version: '1.2.21',
+    date: '2026-05-01',
+    items: [
+      'New "Wall Fixtures" section in the wall sidebar — add breaker panels, outlets, a water heater, or a generic fridge from one place',
+      'Single + double breaker panels as flat wall props with rounded edges and small grey handles',
+      'Duplex outlet, mini water heater, and a 30×65×30 generic fridge — all loaded from bundled 3D models',
+      'Fridge spawns flush to the active wall (in front of baseboards / stem walls) and then drags freely on the floor like a cabinet',
+      'Drag fixtures in 3D and in wall edit mode; pink dimension labels show height off the floor and distance from the nearest wall edge',
+      'Selecting a wall fixture only highlights the fixture, not the whole wall',
+      'Removed unused Fill Lowers / Fill Uppers / Fill Lockers buttons',
+    ],
+  },
+  {
     version: '1.2.20',
     date: '2026-05-01',
     items: [
